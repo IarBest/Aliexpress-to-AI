@@ -218,9 +218,6 @@
     return {
       productId: asString(firstDefined(request.productIdV2, request.productId)),
       skuId: asString(request.skuId),
-      country: asString(request.country),
-      provinceCode: asString(request.provinceCode),
-      cityCode: asString(request.cityCode),
       tradeCurrency: asString(request.tradeCurrency),
       count: asString(request.count),
       buyerPrice: asString(request.buyerPrice),
@@ -229,12 +226,44 @@
     };
   }
 
-  function createShippingContextKey(request) {
-    return JSON.stringify(shippingRequestContext(request));
+  function shippingDestinationContext(delivery = {}) {
+    return {
+      countryCode: asString(delivery.destination?.countryCode),
+      regionCode: asString(delivery.destination?.regionCode),
+      cityCode: asString(delivery.destination?.cityCode),
+    };
+  }
+
+  function createShippingEnvironment(request, delivery) {
+    const context = shippingRequestContext(request);
+    return {
+      destination: shippingDestinationContext(delivery),
+      tradeCurrency: context.tradeCurrency,
+      count: context.count,
+    };
+  }
+
+  function shippingPriceContext(request = {}) {
+    const context = shippingRequestContext(request);
+    return {
+      buyerPrice: context.buyerPrice,
+      minPrice: context.minPrice,
+      maxPrice: context.maxPrice,
+    };
+  }
+
+  function createShippingContextKey(request, delivery) {
+    const context = shippingRequestContext(request);
+    return JSON.stringify({
+      productId: context.productId,
+      skuId: context.skuId,
+      environment: createShippingEnvironment(request, delivery),
+      price: shippingPriceContext(request),
+    });
   }
 
   function createDeliveryCache() {
-    return { byContext: new Map(), latestContextBySku: new Map() };
+    return { byContext: new Map(), contextKeysBySku: new Map() };
   }
 
   function productSkuKey(productId, skuId) {
@@ -243,21 +272,55 @@
 
   function cacheDelivery(cache, request, delivery) {
     if (!cache || !delivery?.productId || !delivery?.skuId) return null;
-    const contextKey = createShippingContextKey(request);
-    cache.byContext.set(contextKey, delivery);
-    cache.latestContextBySku.set(productSkuKey(delivery.productId, delivery.skuId), contextKey);
+    const contextKey = createShippingContextKey(request, delivery);
+    const skuKey = productSkuKey(delivery.productId, delivery.skuId);
+    const contextKeys = cache.contextKeysBySku.get(skuKey) || [];
+    const previousIndex = contextKeys.indexOf(contextKey);
+    if (previousIndex !== -1) contextKeys.splice(previousIndex, 1);
+    contextKeys.push(contextKey);
+    cache.contextKeysBySku.set(skuKey, contextKeys);
+    cache.byContext.set(contextKey, {
+      delivery,
+      environment: createShippingEnvironment(request, delivery),
+      price: shippingPriceContext(request),
+    });
     return contextKey;
   }
 
-  function getCachedDelivery(cache, productId, skuId) {
-    if (!cache || !productId || !skuId) return null;
-    const contextKey = cache.latestContextBySku.get(productSkuKey(productId, skuId));
-    return contextKey ? cache.byContext.get(contextKey) || null : null;
+  function contextsEqual(left, right) {
+    return JSON.stringify(left) === JSON.stringify(right);
   }
 
-  function applyCachedDelivery(product, cache) {
+  function getCachedDelivery(cache, productId, skuId, environment, price) {
+    if (!cache || !productId || !skuId || !environment) return null;
+    const contextKeys = cache.contextKeysBySku.get(productSkuKey(productId, skuId)) || [];
+    for (let index = contextKeys.length - 1; index >= 0; index -= 1) {
+      const entry = cache.byContext.get(contextKeys[index]);
+      if (entry
+        && contextsEqual(entry.environment, environment)
+        && contextsEqual(entry.price, price)) return entry.delivery;
+    }
+    return null;
+  }
+
+  function selectedSkuShippingPriceContext(product) {
+    const currentPrice = asString(product?.selectedSku?.price?.current?.value);
+    return {
+      buyerPrice: asString(product?.selectedSku?.buyerPriceForLogistic),
+      minPrice: currentPrice,
+      maxPrice: currentPrice,
+    };
+  }
+
+  function applyCachedDelivery(product, cache, environment) {
     if (!product) return product;
-    const delivery = getCachedDelivery(cache, product.itemId, product.selectedSkuId);
+    const delivery = getCachedDelivery(
+      cache,
+      product.itemId,
+      product.selectedSkuId,
+      environment,
+      selectedSkuShippingPriceContext(product),
+    );
     return product.delivery === delivery ? product : { ...product, delivery };
   }
 
@@ -600,6 +663,7 @@
     normalizeMoney,
     normalizeDelivery,
     createShippingContextKey,
+    createShippingEnvironment,
     createDeliveryCache,
     cacheDelivery,
     getCachedDelivery,
@@ -895,6 +959,7 @@
       settings,
       product: null,
       shippingCapture: null,
+      shippingEnvironment: null,
       deliveryCache: createDeliveryCache(),
       itemId: getItemId(location.href),
       ui: null,
@@ -905,7 +970,7 @@
       if (dataItemId !== runtime.itemId) return;
       try {
         runtime.product = normalizeProduct(data, location.href, { title: document.title.replace(/\s*\|\s*AliExpress.*$/i, ''), source: meta.source });
-        runtime.product = applyCachedDelivery(runtime.product, runtime.deliveryCache);
+        runtime.product = applyCachedDelivery(runtime.product, runtime.deliveryCache, runtime.shippingEnvironment);
         runtime.ui?.setProduct(runtime.product);
       } catch (error) {
         runtime.ui?.setStatus(`productData found but normalization failed: ${error.message}`, true);
@@ -915,14 +980,16 @@
     const pageWindow = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     installProductDataInterceptor(pageWindow, acceptProductData);
     installShippingCalculateInterceptor(pageWindow, (capture) => {
+      const delivery = normalizeDelivery(capture.request, capture.response);
+      if (delivery.productId !== runtime.itemId) return;
       runtime.shippingCapture = capture;
       runtime.ui?.setShippingCapture(capture);
-      const delivery = normalizeDelivery(capture.request, capture.response);
+      runtime.shippingEnvironment = createShippingEnvironment(capture.request, delivery);
       cacheDelivery(runtime.deliveryCache, capture.request, delivery);
       if (runtime.product
         && delivery.productId === runtime.product.itemId
         && delivery.skuId === runtime.product.selectedSkuId) {
-        runtime.product = applyCachedDelivery(runtime.product, runtime.deliveryCache);
+        runtime.product = applyCachedDelivery(runtime.product, runtime.deliveryCache, runtime.shippingEnvironment);
         runtime.ui?.setProduct(runtime.product);
       }
     });
@@ -943,11 +1010,13 @@
         if (nextItemId !== runtime.itemId) {
           runtime.itemId = nextItemId;
           runtime.product = null;
+          runtime.shippingCapture = null;
+          runtime.ui?.setShippingCapture(null);
           runtime.ui?.setStatus('Product changed; waiting for productData…');
         } else if (runtime.product) {
           const updatedProduct = updateSelectedSku(runtime.product, location.href);
           if (updatedProduct !== runtime.product) {
-            runtime.product = applyCachedDelivery(updatedProduct, runtime.deliveryCache);
+            runtime.product = applyCachedDelivery(updatedProduct, runtime.deliveryCache, runtime.shippingEnvironment);
             runtime.ui?.setProduct(runtime.product);
           }
         }

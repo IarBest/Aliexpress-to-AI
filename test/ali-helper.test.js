@@ -15,6 +15,19 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function syntheticShippingProduct(skuId, buyerPrice, price) {
+  return {
+    itemId: 'synthetic-product',
+    selectedSkuId: skuId,
+    selectedSku: {
+      skuId,
+      buyerPriceForLogistic: String(buyerPrice),
+      price: { current: { value: String(price) } },
+    },
+    delivery: null,
+  };
+}
+
 test('normalizes COM URL, removes tracking and hash, and keeps sku_id and unknown params', () => {
   const input = 'https://www.aliexpress.com/item/1005008195850531.html?spm=a2g0o&utm_source=x&af=739_607243&sku_id=123&mystery=keep#frag';
   const result = core.normalizeItemUrl(input, 'ru');
@@ -109,6 +122,15 @@ test('captured freight/calculate fixture normalizes SKU, destination, method, co
   assert.equal(delivery.methods[0].tracking, false);
   assert.equal(delivery.methods[0].serviceGroupType, 'rupost_self_pickup_point');
   assert.equal(delivery.methods[0].passportRequired, false);
+  assert.deepEqual(core.createShippingEnvironment(fixture.request, delivery), {
+    destination: {
+      countryCode: 'MD',
+      regionCode: '924500010000000000',
+      cityCode: '924500010001000000',
+    },
+    tradeCurrency: 'USD',
+    count: '1',
+  });
 });
 
 test('captured delivery appears in ChatGPT export for its selected SKU', () => {
@@ -162,9 +184,16 @@ test('synthetic partial shipping response remains a valid neutral delivery', () 
   assert.match(core.formatDelivery(delivery), /Methods: —/);
 
   const cache = core.createDeliveryCache();
-  const product = { itemId: 'synthetic-product', selectedSkuId: 'synthetic-sku', title: 'Synthetic product', delivery: null };
+  const product = {
+    itemId: 'synthetic-product',
+    selectedSkuId: 'synthetic-sku',
+    selectedSku: { buyerPriceForLogistic: null, price: { current: { value: null } } },
+    title: 'Synthetic product',
+    delivery: null,
+  };
   core.cacheDelivery(cache, request, delivery);
-  const updated = core.applyCachedDelivery(product, cache);
+  const environment = core.createShippingEnvironment(request, delivery);
+  const updated = core.applyCachedDelivery(product, cache, environment);
   assert.equal(updated.title, 'Synthetic product');
   assert.equal(updated.delivery, delivery);
 });
@@ -182,30 +211,113 @@ test('shipping cache key distinguishes material request context', () => {
     minPrice: 1.92,
     maxPrice: 1.92,
   };
+  const delivery = core.normalizeDelivery(base, { to: { country: 'MD', region: 'region-1', city: 'city-1' } });
 
-  assert.equal(core.createShippingContextKey(base), core.createShippingContextKey({ ...base }));
-  assert.notEqual(core.createShippingContextKey(base), core.createShippingContextKey({ ...base, productId: 2 }));
-  assert.notEqual(core.createShippingContextKey(base), core.createShippingContextKey({ ...base, skuId: 'other-synthetic-sku' }));
-  assert.notEqual(core.createShippingContextKey(base), core.createShippingContextKey({ ...base, country: 'RO' }));
-  assert.notEqual(core.createShippingContextKey(base), core.createShippingContextKey({ ...base, provinceCode: 'synthetic-province' }));
-  assert.notEqual(core.createShippingContextKey(base), core.createShippingContextKey({ ...base, cityCode: 'synthetic-city' }));
-  assert.notEqual(core.createShippingContextKey(base), core.createShippingContextKey({ ...base, tradeCurrency: 'EUR' }));
-  assert.notEqual(core.createShippingContextKey(base), core.createShippingContextKey({ ...base, count: 2 }));
-  assert.notEqual(core.createShippingContextKey(base), core.createShippingContextKey({ ...base, buyerPrice: '250' }));
-  assert.notEqual(core.createShippingContextKey(base), core.createShippingContextKey({ ...base, maxPrice: 2.5 }));
+  assert.equal(core.createShippingContextKey(base, delivery), core.createShippingContextKey({ ...base }, delivery));
+  assert.notEqual(core.createShippingContextKey(base, delivery), core.createShippingContextKey({ ...base, productId: 2 }, delivery));
+  assert.notEqual(core.createShippingContextKey(base, delivery), core.createShippingContextKey({ ...base, skuId: 'other-synthetic-sku' }, delivery));
+  assert.notEqual(core.createShippingContextKey(base, delivery), core.createShippingContextKey({ ...base, tradeCurrency: 'EUR' }, delivery));
+  assert.notEqual(core.createShippingContextKey(base, delivery), core.createShippingContextKey({ ...base, count: 2 }, delivery));
+  assert.notEqual(core.createShippingContextKey(base, delivery), core.createShippingContextKey({ ...base, buyerPrice: '250' }, delivery));
+  assert.notEqual(core.createShippingContextKey(base, delivery), core.createShippingContextKey({ ...base, maxPrice: 2.5 }, delivery));
+  assert.notEqual(
+    core.createShippingContextKey(base, delivery),
+    core.createShippingContextKey(base, { ...delivery, destination: { ...delivery.destination, cityCode: 'city-2' } }),
+  );
 });
 
-test('synthetic shipping cache retains contexts and points each SKU to its latest delivery', () => {
+test('synthetic shipping cache retains multiple contexts and returns only a compatible delivery', () => {
   const cache = core.createDeliveryCache();
   const baseRequest = { productId: 'synthetic-product', skuId: 'synthetic-sku', country: 'MD', tradeCurrency: 'USD', count: 1 };
-  const firstDelivery = { productId: 'synthetic-product', skuId: 'synthetic-sku', marker: 'first' };
-  const latestDelivery = { productId: 'synthetic-product', skuId: 'synthetic-sku', marker: 'latest' };
+  const firstRequest = { ...baseRequest, buyerPrice: '100', minPrice: 1, maxPrice: 1 };
+  const latestRequest = { ...baseRequest, buyerPrice: '200', minPrice: 2, maxPrice: 2 };
+  const firstDelivery = core.normalizeDelivery(firstRequest, { to: { country: 'MD', region: 'region-1', city: 'city-1' } });
+  const latestDelivery = core.normalizeDelivery(latestRequest, { to: { country: 'MD', region: 'region-1', city: 'city-1' } });
 
-  core.cacheDelivery(cache, { ...baseRequest, buyerPrice: '100' }, firstDelivery);
-  core.cacheDelivery(cache, { ...baseRequest, buyerPrice: '200' }, latestDelivery);
+  core.cacheDelivery(cache, firstRequest, firstDelivery);
+  core.cacheDelivery(cache, latestRequest, latestDelivery);
 
   assert.equal(cache.byContext.size, 2);
-  assert.equal(core.getCachedDelivery(cache, 'synthetic-product', 'synthetic-sku'), latestDelivery);
+  const environment = core.createShippingEnvironment(latestRequest, latestDelivery);
+  assert.equal(
+    core.getCachedDelivery(cache, 'synthetic-product', 'synthetic-sku', environment, { buyerPrice: '200', minPrice: '2', maxPrice: '2' }),
+    latestDelivery,
+  );
+  assert.equal(
+    core.getCachedDelivery(cache, 'synthetic-product', 'synthetic-sku', environment, { buyerPrice: '300', minPrice: '3', maxPrice: '3' }),
+    null,
+  );
+});
+
+test('shipping cache rejects an old destination and accepts a new capture for that city', () => {
+  const cache = core.createDeliveryCache();
+  const requestA = {
+    productId: 'synthetic-product', skuId: 'sku-a', country: 'MD', provinceCode: null, cityCode: null,
+    tradeCurrency: 'USD', count: 1, buyerPrice: '100', minPrice: 1, maxPrice: 1,
+  };
+  const requestB = {
+    ...requestA, skuId: 'sku-b', buyerPrice: '200', minPrice: 2, maxPrice: 2,
+  };
+  const responseCity1 = { to: { country: 'MD', region: 'region-1', city: 'city-1' } };
+  const responseCity2 = { to: { country: 'MD', region: 'region-2', city: 'city-2' } };
+  const deliveryACity1 = core.normalizeDelivery(requestA, responseCity1);
+  core.cacheDelivery(cache, requestA, deliveryACity1);
+
+  const deliveryBCity2 = core.normalizeDelivery(requestB, responseCity2);
+  core.cacheDelivery(cache, requestB, deliveryBCity2);
+  const city2Environment = core.createShippingEnvironment(requestB, deliveryBCity2);
+  const productA = syntheticShippingProduct('sku-a', 100, 1);
+
+  assert.equal(core.applyCachedDelivery(productA, cache, city2Environment).delivery, null);
+
+  const deliveryACity2 = core.normalizeDelivery(requestA, responseCity2);
+  core.cacheDelivery(cache, requestA, deliveryACity2);
+  const refreshedEnvironment = core.createShippingEnvironment(requestA, deliveryACity2);
+  assert.equal(core.applyCachedDelivery(productA, cache, refreshedEnvironment).delivery, deliveryACity2);
+});
+
+test('shipping cache restores SKU A after SKU B capture when destination and request environment stay unchanged', () => {
+  const cache = core.createDeliveryCache();
+  const requestA = {
+    productId: 'synthetic-product', skuId: 'sku-a', country: 'MD', tradeCurrency: 'USD', count: 1,
+    buyerPrice: '100', minPrice: 1, maxPrice: 1,
+  };
+  const requestB = {
+    ...requestA, skuId: 'sku-b', buyerPrice: '200', minPrice: 2, maxPrice: 2,
+  };
+  const response = { to: { country: 'MD', region: 'region-1', city: 'city-1' } };
+  const deliveryA = core.normalizeDelivery(requestA, response);
+  const deliveryB = core.normalizeDelivery(requestB, response);
+  core.cacheDelivery(cache, requestA, deliveryA);
+  core.cacheDelivery(cache, requestB, deliveryB);
+
+  const environmentAfterB = core.createShippingEnvironment(requestB, deliveryB);
+  assert.equal(
+    core.applyCachedDelivery(syntheticShippingProduct('sku-a', 100, 1), cache, environmentAfterB).delivery,
+    deliveryA,
+  );
+});
+
+test('shipping cache rejects cached delivery after currency or count changes', () => {
+  const cache = core.createDeliveryCache();
+  const requestA = {
+    productId: 'synthetic-product', skuId: 'sku-a', country: 'MD', tradeCurrency: 'USD', count: 1,
+    buyerPrice: '100', minPrice: 1, maxPrice: 1,
+  };
+  const response = { to: { country: 'MD', region: 'region-1', city: 'city-1' } };
+  const deliveryA = core.normalizeDelivery(requestA, response);
+  core.cacheDelivery(cache, requestA, deliveryA);
+  const productA = syntheticShippingProduct('sku-a', 100, 1);
+
+  const eurRequest = { ...requestA, skuId: 'sku-b', tradeCurrency: 'EUR' };
+  const eurDelivery = core.normalizeDelivery(eurRequest, response);
+  const eurEnvironment = core.createShippingEnvironment(eurRequest, eurDelivery);
+  assert.equal(core.applyCachedDelivery(productA, cache, eurEnvironment).delivery, null);
+
+  const countTwoRequest = { ...requestA, skuId: 'sku-b', count: 2 };
+  const countTwoDelivery = core.normalizeDelivery(countTwoRequest, response);
+  const countTwoEnvironment = core.createShippingEnvironment(countTwoRequest, countTwoDelivery);
+  assert.equal(core.applyCachedDelivery(productA, cache, countTwoEnvironment).delivery, null);
 });
 
 test('real single-dimension fixture has Bundle: 7 values and 7 priceList SKUs', () => {
@@ -387,21 +499,22 @@ test('SKU change clears stale delivery and restores cached delivery when returni
   const shippingFixture = loadFixture('shipping-calculate-1005008195850531.json');
   const cache = core.createDeliveryCache();
   const deliveryA = core.normalizeDelivery(shippingFixture.request, shippingFixture.response);
+  const environment = core.createShippingEnvironment(shippingFixture.request, deliveryA);
   core.cacheDelivery(cache, shippingFixture.request, deliveryA);
 
   let product = core.normalizeProduct(
     productFixture.data,
     'https://aliexpress.ru/item/1005008195850531.html?sku_id=12000056550848689',
   );
-  product = core.applyCachedDelivery(product, cache);
+  product = core.applyCachedDelivery(product, cache, environment);
   assert.equal(product.delivery, deliveryA);
-  assert.equal(core.applyCachedDelivery({ ...product, itemId: 'other-item', delivery: null }, cache).delivery, null);
+  assert.equal(core.applyCachedDelivery({ ...product, itemId: 'other-item', delivery: null }, cache, environment).delivery, null);
 
   product = core.updateSelectedSku(
     product,
     'https://aliexpress.ru/item/1005008195850531.html?sku_id=12000056550848683',
   );
-  product = core.applyCachedDelivery(product, cache);
+  product = core.applyCachedDelivery(product, cache, environment);
   assert.equal(product.selectedSkuId, '12000056550848683');
   assert.equal(product.delivery, null);
 
@@ -409,7 +522,7 @@ test('SKU change clears stale delivery and restores cached delivery when returni
     product,
     'https://aliexpress.ru/item/1005008195850531.html?sku_id=12000056550848689',
   );
-  product = core.applyCachedDelivery(product, cache);
+  product = core.applyCachedDelivery(product, cache, environment);
   assert.equal(product.selectedSkuId, '12000056550848689');
   assert.equal(product.delivery, deliveryA);
 });
