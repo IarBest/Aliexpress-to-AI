@@ -29,46 +29,51 @@ test('recognizes only AliExpress item pages', () => {
 
 test('real single-dimension fixture has Bundle: 7 values and 7 priceList SKUs', () => {
   const fixture = loadFixture('product-1005008195850531.json');
-  const product = core.normalizeProduct(fixture, 'https://aliexpress.ru/item/1005008195850531.html?sku_id=12000056550848689');
+  const product = core.normalizeProduct(fixture.data, 'https://aliexpress.ru/item/1005008195850531.html?sku_id=12000056550848689');
 
   assert.equal(product.itemId, '1005008195850531');
   assert.equal(product.variantGroups.length, 1);
+  assert.equal(product.variantGroups[0].id, '205');
   assert.equal(product.variantGroups[0].name, 'Bundle');
   assert.equal(product.variantGroups[0].values.length, 7);
-  assert.deepEqual(product.variantGroups[0].values.map((value) => value.name), [
-    '433 Remote',
-    '1CH Zigbee 7-32V',
-    '1CH Zigbee 85-250V',
-    '2CH Zigbee 7-32V',
-    '2CH Zigbee 85-250V',
-    '4CH Zigbee 7-32V',
-    '4CH Zigbee 85-250V',
-  ]);
-  assert.equal(product.skus.length, fixture.skuInfo.priceList.length);
+  const firstValue = product.variantGroups[0].values.find((value) => value.id === '357383');
+  const remoteValue = product.variantGroups[0].values.find((value) => value.id === '357390');
+  assert.deepEqual({ raw: firstValue.rawName, display: firstValue.name }, { raw: 'Bundle1', display: '1CH Zigbee 7-32V' });
+  assert.deepEqual({ raw: remoteValue.rawName, display: remoteValue.name }, { raw: 'Bundle8', display: '433 Remote' });
+  assert.equal(product.skus.length, fixture.data.skuInfo.priceList.length);
   assert.equal(product.skus.length, 7);
+  assert.deepEqual(product.skus.find((sku) => sku.skuId === '12000056550848683').skuPropIds, ['357383']);
+  assert.deepEqual(product.skus.find((sku) => sku.skuId === '12000056550848689').skuPropIds, ['357390']);
   assert.equal(product.selectedSku.selections[0].name, '433 Remote');
 });
 
 test('real multi-dimension fixture maps priceList SKU through displayName', () => {
   const fixture = loadFixture('product-1005009452926938.json');
-  const product = core.normalizeProduct(fixture, 'https://aliexpress.ru/item/1005009452926938.html?sku_id=12000049151727540');
+  const product = core.normalizeProduct(fixture.data, 'https://aliexpress.ru/item/1005009452926938.html?sku_id=12000049151727540');
 
   assert.deepEqual(product.variantGroups.map((group) => [group.name, group.values.length]), [['Color', 9], ['Size', 5]]);
-  assert.equal(product.skus.length, fixture.skuInfo.priceList.length);
+  assert.deepEqual(product.variantGroups.map((group) => [group.name, group.id]), [['Color', '4'], ['Size', '30']]);
+  assert.equal(product.skus.length, fixture.data.skuInfo.priceList.length);
   assert.equal(product.skus.length, 45);
   assert.equal(product.selectedSkuId, '12000049151727540');
   assert.deepEqual(product.selectedSku.skuPropIds, ['337970', '343562']);
   assert.deepEqual(product.selectedSku.selections.map((selection) => selection.name), ['Lining B Navy Blue', 'L']);
   assert.equal(product.selectedSku.selections[0].rawName, 'Clear');
+  assert.equal(product.selectedSku.price.current.value, '26.08');
+  assert.equal(product.selectedSku.price.current.currency, 'USD');
+  assert.equal(product.selectedSku.price.regular.value, '37.25');
+  assert.equal(product.selectedSku.price.regular.currency, 'USD');
+  assert.equal(product.selectedSku.stock, 593);
   assert.equal(JSON.parse(core.exportProduct(product)).skus.length, 45);
 });
 
 test('real byUnitTables sizeData preserves separate CM and IN tables', () => {
   const fixture = loadFixture('product-1005009452926938.json');
-  const product = core.normalizeProduct(fixture, 'https://aliexpress.ru/item/1005009452926938.html?sku_id=12000049151727540');
+  const product = core.normalizeProduct(fixture.data, 'https://aliexpress.ru/item/1005009452926938.html?sku_id=12000049151727540');
   const cm = product.sizeGuide.tables.find((table) => table.unit === 'CM');
   const inches = product.sizeGuide.tables.find((table) => table.unit === 'IN');
 
+  assert.deepEqual(fixture.data.skuInfo.sizeData.defaults, { countryCode: 'Manufacturer-size3', unit: 'IN' });
   assert.equal(product.sizeGuide.tables.length, 2);
   assert.deepEqual(cm.columns, ['Size', 'Bust Size', 'Skirt Length', 'Waist Size']);
   assert.deepEqual(cm.rows[3], ['L', '92', '100', '77']);
@@ -110,32 +115,32 @@ test('sizeData preserves an arbitrary byUnitTables key', () => {
 
 test('does not invent a missing Cartesian combination', () => {
   const fixture = clone(loadFixture('product-1005009452926938.json'));
-  fixture.skuInfo.priceList.splice(10, 1);
-  const product = core.normalizeProduct(fixture, 'https://aliexpress.ru/item/1005009452926938.html');
+  fixture.data.skuInfo.priceList.splice(10, 1);
+  const product = core.normalizeProduct(fixture.data, 'https://aliexpress.ru/item/1005009452926938.html');
 
-  assert.equal(fixture.skuInfo.priceList.length, 44);
+  assert.equal(fixture.data.skuInfo.priceList.length, 44);
   assert.equal(product.skus.length, 44);
 });
 
 test('initial normalization falls back to activeSkuId when URL has no sku_id', () => {
   const fixture = loadFixture('product-1005009452926938.json');
-  const product = core.normalizeProduct(fixture, 'https://aliexpress.ru/item/1005009452926938.html');
+  const product = core.normalizeProduct(fixture.data, 'https://aliexpress.ru/item/1005009452926938.html');
 
-  assert.equal(product.selectedSkuId, fixture.activeSkuId);
-  assert.deepEqual(product.selectedSku.selections.map((selection) => selection.name), ['Lining B Navy Blue', 'XS']);
+  assert.equal(product.selectedSkuId, fixture.data.activeSkuId);
+  assert.deepEqual(product.selectedSku.selections.map((selection) => selection.name), ['Lining B White', 'S']);
 });
 
 test('initial normalization falls back to activeSkuId when URL sku_id is unknown', () => {
   const fixture = loadFixture('product-1005009452926938.json');
-  const product = core.normalizeProduct(fixture, 'https://aliexpress.ru/item/1005009452926938.html?sku_id=99999999999999999');
+  const product = core.normalizeProduct(fixture.data, 'https://aliexpress.ru/item/1005009452926938.html?sku_id=99999999999999999');
 
-  assert.equal(product.selectedSkuId, fixture.activeSkuId);
-  assert.equal(product.selectedSku.skuId, fixture.activeSkuId);
+  assert.equal(product.selectedSkuId, fixture.data.activeSkuId);
+  assert.equal(product.selectedSku.skuId, fixture.data.activeSkuId);
 });
 
 test('updateSelectedSku changes only selected state for a valid SPA sku_id', () => {
   const fixture = loadFixture('product-1005009452926938.json');
-  const product = core.normalizeProduct(fixture, 'https://aliexpress.ru/item/1005009452926938.html?sku_id=12000049151727540');
+  const product = core.normalizeProduct(fixture.data, 'https://aliexpress.ru/item/1005009452926938.html?sku_id=12000049151727540');
   const description = { sentinel: 'description' };
   const store = { sentinel: 'store' };
   const delivery = { sentinel: 'delivery' };
@@ -145,17 +150,17 @@ test('updateSelectedSku changes only selected state for a valid SPA sku_id', () 
   product.delivery = delivery;
   product.reviews = reviews;
   const originalSelected = product.skus.find((sku) => sku.skuId === '12000049151727540');
-  originalSelected.price.buyer = { sentinel: 'buyer-price' };
-  originalSelected.price.discount = 'sentinel-discount';
-  originalSelected.rawSkuAttr = { sentinel: 'raw-sku-attr' };
+  const originalBuyerPrice = originalSelected.price.buyer;
+  const originalDiscount = originalSelected.price.discount;
+  const originalSkuAttr = originalSelected.rawSkuAttr;
 
-  const updated = core.updateSelectedSku(product, 'https://aliexpress.ru/item/1005009452926938.html?sku_id=12000049151727545');
+  const updated = core.updateSelectedSku(product, 'https://aliexpress.ru/item/1005009452926938.html?sku_id=12000049151727530');
 
   assert.notEqual(updated, product);
-  assert.equal(updated.selectedSkuId, '12000049151727545');
+  assert.equal(updated.selectedSkuId, '12000049151727530');
   assert.deepEqual(updated.selectedSku.selections.map((selection) => selection.name), ['Lining B Pink', 'L']);
-  assert.equal(updated.price.current.value, '24.90');
-  assert.equal(updated.selectedSku.stock, 19);
+  assert.equal(updated.price.current.value, '26.08');
+  assert.equal(updated.selectedSku.stock, 496);
   assert.equal(updated.variantGroups, product.variantGroups);
   assert.equal(updated.skus, product.skus);
   assert.equal(updated.sizeGuide, product.sizeGuide);
@@ -163,16 +168,16 @@ test('updateSelectedSku changes only selected state for a valid SPA sku_id', () 
   assert.equal(updated.store, store);
   assert.equal(updated.delivery, delivery);
   assert.equal(updated.reviews, reviews);
-  assert.equal(updated.skus.find((sku) => sku.skuId === '12000049151727540').price.buyer.sentinel, 'buyer-price');
-  assert.equal(updated.skus.find((sku) => sku.skuId === '12000049151727540').price.discount, 'sentinel-discount');
-  assert.equal(updated.skus.find((sku) => sku.skuId === '12000049151727540').rawSkuAttr.sentinel, 'raw-sku-attr');
+  assert.equal(updated.skus.find((sku) => sku.skuId === '12000049151727540').price.buyer, originalBuyerPrice);
+  assert.equal(updated.skus.find((sku) => sku.skuId === '12000049151727540').price.discount, originalDiscount);
+  assert.equal(updated.skus.find((sku) => sku.skuId === '12000049151727540').rawSkuAttr, originalSkuAttr);
   assert.match(core.exportForChatGPT(updated), /Selected variants: Color: Lining B Pink; Size: L/);
-  assert.match(core.exportForChatGPT(updated), /Price: 24\.90 USD/);
+  assert.match(core.exportForChatGPT(updated), /Price: \$\u00a026\.08/);
 });
 
 test('updateSelectedSku keeps the last valid selection for unknown or absent sku_id', () => {
   const fixture = loadFixture('product-1005009452926938.json');
-  const product = core.normalizeProduct(fixture, 'https://aliexpress.ru/item/1005009452926938.html?sku_id=12000049151727540');
+  const product = core.normalizeProduct(fixture.data, 'https://aliexpress.ru/item/1005009452926938.html?sku_id=12000049151727540');
 
   const unknown = core.updateSelectedSku(product, 'https://aliexpress.ru/item/1005009452926938.html?sku_id=99999999999999999');
   const absent = core.updateSelectedSku(product, 'https://aliexpress.ru/item/1005009452926938.html');
@@ -185,8 +190,8 @@ test('updateSelectedSku keeps the last valid selection for unknown or absent sku
 
 test('recursively finds nested productData without a hardcoded path', () => {
   const fixture = loadFixture('product-1005008195850531.json');
-  const found = core.findProductDataCandidate({ widgets: [{ children: [{ props: { response: { data: fixture } } }] }] });
+  const found = core.findProductDataCandidate({ widgets: [{ children: [{ props: { response: fixture } }] }] });
 
-  assert.equal(found.data, fixture);
+  assert.equal(found.data, fixture.data);
   assert.match(found.path, /widgets/);
 });

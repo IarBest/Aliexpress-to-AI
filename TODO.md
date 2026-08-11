@@ -64,9 +64,10 @@ Acceptance: SPA URL change корректно меняет выбранную к
 
 ### Реальные regression fixtures
 
-Текущие tests создают удобные synthetic objects функциями в test-файле. Нужны
-обезличенные минимизированные fragments фактических `productData` responses без
-cookies, auth/account данных и нерелевантной аналитики.
+Regression tests используют обезличенные автоматически минимизированные
+fragments фактически captured `productData` responses. Fixtures сохраняют
+исходный `{ data: ... }` wrapper и captured structural values; synthetic objects
+допустимы только для изолированных generic unit tests.
 
 - [x] Добавить Fixture A для item `1005008195850531` с настоящими именами полей
       и значений: `Bundle` — 7 values, `priceList` — 7 SKU.
