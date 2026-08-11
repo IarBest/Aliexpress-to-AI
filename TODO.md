@@ -1,7 +1,11 @@
 # TODO
 
-Живой технический roadmap Ali Helper. Порядок приоритетов обязателен: расширение
-product data, shipping и reviews начинается только после закрытия P0.
+Живой технический roadmap Ali Helper. P0 закрыт после успешного live
+Tampermonkey smoke test. Следующий практический этап — shipping для current
+selected SKU (P2); расширение product extraction (P1: characteristics,
+description, rating/store/gallery и т. д.) выполняется после shipping. Нумерация
+разделов сохранена как классификация roadmap, а не как фактический execution
+order.
 
 ## Definition of done
 
@@ -23,7 +27,8 @@ AliExpress нужно зафиксировать фактическое расх
 
 ## P0 — Correctness / baseline fixes
 
-P0 является обязательным gate перед P1–P7.
+P0 являлся обязательным gate перед P1–P7 и закрыт после успешного live
+Tampermonkey smoke test на актуальном userscript после commit `d48de66`.
 
 ### Настоящий `sizeData` и единицы измерения
 
@@ -57,7 +62,9 @@ raw SKU fields, buyer price, discount и будущие store/description/delive
 - [x] Добавить unit test перехода с одного существующего SKU на другой.
 - [x] Добавить unit test неизвестного/отсутствующего `sku_id` и documented
       fallback к `activeSkuId` только там, где это действительно уместно.
-- [ ] Проверить, что экспорт и status panel отражают новый selected SKU.
+- [x] Проверить, что normalized model и export отражают новый selected SKU,
+      variant, price и stock; status panel при этом показывает runtime/extraction
+      status и не обязан дублировать выбранный SKU.
 
 Acceptance: SPA URL change корректно меняет выбранную комбинацию, цену и stock,
 не пересоздавая и не обедняя normalized product.
@@ -93,18 +100,22 @@ Node tests не проверяют `document-start`, `unsafeWindow`, реаль�
 interceptor и Tampermonkey storage. Перед важными release milestones выполнять
 и записывать результат этого manual checklist:
 
-- [ ] Установить актуальный `src/ali-helper.user.js` в Tampermonkey.
-- [ ] Сделать fresh reload item page, не полагаясь на уже hydrated SPA state.
-- [ ] Проверить, что interceptor ловит настоящий `productData`.
-- [ ] Проверить переход панели `Waiting -> Ready` без ручных кликов по SKU.
-- [ ] Для item `1005008195850531` увидеть `Bundle: 7` и 7 SKU.
-- [ ] Проверить, что Copy variants содержит ровно 7 реальных комбинаций.
-- [ ] Сменить SKU на странице и проверить обновление selected SKU/price/stock.
-- [ ] Проверить Copy clean URL: tracking удалён, `sku_id` сохранён.
-- [ ] Проверить `.com -> .ru` при включённой настройке и отсутствие redirect при
+- [x] Установить актуальный `src/ali-helper.user.js` в Tampermonkey.
+- [x] Сделать fresh reload item page, не полагаясь на уже hydrated SPA state.
+- [x] Проверить, что interceptor ловит настоящий `productData`.
+- [x] Проверить переход панели `Waiting -> Ready` без ручных кликов по SKU.
+- [x] Для item `1005008195850531` увидеть `Bundle: 7`, 7 SKU и source
+      `network:productData`.
+- [x] Проверить, что Copy variants содержит ровно 7 реальных комбинаций.
+- [x] Сменить SKU на странице и проверить в normalized model и Copy for ChatGPT:
+      SKU `12000056550848689`, `Bundle: 433 Remote`, price `$1.92`, regular price
+      `$3.20`, stock `1000`.
+- [x] Проверить Copy clean URL: tracking удалён, `sku_id` сохранён.
+- [x] Проверить `.com -> .ru` при включённой настройке и отсутствие redirect при
       выключенной.
-- [ ] Проверить сворачивание панели и сохранение settings после reload.
-- [ ] Убедиться, что script не выполняет cart, Buy now, subscribe, messaging,
+- [x] Проверить сворачивание панели и сохранение settings после reload.
+- [x] Проверить clipboard actions панели.
+- [x] Убедиться, что script не выполняет cart, Buy now, subscribe, messaging,
       checkout или другие account mutations.
 
 Acceptance: checklist проходит в реальном Tampermonkey runtime; найденные
