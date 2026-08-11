@@ -28,6 +28,34 @@ function syntheticShippingProduct(skuId, buyerPrice, price) {
   };
 }
 
+function syntheticCharacteristicsDom(rows, outsideRows = []) {
+  const makeItem = (row) => ({
+    querySelector(selector) {
+      if (selector.includes('ProductCharacteristicsItem__name__')) return row.nameNode || { textContent: row.name };
+      if (selector.includes('ProductCharacteristicsItem__value__')) return row.valueNode || { textContent: row.value };
+      return null;
+    },
+  });
+  const items = rows.map(makeItem);
+  const outsideItems = outsideRows.map(makeItem);
+  const boundary = {
+    querySelectorAll(selector) {
+      return selector.includes('HazeProductCharacteristics__itemForSku') ? items : [];
+    },
+  };
+  return {
+    outsideItems,
+    querySelector(selector) {
+      return selector.includes('HazeProductCharacteristics__groupsContainerForSku') ? boundary : null;
+    },
+    querySelectorAll(selector) {
+      if (selector.includes('HazeProductCharacteristics__groupsContainerForSku')) return [boundary];
+      if (selector.includes('HazeProductCharacteristics__itemForSku')) return outsideItems;
+      return [];
+    },
+  };
+}
+
 test('normalizes COM URL, removes tracking and hash, and keeps sku_id and unknown params', () => {
   const input = 'https://www.aliexpress.com/item/1005008195850531.html?spm=a2g0o&utm_source=x&af=739_607243&sku_id=123&mystery=keep#frag';
   const result = core.normalizeItemUrl(input, 'ru');
@@ -383,6 +411,91 @@ test('real multi-dimension fixture maps priceList SKU through displayName', () =
   assert.equal(product.selectedSku.price.regular.currency, 'USD');
   assert.equal(product.selectedSku.stock, 593);
   assert.equal(JSON.parse(core.exportProduct(product)).skus.length, 45);
+});
+
+test('captured live characteristics preserve real name/value pairs and display order', () => {
+  const fixture = loadFixture('characteristics-1005009452926938.json');
+  const characteristics = core.extractCharacteristicsFromDom(syntheticCharacteristicsDom(fixture.rows));
+
+  assert.equal(fixture.sourceKind, 'DOM observation');
+  assert.deepEqual(characteristics, fixture.rows);
+  assert.deepEqual(characteristics.map(({ name }) => name), ['Brand Name', 'Model Number', 'Origin', 'Type', 'Material']);
+
+  const productFixture = loadFixture('product-1005009452926938.json');
+  const product = core.updateCharacteristics(
+    core.normalizeProduct(productFixture.data, 'https://aliexpress.ru/item/1005009452926938.html?sku_id=12000049151727540'),
+    characteristics,
+  );
+  assert.deepEqual(JSON.parse(core.exportProduct(product)).characteristics, fixture.rows);
+});
+
+test('missing characteristics return an empty array without breaking product normalization', () => {
+  const fixture = loadFixture('product-1005008195850531.json');
+  const product = core.normalizeProduct(fixture.data, 'https://aliexpress.ru/item/1005008195850531.html');
+
+  assert.deepEqual(core.extractCharacteristicsFromDom(null), []);
+  assert.deepEqual(core.extractCharacteristicsFromDom({ querySelectorAll: () => [] }), []);
+  assert.deepEqual(product.characteristics, []);
+});
+
+test('characteristics collapse formatting whitespace and skip partial rows', () => {
+  const characteristics = core.extractCharacteristicsFromDom(syntheticCharacteristicsDom([
+    { name: '  Model\n\t Number  ', value: '  Super   Maxi\n dress ' },
+    { name: 'Missing value', value: '   ' },
+    { name: '', value: 'Missing name' },
+  ]));
+
+  assert.deepEqual(characteristics, [{ name: 'Model Number', value: 'Super Maxi dress' }]);
+});
+
+test('characteristics extractor ignores third-party rows outside the AliExpress boundary', () => {
+  const root = syntheticCharacteristicsDom(
+    [{ name: 'Brand Name', value: 'AliExpress product value' }],
+    [{ name: 'Store', value: 'Megabonus sentinel' }],
+  );
+
+  assert.equal(root.outsideItems.length, 1);
+  assert.deepEqual(core.extractCharacteristicsFromDom(root), [
+    { name: 'Brand Name', value: 'AliExpress product value' },
+  ]);
+});
+
+test('ChatGPT export lists characteristics in normalized order and uses a neutral empty marker', () => {
+  const fixture = loadFixture('product-1005008195850531.json');
+  const product = core.normalizeProduct(fixture.data, 'https://aliexpress.ru/item/1005008195850531.html', {
+    characteristics: [
+      { name: 'First', value: 'One' },
+      { name: 'Second', value: 'Two' },
+    ],
+  });
+  const exported = core.exportForChatGPT(product);
+  const emptyExport = core.exportForChatGPT({ ...product, characteristics: [] });
+
+  assert.match(exported, /CHARACTERISTICS:\nFirst: One\nSecond: Two$/);
+  assert.match(emptyExport, /CHARACTERISTICS:\n—$/);
+});
+
+test('characteristics enrichment preserves the model and is reference-stable for unchanged or absent data', () => {
+  const fixture = loadFixture('product-1005009452926938.json');
+  const product = core.normalizeProduct(fixture.data, 'https://aliexpress.ru/item/1005009452926938.html?sku_id=12000049151727540');
+  const sentinels = {
+    price: product.price,
+    selectedSku: product.selectedSku,
+    skus: product.skus,
+    sizeGuide: product.sizeGuide,
+    delivery: { sentinel: 'delivery' },
+    store: { sentinel: 'store' },
+    reviews: [{ sentinel: 'reviews' }],
+  };
+  Object.assign(product, sentinels);
+
+  const updated = core.updateCharacteristics(product, [{ name: 'Material', value: 'Polyester' }]);
+
+  assert.notEqual(updated, product);
+  assert.deepEqual(updated.characteristics, [{ name: 'Material', value: 'Polyester' }]);
+  Object.entries(sentinels).forEach(([key, value]) => assert.equal(updated[key], value));
+  assert.equal(core.updateCharacteristics(updated, [{ name: 'Material', value: 'Polyester' }]), updated);
+  assert.equal(core.updateCharacteristics(updated, []), updated);
 });
 
 test('real byUnitTables sizeData preserves separate CM and IN tables', () => {

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ali Helper
 // @namespace    https://github.com/local/ali-helper
-// @version      0.1.0
+// @version      0.1.4
 // @description  Read-only AliExpress URL cleaner and product/variant exporter
 // @match        https://aliexpress.ru/item/*
 // @match        https://www.aliexpress.com/item/*
@@ -20,6 +20,10 @@
 
   const VERSION = '0.1.0';
   const SETTINGS_KEY = 'ali-helper:settings:v1';
+  const CHARACTERISTICS_BOUNDARY_SELECTOR = '[class*="HazeProductCharacteristics__groupsContainerForSku"]';
+  const CHARACTERISTICS_ITEM_SELECTOR = '[class*="HazeProductCharacteristics__itemForSku"]';
+  const CHARACTERISTICS_NAME_SELECTOR = '[class*="ProductCharacteristicsItem__name__"]';
+  const CHARACTERISTICS_VALUE_SELECTOR = '[class*="ProductCharacteristicsItem__value__"]';
   const DEFAULT_SETTINGS = Object.freeze({
     autoRedirectComToRu: true,
     panelCollapsed: false,
@@ -432,6 +436,52 @@
     return { tables, raw: sizeData };
   }
 
+  function normalizeHumanText(value) {
+    return String(value ?? '').replace(/\s+/g, ' ').trim();
+  }
+
+  function normalizeCharacteristics(rows) {
+    return (Array.isArray(rows) ? rows : []).flatMap((row) => {
+      const name = normalizeHumanText(row?.name);
+      const value = normalizeHumanText(row?.value);
+      return name && value ? [{ name, value }] : [];
+    });
+  }
+
+  function findCharacteristicsBoundary(rootNode) {
+    if (!rootNode) return null;
+    if (typeof rootNode.matches === 'function' && rootNode.matches(CHARACTERISTICS_BOUNDARY_SELECTOR)) return rootNode;
+    return typeof rootNode.querySelector === 'function' ? rootNode.querySelector(CHARACTERISTICS_BOUNDARY_SELECTOR) : null;
+  }
+
+  function extractCharacteristicsFromDom(rootNode) {
+    if (!rootNode || typeof rootNode.querySelectorAll !== 'function') return [];
+    const boundaries = Array.from(rootNode.querySelectorAll(CHARACTERISTICS_BOUNDARY_SELECTOR));
+    if (typeof rootNode.matches === 'function' && rootNode.matches(CHARACTERISTICS_BOUNDARY_SELECTOR)) boundaries.unshift(rootNode);
+    const rows = boundaries.flatMap((boundary) => Array.from(boundary.querySelectorAll(CHARACTERISTICS_ITEM_SELECTOR)).map((item) => {
+      const nameElement = item.querySelector(CHARACTERISTICS_NAME_SELECTOR);
+      const valueElement = item.querySelector(CHARACTERISTICS_VALUE_SELECTOR);
+      return {
+        name: nameElement?.innerText ?? nameElement?.textContent,
+        value: valueElement?.innerText ?? valueElement?.textContent,
+      };
+    }));
+    return normalizeCharacteristics(rows);
+  }
+
+  function characteristicsEqual(left, right) {
+    return Array.isArray(left) && Array.isArray(right)
+      && left.length === right.length
+      && left.every((row, index) => row.name === right[index]?.name && row.value === right[index]?.value);
+  }
+
+  function updateCharacteristics(product, rows) {
+    if (!product) return product;
+    const characteristics = normalizeCharacteristics(rows);
+    if (!characteristics.length || characteristicsEqual(product.characteristics, characteristics)) return product;
+    return { ...product, characteristics };
+  }
+
   function findProductDataCandidate(rootValue, limits = {}) {
     const maxDepth = limits.maxDepth || 30;
     const maxVisited = limits.maxVisited || 30000;
@@ -480,7 +530,7 @@
       skus,
       selectedSku,
       sizeGuide: normalizeSizeGuide(productData.skuInfo.sizeData),
-      characteristics: [],
+      characteristics: normalizeCharacteristics(fallbacks.characteristics),
       description: null,
       delivery: null,
       store: null,
@@ -592,6 +642,12 @@
     }).join('\n\n');
   }
 
+  function formatCharacteristics(characteristics) {
+    return Array.isArray(characteristics) && characteristics.length
+      ? characteristics.map(({ name, value }) => `${name}: ${value}`).join('\n')
+      : '—';
+  }
+
   function exportVariants(product) {
     const combinations = product.skus.map((sku) => [
       `SKU ${sku.skuId}`,
@@ -648,6 +704,9 @@
       '',
       'SIZE GUIDE:',
       formatSizeGuide(product.sizeGuide),
+      '',
+      'CHARACTERISTICS:',
+      formatCharacteristics(product.characteristics),
     ].join('\n');
   }
 
@@ -671,6 +730,9 @@
     normalizeVariantGroups,
     normalizeSkus,
     normalizeSizeGuide,
+    normalizeCharacteristics,
+    extractCharacteristicsFromDom,
+    updateCharacteristics,
     findProductDataCandidate,
     normalizeProduct,
     updateSelectedSku,
@@ -964,12 +1026,16 @@
       itemId: getItemId(location.href),
       ui: null,
       lastUrl: location.href,
+      characteristicsBoundary: null,
+      staleCharacteristicsBoundary: null,
+      staleCharacteristics: [],
     };
     const acceptProductData = (data, meta) => {
       const dataItemId = asString(firstDefined(data.productId, data.itemId, data.id, runtime.itemId));
       if (dataItemId !== runtime.itemId) return;
       try {
-        runtime.product = normalizeProduct(data, location.href, { title: document.title.replace(/\s*\|\s*AliExpress.*$/i, ''), source: meta.source });
+        const normalized = normalizeProduct(data, location.href, { title: document.title.replace(/\s*\|\s*AliExpress.*$/i, ''), source: meta.source });
+        runtime.product = updateCharacteristics(normalized, runtime.product?.characteristics);
         runtime.product = applyCachedDelivery(runtime.product, runtime.deliveryCache, runtime.shippingEnvironment);
         runtime.ui?.setProduct(runtime.product);
       } catch (error) {
@@ -1008,6 +1074,9 @@
         runtime.lastUrl = location.href;
         const nextItemId = getItemId(location.href);
         if (nextItemId !== runtime.itemId) {
+          runtime.staleCharacteristicsBoundary = runtime.characteristicsBoundary;
+          runtime.staleCharacteristics = runtime.product?.characteristics || [];
+          runtime.characteristicsBoundary = null;
           runtime.itemId = nextItemId;
           runtime.product = null;
           runtime.shippingCapture = null;
@@ -1025,6 +1094,25 @@
         const found = findInSsrScripts() || findInReact();
         if (found) acceptProductData(found.data, found);
         else if (++attempts === 8) runtime.ui?.setStatus('productData not found yet. Reload the page with Ali Helper enabled; SSR contains no SKU data.', true);
+      }
+      if (runtime.product) {
+        const boundary = findCharacteristicsBoundary(document);
+        const characteristics = extractCharacteristicsFromDom(document);
+        const stillShowsPreviousItem = boundary
+          && boundary === runtime.staleCharacteristicsBoundary
+          && characteristicsEqual(characteristics, runtime.staleCharacteristics);
+        if (!stillShowsPreviousItem) {
+          const updatedProduct = updateCharacteristics(runtime.product, characteristics);
+          if (updatedProduct !== runtime.product) {
+            runtime.product = updatedProduct;
+            runtime.ui?.setProduct(runtime.product);
+          }
+          if (characteristics.length) {
+            runtime.characteristicsBoundary = boundary;
+            runtime.staleCharacteristicsBoundary = null;
+            runtime.staleCharacteristics = [];
+          }
+        }
       }
     };
     setInterval(scanFallbacks, 1000);

@@ -27,3 +27,13 @@ unrelated tracking noise, irrelevant null fields, and account-sensitive data
 were omitted.
 Shipping price, dates, ETA, availability, and destination-dependent results are
 historical and can vary by region, session, and time.
+
+`characteristics-1005009452926938.json` records a minimal live DOM observation
+from the AliExpress product page on 2026-08-11. The retained class fragments,
+five name/value pairs, their order, text-only value markup, and absence of
+partial rows were observed directly. The same ordered pairs were present for
+the two recorded SKU IDs, so this fixture documents product-level behavior for
+that observation rather than asserting that every AliExpress product behaves
+the same way. SSR `#__AER_DATA__` exposed only widget configuration on that
+page, not the characteristic pairs. Values are historical and may change by
+locale, region, session, or time.

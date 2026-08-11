@@ -165,15 +165,21 @@ item и seller ratings не смешиваются.
 
 ### Characteristics
 
-- [ ] Добавить scoped DOM extractor для
+- [x] Добавить scoped DOM extractor для
       `[class*="HazeProductCharacteristics__itemForSku"]`.
-- [ ] Читать name/value через стабильные fragments
+- [x] Читать name/value через стабильные fragments
       `ProductCharacteristicsItem__name__` и
       `ProductCharacteristicsItem__value__`.
-- [ ] Не использовать полный CSS-module hash.
-- [ ] Нормализовать пары name/value с сохранением отображаемого порядка.
-- [ ] Считать отсутствие characteristics допустимым partial result.
-- [ ] Добавить DOM fixture/case, доказывающий исключение third-party DOM.
+- [x] Не использовать полный CSS-module hash.
+- [x] Нормализовать пары name/value с сохранением отображаемого порядка.
+- [x] Считать отсутствие characteristics допустимым partial result.
+- [x] Добавить DOM fixture/case, доказывающий исключение third-party DOM.
+
+Live Tampermonkey smoke подтверждён для item `1005009452926938` (5 пар) и
+`1005008195850531` (8 пар). Смена SKU платья не изменила product-level
+characteristics. Естественный same-tab SPA переход между товарами через текущий
+AliExpress UI не воспроизводится; защита от stale characteristics между items
+остаётся покрыта regression test.
 
 Acceptance: normalized `characteristics` содержит только product pairs, а
 отсутствующий блок не переводит весь product extraction в error.

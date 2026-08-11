@@ -1,0 +1,41 @@
+{
+  "itemId": "1005009452926938",
+  "observedAt": "2026-08-11",
+  "sourceKind": "DOM observation",
+  "selectors": {
+    "boundaryClassFragment": "HazeProductCharacteristics__groupsContainerForSku",
+    "itemClassFragment": "HazeProductCharacteristics__itemForSku",
+    "nameClassFragment": "ProductCharacteristicsItem__name__",
+    "valueClassFragment": "ProductCharacteristicsItem__value__"
+  },
+  "observation": {
+    "valueMarkup": "text-only",
+    "partialRows": 0,
+    "skuIdsCompared": [
+      "12000049151727540",
+      "12000049151727530"
+    ]
+  },
+  "rows": [
+    {
+      "name": "Brand Name",
+      "value": "Нет"
+    },
+    {
+      "name": "Model Number",
+      "value": "Super Maxi dress"
+    },
+    {
+      "name": "Origin",
+      "value": "Mainland China"
+    },
+    {
+      "name": "Type",
+      "value": "Regular"
+    },
+    {
+      "name": "Material",
+      "value": "Polyester"
+    }
+  ]
+}
