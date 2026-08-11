@@ -188,15 +188,29 @@ Acceptance: normalized `characteristics` содержит только product p
 
 - [ ] Найти original React `dangerouslySetInnerHTML.__html` для
       `#content_anchor` как preferred source.
-- [ ] Использовать `#content_anchor.innerHTML` как fallback.
-- [ ] Не считать краткий `productData.description` полным seller description.
-- [ ] Разобрать description в `{ rawHtml, blocks, text, images }`.
-- [ ] Сохранять исходный порядок headings, text, images, links и других полезных
+- [x] Использовать `#content_anchor.innerHTML` как fallback.
+- [x] Не считать краткий `productData.description` полным seller description.
+- [x] Разобрать description в `{ rawHtml, blocks, text, images }`.
+- [x] Сохранять исходный порядок headings, text, images, links и других полезных
       блоков вместо раздельного flattening.
-- [ ] Нормализовать относительные/protocol-relative image URLs без скачивания.
-- [ ] Исключить scripts, styles и unsafe markup из human text export, сохраняя
+- [x] Нормализовать относительные/protocol-relative image URLs без скачивания.
+- [x] Исключить scripts, styles и unsafe markup из human text export, сохраняя
       диагностический raw HTML согласно принятой модели.
-- [ ] Добавить cases mostly-text, mostly-images и чередующихся text/image blocks.
+- [x] Добавить cases mostly-text, mostly-images и чередующихся text/image blocks.
+
+Live Tampermonkey smoke подтверждён 2026-08-11:
+
+- item `1005008195850531`: raw HTML — 9122 chars, 106 blocks, 40 images;
+- item `1005009452926938`: raw HTML — 4726 chars, 47 blocks, 41 images;
+- captured dress regression сохраняет порядок `4 images → h1 "A/B"`;
+- ChatGPT export сохраняет document order, выводит все description image URLs
+  и не включает `rawHtml`;
+- SKU `12000049151727540 → 12000049151727530` не изменяет product-level
+  description;
+- повторные runtime scans не вызывают лишний UI update.
+
+React original HTML в доступном browser execution context не обнаружен;
+соответствующий preferred-source TODO остаётся открытым.
 
 Acceptance: порядок seller content восстанавливается, а image URLs остаются
 связаны с соответствующими разделами.

@@ -37,3 +37,13 @@ that observation rather than asserting that every AliExpress product behaves
 the same way. SSR `#__AER_DATA__` exposed only widget configuration on that
 page, not the characteristic pairs. Values are historical and may change by
 locale, region, session, or time.
+
+The `description-*.json` files contain minimized, exact, contiguous HTML
+fragments recaptured from each product's scoped `#content_anchor` on
+2026-08-11. The relay fixture retains one text fragment with real `<br>`
+boundaries and one separate fragment where seller text is followed by two
+images. The dress fixture retains the observed single `<h1>` whose four images
+precede its `A/B` text. Observation metadata records full-boundary lengths and
+counts without storing the complete 9 KB / 4.7 KB seller descriptions. These
+fixtures contain no account, authentication, cookie, analytics, or tracking
+data. Synthetic parser cases remain explicitly synthetic in the test names.

@@ -56,6 +56,59 @@ function syntheticCharacteristicsDom(rows, outsideRows = []) {
   };
 }
 
+function syntheticDescriptionDom(html, options = {}) {
+  const createElement = (tagName, attributes = {}) => ({
+    nodeType: 1,
+    tagName: tagName.toUpperCase(),
+    childNodes: [],
+    attributes,
+    getAttribute(name) {
+      return Object.prototype.hasOwnProperty.call(this.attributes, name) ? this.attributes[name] : null;
+    },
+    matches(selector) {
+      return selector === '#content_anchor' && this.attributes.id === 'content_anchor';
+    },
+  });
+  const createText = (value) => ({ nodeType: 3, nodeValue: value, textContent: value });
+  const boundary = createElement('div', { id: 'content_anchor' });
+  boundary.innerHTML = html;
+  const stack = [boundary];
+  const voidTags = new Set(['br', 'hr', 'img', 'input', 'meta', 'link']);
+  const tokens = html.match(/<!--[\s\S]*?-->|<[^>]+>|[^<]+/g) || [];
+
+  tokens.forEach((token) => {
+    if (token.startsWith('<!--')) return;
+    const closing = token.match(/^<\s*\/\s*([\w-]+)[^>]*>$/);
+    if (closing) {
+      if (stack.length > 1) stack.pop();
+      return;
+    }
+    const opening = token.match(/^<\s*([\w-]+)([\s\S]*?)\/?\s*>$/);
+    if (opening) {
+      const attributes = {};
+      const attributeSource = opening[2];
+      const attributePattern = /([^\s=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
+      let match;
+      while ((match = attributePattern.exec(attributeSource))) {
+        if (match[1] === '/') continue;
+        attributes[match[1].toLowerCase()] = match[2] ?? match[3] ?? match[4] ?? '';
+      }
+      const element = createElement(opening[1], attributes);
+      stack.at(-1).childNodes.push(element);
+      if (!voidTags.has(opening[1].toLowerCase()) && !/\/\s*>$/.test(token)) stack.push(element);
+      return;
+    }
+    stack.at(-1).childNodes.push(createText(token));
+  });
+
+  return {
+    boundary,
+    querySelector(selector) {
+      return options.missing || selector !== '#content_anchor' ? null : boundary;
+    },
+  };
+}
+
 test('userscript metadata and runtime versions stay in sync', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'ali-helper.user.js'), 'utf8');
   const metadataVersion = source.match(/^\/\/ @version\s+(\S+)\s*$/m);
@@ -481,8 +534,8 @@ test('ChatGPT export lists characteristics in normalized order and uses a neutra
   const exported = core.exportForChatGPT(product);
   const emptyExport = core.exportForChatGPT({ ...product, characteristics: [] });
 
-  assert.match(exported, /CHARACTERISTICS:\nFirst: One\nSecond: Two$/);
-  assert.match(emptyExport, /CHARACTERISTICS:\n—$/);
+  assert.match(exported, /CHARACTERISTICS:\nFirst: One\nSecond: Two\n\nDESCRIPTION:/);
+  assert.match(emptyExport, /CHARACTERISTICS:\n—\n\nDESCRIPTION:/);
 });
 
 test('characteristics enrichment preserves the model and is reference-stable for unchanged or absent data', () => {
@@ -506,6 +559,259 @@ test('characteristics enrichment preserves the model and is reference-stable for
   Object.entries(sentinels).forEach(([key, value]) => assert.equal(updated[key], value));
   assert.equal(core.updateCharacteristics(updated, [{ name: 'Material', value: 'Polyester' }]), updated);
   assert.equal(core.updateCharacteristics(updated, []), updated);
+});
+
+test('captured dress fragment preserves four images before heading text inside one h1', () => {
+  const fixture = loadFixture('description-1005009452926938.json');
+  const description = core.extractDescriptionFromDom(
+    syntheticDescriptionDom(fixture.fragment),
+    'https://aliexpress.ru/item/1005009452926938.html',
+  );
+
+  assert.equal(fixture.sourceKind, 'live DOM observation');
+  assert.deepEqual(description.blocks.map((block) => block.type), [
+    'image', 'image', 'image', 'image', 'heading',
+  ]);
+  assert.deepEqual(description.blocks.slice(0, 4).map((block) => block.url), [
+    'https://ae-pic-a1.aliexpress-media.com/kf/A8c93a20945fd4085826f8d7f9729865dp.jpg',
+    'https://ae-pic-a1.aliexpress-media.com/kf/S00c78b5928944a95939ffd7adb2e405d0.png',
+    'https://ae-pic-a1.aliexpress-media.com/kf/Sae4a297f1d354978936186c7ece081f9k.png',
+    'https://ae-pic-a1.aliexpress-media.com/kf/S660925d5ba0f4fbfbf008de92b34655dG.png',
+  ]);
+  assert.deepEqual(description.blocks[4], { type: 'heading', level: 1, text: 'A/B' });
+  assert.equal(description.text, 'A/B');
+  assert.equal(description.images.length, 4);
+  assert.equal(description.rawHtml, fixture.fragment);
+});
+
+test('captured relay fragments preserve br boundaries and text-before-images order', () => {
+  const fixture = loadFixture('description-1005008195850531.json');
+  const pageUrl = 'https://aliexpress.ru/item/1005008195850531.html';
+  const textDescription = core.extractDescriptionFromDom(
+    syntheticDescriptionDom(fixture.fragments.textWithBreaks),
+    pageUrl,
+  );
+  const mixedDescription = core.extractDescriptionFromDom(
+    syntheticDescriptionDom(fixture.fragments.textThenImages),
+    pageUrl,
+  );
+
+  assert.equal(fixture.sourceKind, 'live DOM observation');
+  assert.deepEqual(textDescription.blocks.map((block) => block.type), ['text', 'text', 'text']);
+  assert.equal(textDescription.blocks[0].text, 'Note:');
+  assert.match(textDescription.blocks[1].text, /ZigBee gateway/);
+  assert.match(textDescription.blocks[2].text, /depends on what app/);
+  assert.deepEqual(mixedDescription.blocks.map((block) => block.type), ['text', 'image', 'image']);
+  assert.equal(mixedDescription.blocks[0].text, 'Add device flow to mobile APP');
+  assert.deepEqual(mixedDescription.images.map((image) => image.url), [
+    'https://ae-pic-a1.aliexpress-media.com/kf/Sd3f1cd17283f4554921409f61afcb6fal.jpg',
+    'https://ae-pic-a1.aliexpress-media.com/kf/S4fecc555ec0c4cf4a397613ed18e91fbM.jpg',
+  ]);
+});
+
+test('synthetic mostly-text description keeps paragraphs and nested inline text without duplication', () => {
+  const html = '<div><p>First <span>inline</span> sentence.</p><p>Second paragraph.</p></div>';
+  const description = core.extractDescriptionFromDom(
+    syntheticDescriptionDom(html),
+    'https://aliexpress.ru/item/1.html',
+  );
+
+  assert.deepEqual(description.blocks, [
+    { type: 'text', text: 'First inline sentence.' },
+    { type: 'text', text: 'Second paragraph.' },
+  ]);
+  assert.equal(description.text, 'First inline sentence.\nSecond paragraph.');
+});
+
+test('synthetic mostly-images description preserves repeated images without deduplication', () => {
+  const html = '<div><img src="/same.jpg"><img src="/same.jpg"></div>';
+  const description = core.extractDescriptionFromDom(
+    syntheticDescriptionDom(html),
+    'https://aliexpress.ru/item/1.html',
+  );
+
+  assert.deepEqual(description.blocks.map((block) => block.type), ['image', 'image']);
+  assert.deepEqual(description.images, [
+    { url: 'https://aliexpress.ru/same.jpg', alt: null },
+    { url: 'https://aliexpress.ru/same.jpg', alt: null },
+  ]);
+  assert.equal(description.text, '');
+});
+
+test('synthetic alternating description preserves exact text-image document order', () => {
+  const html = '<p>Before</p><img src="first.jpg"><div>Middle</div><img src="//cdn.example/second.jpg">';
+  const description = core.extractDescriptionFromDom(
+    syntheticDescriptionDom(html),
+    'https://aliexpress.ru/item/1.html',
+  );
+
+  assert.deepEqual(description.blocks, [
+    { type: 'text', text: 'Before' },
+    { type: 'image', url: 'https://aliexpress.ru/item/first.jpg', alt: null },
+    { type: 'text', text: 'Middle' },
+    { type: 'image', url: 'https://cdn.example/second.jpg', alt: null },
+  ]);
+});
+
+test('description URL normalization supports web URL forms and rejects unsafe schemes', () => {
+  const pageUrl = 'https://aliexpress.ru/item/1005008195850531.html';
+
+  assert.equal(core.normalizeDescriptionUrl('https://cdn.example/a.jpg', pageUrl), 'https://cdn.example/a.jpg');
+  assert.equal(core.normalizeDescriptionUrl('http://cdn.example/a.jpg', pageUrl), 'http://cdn.example/a.jpg');
+  assert.equal(core.normalizeDescriptionUrl('//cdn.example/a.jpg', pageUrl), 'https://cdn.example/a.jpg');
+  assert.equal(core.normalizeDescriptionUrl('/a.jpg', pageUrl), 'https://aliexpress.ru/a.jpg');
+  assert.equal(core.normalizeDescriptionUrl('a.jpg', pageUrl), 'https://aliexpress.ru/item/a.jpg');
+  assert.equal(core.normalizeDescriptionUrl('javascript:alert(1)', pageUrl), null);
+  assert.equal(core.normalizeDescriptionUrl('data:image/png;base64,synthetic', pageUrl), null);
+});
+
+test('synthetic links preserve text or annotate images only when href is safe', () => {
+  const html = '<a href="/details">Details</a><a href="https://example.com/view"><img src="/linked.jpg" alt=" Preview "></a><a href="javascript:alert(1)">Unsafe text</a>';
+  const description = core.extractDescriptionFromDom(
+    syntheticDescriptionDom(html),
+    'https://aliexpress.ru/item/1.html',
+  );
+
+  assert.deepEqual(description.blocks, [
+    { type: 'link', text: 'Details', url: 'https://aliexpress.ru/details' },
+    { type: 'image', url: 'https://aliexpress.ru/linked.jpg', alt: 'Preview', linkUrl: 'https://example.com/view' },
+    { type: 'text', text: 'Unsafe text' },
+  ]);
+});
+
+test('description ignores unsafe containers and does not create empty blocks from br elements', () => {
+  const html = '<p>Safe<br><br>After</p><script>script sentinel</script><style>style sentinel</style><noscript>noscript sentinel</noscript><template>template sentinel</template>';
+  const description = core.extractDescriptionFromDom(
+    syntheticDescriptionDom(html),
+    'https://aliexpress.ru/item/1.html',
+  );
+
+  assert.deepEqual(description.blocks, [
+    { type: 'text', text: 'Safe' },
+    { type: 'text', text: 'After' },
+  ]);
+  assert.equal(description.text, 'Safe\nAfter');
+  assert.doesNotMatch(description.text, /sentinel/);
+});
+
+test('missing or factually empty description boundary returns null', () => {
+  const missing = syntheticDescriptionDom('', { missing: true });
+
+  assert.equal(core.extractDescriptionFromDom(null, 'https://aliexpress.ru/item/1.html'), null);
+  assert.equal(core.extractDescriptionFromDom(missing, 'https://aliexpress.ru/item/1.html'), null);
+  assert.equal(core.extractDescriptionFromDom(syntheticDescriptionDom('<div><br></div>'), 'https://aliexpress.ru/item/1.html'), null);
+  assert.equal(core.extractDescriptionFromDom(syntheticDescriptionDom('<script>ignored</script>'), 'https://aliexpress.ru/item/1.html'), null);
+});
+
+test('description text and image lists are derived consistently from ordered blocks', () => {
+  const blocks = [
+    { type: 'heading', level: 2, text: 'Heading' },
+    { type: 'image', url: 'https://example.com/one.jpg', alt: null },
+    { type: 'link', text: 'Read more', url: 'https://example.com/read' },
+    { type: 'image', url: 'https://example.com/two.jpg', alt: 'Two', linkUrl: 'https://example.com/view' },
+  ];
+  const description = core.buildDescription('dom', '<synthetic>', blocks);
+
+  assert.equal(description.text, 'Heading\nRead more');
+  assert.deepEqual(description.images, [
+    { url: 'https://example.com/one.jpg', alt: null },
+    { url: 'https://example.com/two.jpg', alt: 'Two', linkUrl: 'https://example.com/view' },
+  ]);
+});
+
+test('description enrichment preserves the model and is reference-stable', () => {
+  const fixture = loadFixture('product-1005009452926938.json');
+  const product = core.normalizeProduct(fixture.data, 'https://aliexpress.ru/item/1005009452926938.html');
+  const description = core.buildDescription('dom', '<p>Captured</p>', [{ type: 'text', text: 'Captured' }]);
+  const sentinels = {
+    price: product.price,
+    selectedSku: product.selectedSku,
+    skus: product.skus,
+    sizeGuide: product.sizeGuide,
+    characteristics: [{ name: 'Sentinel', value: 'kept' }],
+    delivery: { sentinel: 'delivery' },
+    store: { sentinel: 'store' },
+    reviews: [{ sentinel: 'reviews' }],
+  };
+  Object.assign(product, sentinels);
+
+  const updated = core.updateDescription(product, description);
+
+  assert.notEqual(updated, product);
+  assert.equal(updated.description, description);
+  Object.entries(sentinels).forEach(([key, value]) => assert.equal(updated[key], value));
+  assert.equal(core.updateDescription(updated, description), updated);
+  assert.equal(core.updateDescription(updated, { ...description, blocks: [] }), updated);
+  assert.equal(core.updateDescription(updated, null), updated);
+  assert.equal(core.updateDescription(null, description), null);
+});
+
+test('a same-item productData refresh can retain an already extracted description', () => {
+  const fixture = loadFixture('product-1005008195850531.json');
+  const first = core.normalizeProduct(fixture.data, 'https://aliexpress.ru/item/1005008195850531.html');
+  const description = core.buildDescription('dom', '<p>Existing</p>', [{ type: 'text', text: 'Existing' }]);
+  const enriched = core.updateDescription(first, description);
+  const refreshed = core.updateDescription(
+    core.normalizeProduct(fixture.data, 'https://aliexpress.ru/item/1005008195850531.html'),
+    enriched.description,
+  );
+
+  assert.equal(refreshed.description, description);
+});
+
+test('productData.description is not treated as full seller description', () => {
+  const fixture = clone(loadFixture('product-1005008195850531.json'));
+  fixture.data.description = '<p>Short API field</p>';
+
+  const product = core.normalizeProduct(fixture.data, 'https://aliexpress.ru/item/1005008195850531.html');
+
+  assert.equal(product.description, null);
+});
+
+test('ChatGPT export preserves description order, excludes raw HTML, and marks absence', () => {
+  const fixture = loadFixture('product-1005008195850531.json');
+  const product = core.normalizeProduct(fixture.data, 'https://aliexpress.ru/item/1005008195850531.html');
+  const rawHtml = '<p>RAW_SENTINEL</p>';
+  product.description = core.buildDescription('dom', rawHtml, [
+    { type: 'text', text: 'Before' },
+    { type: 'image', url: 'https://example.com/one.jpg', alt: null },
+    { type: 'heading', level: 1, text: 'A/B' },
+    { type: 'link', text: 'Details', url: 'https://example.com/details' },
+    { type: 'image', url: 'https://example.com/two.jpg', alt: null },
+  ]);
+
+  const exported = core.exportForChatGPT(product);
+  const emptyExport = core.exportForChatGPT({ ...product, description: null });
+
+  assert.match(core.exportProduct(product), /RAW_SENTINEL/);
+  assert.match(exported, /DESCRIPTION:\nBefore\nImage 1: https:\/\/example\.com\/one\.jpg\nA\/B\nDetails — https:\/\/example\.com\/details\nImage 2: https:\/\/example\.com\/two\.jpg$/);
+  assert.doesNotMatch(exported, /RAW_SENTINEL/);
+  assert.match(emptyExport, /DESCRIPTION:\n—$/);
+});
+
+test('ChatGPT description export does not truncate a 41-image sequence', () => {
+  const blocks = Array.from({ length: 41 }, (_, index) => ({
+    type: 'image',
+    url: `https://example.com/${index + 1}.jpg`,
+    alt: null,
+  }));
+  const output = core.formatDescription(core.buildDescription('dom', '<synthetic>', blocks));
+
+  assert.match(output, /^Image 1: https:\/\/example\.com\/1\.jpg/);
+  assert.match(output, /Image 41: https:\/\/example\.com\/41\.jpg$/);
+  assert.equal(output.split('\n').length, 41);
+});
+
+test('stale description boundary is rejected until its identity or content changes', () => {
+  const oldBoundary = {};
+  const newBoundary = {};
+  const oldDescription = core.buildDescription('dom', '<p>Old</p>', [{ type: 'text', text: 'Old' }]);
+  const changedDescription = core.buildDescription('dom', '<p>New</p>', [{ type: 'text', text: 'New' }]);
+
+  assert.equal(core.isStaleDescription(oldBoundary, oldDescription, oldBoundary, oldDescription), true);
+  assert.equal(core.isStaleDescription(oldBoundary, changedDescription, oldBoundary, oldDescription), false);
+  assert.equal(core.isStaleDescription(newBoundary, oldDescription, oldBoundary, oldDescription), false);
+  assert.equal(core.isStaleDescription(null, null, oldBoundary, oldDescription), false);
 });
 
 test('real byUnitTables sizeData preserves separate CM and IN tables', () => {

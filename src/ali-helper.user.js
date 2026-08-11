@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ali Helper
 // @namespace    https://github.com/local/ali-helper
-// @version      0.1.4
+// @version      0.1.5
 // @description  Read-only AliExpress URL cleaner and product/variant exporter
 // @match        https://aliexpress.ru/item/*
 // @match        https://www.aliexpress.com/item/*
@@ -18,12 +18,20 @@
 (function factory(root) {
   'use strict';
 
-  const VERSION = '0.1.4';
+  const VERSION = '0.1.5';
   const SETTINGS_KEY = 'ali-helper:settings:v1';
   const CHARACTERISTICS_BOUNDARY_SELECTOR = '[class*="HazeProductCharacteristics__groupsContainerForSku"]';
   const CHARACTERISTICS_ITEM_SELECTOR = '[class*="HazeProductCharacteristics__itemForSku"]';
   const CHARACTERISTICS_NAME_SELECTOR = '[class*="ProductCharacteristicsItem__name__"]';
   const CHARACTERISTICS_VALUE_SELECTOR = '[class*="ProductCharacteristicsItem__value__"]';
+  const DESCRIPTION_BOUNDARY_SELECTOR = '#content_anchor';
+  const DESCRIPTION_IGNORED_TAGS = new Set(['script', 'style', 'noscript', 'template']);
+  const DESCRIPTION_BLOCK_TAGS = new Set([
+    'address', 'article', 'aside', 'blockquote', 'details', 'div', 'dl', 'dt', 'dd',
+    'fieldset', 'figcaption', 'figure', 'footer', 'header', 'hr', 'li', 'main', 'nav',
+    'ol', 'p', 'pre', 'section', 'summary', 'table', 'tbody', 'td', 'tfoot', 'th',
+    'thead', 'tr', 'ul',
+  ]);
   const DEFAULT_SETTINGS = Object.freeze({
     autoRedirectComToRu: true,
     panelCollapsed: false,
@@ -482,6 +490,129 @@
     return { ...product, characteristics };
   }
 
+  function normalizeDescriptionUrl(value, pageUrl) {
+    const input = asString(value)?.trim();
+    if (!input) return null;
+    try {
+      const url = new URL(input, pageUrl);
+      return /^https?:$/.test(url.protocol) ? url.href : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function findDescriptionBoundary(rootNode) {
+    if (!rootNode) return null;
+    if (typeof rootNode.matches === 'function' && rootNode.matches(DESCRIPTION_BOUNDARY_SELECTOR)) return rootNode;
+    return typeof rootNode.querySelector === 'function' ? rootNode.querySelector(DESCRIPTION_BOUNDARY_SELECTOR) : null;
+  }
+
+  function parseDescriptionBlocks(boundary, pageUrl) {
+    const blocks = [];
+    let textBuffer = '';
+    let textContext = null;
+
+    const contextKey = (context) => `${context.headingLevel || 0}\u0000${context.linkUrl || ''}`;
+    const flushText = () => {
+      const text = normalizeHumanText(textBuffer);
+      if (text) {
+        if (textContext?.linkUrl) blocks.push({ type: 'link', text, url: textContext.linkUrl });
+        else if (textContext?.headingLevel) blocks.push({ type: 'heading', level: textContext.headingLevel, text });
+        else blocks.push({ type: 'text', text });
+      }
+      textBuffer = '';
+      textContext = null;
+    };
+    const appendText = (value, context) => {
+      if (!value) return;
+      if (textContext && contextKey(textContext) !== contextKey(context)) flushText();
+      textContext = context;
+      textBuffer += value;
+    };
+
+    const walk = (node, context = {}) => {
+      if (!node) return;
+      if (node.nodeType === 3) {
+        appendText(node.nodeValue ?? node.textContent ?? '', context);
+        return;
+      }
+      if (node.nodeType !== 1) return;
+
+      const tag = String(node.tagName || '').toLowerCase();
+      if (DESCRIPTION_IGNORED_TAGS.has(tag)) return;
+      if (tag === 'br') {
+        flushText();
+        return;
+      }
+      if (tag === 'img') {
+        flushText();
+        const url = normalizeDescriptionUrl(node.getAttribute?.('src'), pageUrl);
+        if (!url) return;
+        const image = {
+          type: 'image',
+          url,
+          alt: normalizeHumanText(node.getAttribute?.('alt')) || null,
+        };
+        if (context.linkUrl) image.linkUrl = context.linkUrl;
+        blocks.push(image);
+        return;
+      }
+
+      const headingMatch = tag.match(/^h([1-6])$/);
+      const isBoundary = Boolean(headingMatch) || DESCRIPTION_BLOCK_TAGS.has(tag);
+      if (isBoundary) flushText();
+
+      let childContext = context;
+      if (headingMatch) childContext = { ...context, headingLevel: Number(headingMatch[1]) };
+      if (tag === 'a') {
+        flushText();
+        childContext = { ...childContext, linkUrl: normalizeDescriptionUrl(node.getAttribute?.('href'), pageUrl) };
+      }
+
+      for (const child of Array.from(node.childNodes || [])) walk(child, childContext);
+
+      if (tag === 'a' || isBoundary) flushText();
+    };
+
+    for (const child of Array.from(boundary.childNodes || [])) walk(child);
+    flushText();
+    return blocks;
+  }
+
+  function buildDescription(source, rawHtml, blocks) {
+    if (!Array.isArray(blocks) || !blocks.length) return null;
+    const text = blocks
+      .filter((block) => block.type === 'text' || block.type === 'heading' || block.type === 'link')
+      .map((block) => block.text)
+      .join('\n');
+    const images = blocks.filter((block) => block.type === 'image').map((block) => {
+      const image = { url: block.url, alt: block.alt };
+      if (block.linkUrl) image.linkUrl = block.linkUrl;
+      return image;
+    });
+    return { source, rawHtml, blocks, text, images };
+  }
+
+  function extractDescriptionFromDom(rootNode, pageUrl) {
+    const boundary = findDescriptionBoundary(rootNode);
+    if (!boundary) return null;
+    const rawHtml = typeof boundary.innerHTML === 'string' ? boundary.innerHTML : '';
+    return buildDescription('dom', rawHtml, parseDescriptionBlocks(boundary, pageUrl));
+  }
+
+  function descriptionsEqual(left, right) {
+    return Boolean(left && right && left.source === right.source && left.rawHtml === right.rawHtml);
+  }
+
+  function updateDescription(product, description) {
+    if (!product || !description || descriptionsEqual(product.description, description)) return product;
+    return { ...product, description };
+  }
+
+  function isStaleDescription(boundary, description, staleBoundary, staleDescription) {
+    return Boolean(boundary && boundary === staleBoundary && descriptionsEqual(description, staleDescription));
+  }
+
   function findProductDataCandidate(rootValue, limits = {}) {
     const maxDepth = limits.maxDepth || 30;
     const maxVisited = limits.maxVisited || 30000;
@@ -648,6 +779,17 @@
       : '—';
   }
 
+  function formatDescription(description) {
+    if (!description?.blocks?.length) return '—';
+    let imageNumber = 0;
+    return description.blocks.map((block) => {
+      if (block.type === 'image') return `Image ${++imageNumber}: ${block.url}${block.linkUrl ? ` → ${block.linkUrl}` : ''}`;
+      if (block.type === 'link') return `${block.text} — ${block.url}`;
+      if (block.type === 'heading' || block.type === 'text') return block.text;
+      return null;
+    }).filter(Boolean).join('\n');
+  }
+
   function exportVariants(product) {
     const combinations = product.skus.map((sku) => [
       `SKU ${sku.skuId}`,
@@ -707,6 +849,9 @@
       '',
       'CHARACTERISTICS:',
       formatCharacteristics(product.characteristics),
+      '',
+      'DESCRIPTION:',
+      formatDescription(product.description),
     ].join('\n');
   }
 
@@ -733,6 +878,14 @@
     normalizeCharacteristics,
     extractCharacteristicsFromDom,
     updateCharacteristics,
+    normalizeDescriptionUrl,
+    findDescriptionBoundary,
+    parseDescriptionBlocks,
+    buildDescription,
+    extractDescriptionFromDom,
+    descriptionsEqual,
+    updateDescription,
+    isStaleDescription,
     findProductDataCandidate,
     normalizeProduct,
     updateSelectedSku,
@@ -743,6 +896,7 @@
     formatSourceLabel,
     formatProductStatus,
     formatDelivery,
+    formatDescription,
     isShippingCalculateUrl,
     redactSensitiveJson,
     createShippingDebugCapture,
@@ -1029,13 +1183,18 @@
       characteristicsBoundary: null,
       staleCharacteristicsBoundary: null,
       staleCharacteristics: [],
+      descriptionBoundary: null,
+      staleDescriptionBoundary: null,
+      staleDescription: null,
     };
     const acceptProductData = (data, meta) => {
       const dataItemId = asString(firstDefined(data.productId, data.itemId, data.id, runtime.itemId));
       if (dataItemId !== runtime.itemId) return;
       try {
         const normalized = normalizeProduct(data, location.href, { title: document.title.replace(/\s*\|\s*AliExpress.*$/i, ''), source: meta.source });
-        runtime.product = updateCharacteristics(normalized, runtime.product?.characteristics);
+        const previousProduct = runtime.product;
+        runtime.product = updateCharacteristics(normalized, previousProduct?.characteristics);
+        runtime.product = updateDescription(runtime.product, previousProduct?.description);
         runtime.product = applyCachedDelivery(runtime.product, runtime.deliveryCache, runtime.shippingEnvironment);
         runtime.ui?.setProduct(runtime.product);
       } catch (error) {
@@ -1077,6 +1236,9 @@
           runtime.staleCharacteristicsBoundary = runtime.characteristicsBoundary;
           runtime.staleCharacteristics = runtime.product?.characteristics || [];
           runtime.characteristicsBoundary = null;
+          runtime.staleDescriptionBoundary = runtime.descriptionBoundary;
+          runtime.staleDescription = runtime.product?.description || null;
+          runtime.descriptionBoundary = null;
           runtime.itemId = nextItemId;
           runtime.product = null;
           runtime.shippingCapture = null;
@@ -1096,22 +1258,40 @@
         else if (++attempts === 8) runtime.ui?.setStatus('productData not found yet. Reload the page with Ali Helper enabled; SSR contains no SKU data.', true);
       }
       if (runtime.product) {
+        let updatedProduct = runtime.product;
         const boundary = findCharacteristicsBoundary(document);
         const characteristics = extractCharacteristicsFromDom(document);
         const stillShowsPreviousItem = boundary
           && boundary === runtime.staleCharacteristicsBoundary
           && characteristicsEqual(characteristics, runtime.staleCharacteristics);
         if (!stillShowsPreviousItem) {
-          const updatedProduct = updateCharacteristics(runtime.product, characteristics);
-          if (updatedProduct !== runtime.product) {
-            runtime.product = updatedProduct;
-            runtime.ui?.setProduct(runtime.product);
-          }
+          updatedProduct = updateCharacteristics(updatedProduct, characteristics);
           if (characteristics.length) {
             runtime.characteristicsBoundary = boundary;
             runtime.staleCharacteristicsBoundary = null;
             runtime.staleCharacteristics = [];
           }
+        }
+
+        const descriptionBoundary = findDescriptionBoundary(document);
+        const description = extractDescriptionFromDom(document, location.href);
+        if (!isStaleDescription(
+          descriptionBoundary,
+          description,
+          runtime.staleDescriptionBoundary,
+          runtime.staleDescription,
+        )) {
+          updatedProduct = updateDescription(updatedProduct, description);
+          if (description) {
+            runtime.descriptionBoundary = descriptionBoundary;
+            runtime.staleDescriptionBoundary = null;
+            runtime.staleDescription = null;
+          }
+        }
+
+        if (updatedProduct !== runtime.product) {
+          runtime.product = updatedProduct;
+          runtime.ui?.setProduct(runtime.product);
         }
       }
     };

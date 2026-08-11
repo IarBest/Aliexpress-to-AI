@@ -1,0 +1,16 @@
+{
+  "itemId": "1005008195850531",
+  "sourceKind": "live DOM observation",
+  "capturedAt": "2026-08-11",
+  "boundary": "#content_anchor",
+  "observations": {
+    "fullHtmlLength": 9122,
+    "fullTextLength": 3156,
+    "imageCount": 40,
+    "linkCount": 0
+  },
+  "fragments": {
+    "textWithBreaks": "<div><p style=\"color: rgb(208, 2, 27)\">Note:</p><p style=\"font-size: 14px; color: rgb(0, 0, 0); margin-bottom: 12px\">*All of these receivers must have a ZigBee gateway to work with the Tuya App/Smart Life App/Ewelink App.<br><br>*What kind of app to use depends on what app your gateway is.</p></div>",
+    "textThenImages": "<div><p style=\"font-size: 20px; color: rgb(0, 0, 0); margin-bottom: 12px\">Add device flow to  mobile APP</p><div><img src=\"https://ae-pic-a1.aliexpress-media.com/kf/Sd3f1cd17283f4554921409f61afcb6fal.jpg\"><img src=\"https://ae-pic-a1.aliexpress-media.com/kf/S4fecc555ec0c4cf4a397613ed18e91fbM.jpg\"></div></div>"
+  }
+}

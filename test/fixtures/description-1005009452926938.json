@@ -1,0 +1,13 @@
+{
+  "itemId": "1005009452926938",
+  "sourceKind": "live DOM observation",
+  "capturedAt": "2026-08-11",
+  "boundary": "#content_anchor",
+  "observations": {
+    "fullHtmlLength": 4726,
+    "fullTextLength": 467,
+    "imageCount": 41,
+    "linkCount": 0
+  },
+  "fragment": "<h1 style=\"text-align: center\" align=\"center\"><img src=\"https://ae-pic-a1.aliexpress-media.com/kf/A8c93a20945fd4085826f8d7f9729865dp.jpg\"><img src=\"https://ae-pic-a1.aliexpress-media.com/kf/S00c78b5928944a95939ffd7adb2e405d0.png\"><img src=\"https://ae-pic-a1.aliexpress-media.com/kf/Sae4a297f1d354978936186c7ece081f9k.png\"><img src=\"https://ae-pic-a1.aliexpress-media.com/kf/S660925d5ba0f4fbfbf008de92b34655dG.png\">A/B</h1>"
+}
