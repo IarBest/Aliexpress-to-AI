@@ -149,12 +149,15 @@ logic out of presentation code.
 - Never automatically calculate shipping for hundreds of SKUs; default to the
   selected SKU and require an explicit, capped bulk action if one is added.
 
-## Future description constraints
+## Description constraints
 
 - Short `productData.description` is not the full seller description.
-- Full description is available under `#content_anchor`.
-- React props may contain original `dangerouslySetInnerHTML.__html`.
-- Preserve ordered text/image/heading blocks instead of flattening everything
+- The confirmed current source is the scoped `#content_anchor`; its
+  `innerHTML` is the working DOM source.
+- Original React `dangerouslySetInnerHTML.__html` remains preferred only when it
+  is actually discovered and captured. Do not write a speculative React/Fiber
+  crawler or invent a React path.
+- Preserve ordered text/image/heading/link blocks instead of flattening them
   into unrelated text and image lists.
 - Automatic image downloading is not currently required.
 
@@ -168,6 +171,26 @@ Reviews are a separate future stage; do not implement them incidentally.
 - A follow-up may have its own rating, including a null rating.
 
 These facts are architecture constraints, not current implementation work.
+
+## Local Tampermonkey live-test workflow
+
+In the current maintainer Windows environment, Tampermonkey is configured to
+pick up saved changes to `src/ali-helper.user.js` directly from the local
+working tree.
+
+For local/dirty live smoke tests:
+
+- do not ask the maintainer to copy/paste the userscript into the Tampermonkey
+  editor by default;
+- after saving `src/ali-helper.user.js`, ask for a fresh reload of the target
+  AliExpress page and verify the changed behavior;
+- inability of browser automation to open `chrome-extension://...` Tampermonkey
+  pages is not by itself a blocker for live testing in this environment;
+- if the new behavior does not appear, first verify whether Tampermonkey picked
+  up the saved local file before asking for manual installation or copy/paste.
+
+This workflow is maintainer-environment-specific and must not be assumed for
+other machines or contributors.
 
 ## Git workflow
 
