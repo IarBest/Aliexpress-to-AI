@@ -87,6 +87,75 @@
     return normalizeItemUrl(url, /\.ru$/i.test(url.hostname) ? 'com' : 'ru');
   }
 
+  function networkInputUrl(input) {
+    if (typeof input === 'string') return input;
+    if (input?.url) return String(input.url);
+    return String(input);
+  }
+
+  function isAliExpressHostname(hostname) {
+    return /(^|\.)aliexpress\.(?:com|ru)$/i.test(hostname);
+  }
+
+  function isShippingCalculateUrl(input, pageUrl) {
+    try {
+      const page = new URL(pageUrl);
+      const target = new URL(networkInputUrl(input), page);
+      return /^https?:$/.test(target.protocol)
+        && isAliExpressHostname(page.hostname)
+        && isAliExpressHostname(target.hostname)
+        && target.pathname.replace(/\/+$/, '').toLowerCase() === '/aer-api/v1/pdp/web/freight/calculate';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function sanitizeNetworkUrl(input, pageUrl) {
+    try {
+      const url = new URL(networkInputUrl(input), pageUrl);
+      url.username = '';
+      url.password = '';
+      url.search = '';
+      url.hash = '';
+      return url.href;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function isSensitiveCaptureKey(key) {
+    const normalized = String(key).replace(/[^a-z0-9]/gi, '').toLowerCase();
+    return /(token|cookie|authorization|password|passwd|passcode|secret|credential|session|csrf|xsrf)/.test(normalized)
+      || /^(?:auth|apikey|accesskey|sign|signature|x5sec|sid|utdid|deviceid)$/.test(normalized)
+      || /(phone|mobile|email|address|street|postalcode|postcode|zipcode|recipient|receiver|consignee|contact)/.test(normalized)
+      || /^(?:zip|housenumber|apartment|line1|line2|district|latitude|longitude|lat|lng|firstname|lastname|fullname|username|login|userid|memberid|buyerid|customerid|taxid|passport|identity|ip|ipaddress|card|cardnumber|iban)$/.test(normalized)
+      || /(account|profile)/.test(normalized);
+  }
+
+  function redactSensitiveJson(value) {
+    const seen = new WeakSet();
+    function visit(current) {
+      if (!current || typeof current !== 'object') return current;
+      if (seen.has(current)) return '[REDACTED: circular]';
+      seen.add(current);
+      if (Array.isArray(current)) return current.map(visit);
+      return Object.fromEntries(Object.entries(current).map(([key, child]) => [
+        key,
+        isSensitiveCaptureKey(key) ? '[REDACTED]' : visit(child),
+      ]));
+    }
+    return visit(value);
+  }
+
+  function createShippingDebugCapture(sourceUrl, transport, request, response, pageUrl) {
+    return {
+      sourceUrl: sanitizeNetworkUrl(sourceUrl, pageUrl),
+      transport,
+      request: redactSensitiveJson(request),
+      response: redactSensitiveJson(response),
+    };
+  }
+
   function splitSkuPropIds(value) {
     if (Array.isArray(value)) return value.map(asString).filter(Boolean);
     return String(value || '').split(',').map((part) => part.trim()).filter(Boolean);
@@ -107,6 +176,89 @@
       formatted: asString(formatted) || [amount, currency].filter(Boolean).join(' '),
       raw: value,
     };
+  }
+
+  function optionalBoolean(value) {
+    return value === undefined || value === null ? null : Boolean(value);
+  }
+
+  function normalizeDelivery(request, response) {
+    const shippingRequest = request && typeof request === 'object' ? request : {};
+    const shippingResponse = response && typeof response === 'object' ? response : {};
+    const destination = shippingResponse.to && typeof shippingResponse.to === 'object' ? shippingResponse.to : {};
+    return {
+      productId: asString(firstDefined(shippingRequest.productIdV2, shippingRequest.productId)),
+      skuId: asString(shippingRequest.skuId),
+      destination: {
+        countryCode: asString(firstDefined(destination.country, destination.countryCode, shippingRequest.country)),
+        countryName: asString(destination.countryName),
+        regionCode: asString(firstDefined(destination.region, destination.regionCode, shippingRequest.provinceCode)),
+        regionName: asString(destination.regionName),
+        cityCode: asString(firstDefined(destination.city, destination.cityCode, shippingRequest.cityCode)),
+        cityName: asString(destination.cityName),
+      },
+      displayMultipleMethods: optionalBoolean(shippingResponse.displayMultipleMethods),
+      methods: (Array.isArray(shippingResponse.methods) ? shippingResponse.methods : []).map((method) => ({
+        groupName: asString(method?.groupName),
+        serviceName: asString(method?.serviceName),
+        service: asString(method?.service),
+        cost: normalizeMoney(method?.amount),
+        etaStartDate: asString(method?.etaStartDeliveryDate),
+        etaEndDate: asString(method?.etaEndDeliveryDate),
+        dateDisplay: asString(method?.dateDisplay),
+        dateFormat: asString(method?.dateFormat),
+        tracking: optionalBoolean(method?.tracking),
+        serviceGroupType: asString(method?.serviceGroupType),
+        passportRequired: optionalBoolean(method?.passportRequired),
+      })),
+    };
+  }
+
+  function shippingRequestContext(request = {}) {
+    return {
+      productId: asString(firstDefined(request.productIdV2, request.productId)),
+      skuId: asString(request.skuId),
+      country: asString(request.country),
+      provinceCode: asString(request.provinceCode),
+      cityCode: asString(request.cityCode),
+      tradeCurrency: asString(request.tradeCurrency),
+      count: asString(request.count),
+      buyerPrice: asString(request.buyerPrice),
+      minPrice: asString(request.minPrice),
+      maxPrice: asString(request.maxPrice),
+    };
+  }
+
+  function createShippingContextKey(request) {
+    return JSON.stringify(shippingRequestContext(request));
+  }
+
+  function createDeliveryCache() {
+    return { byContext: new Map(), latestContextBySku: new Map() };
+  }
+
+  function productSkuKey(productId, skuId) {
+    return JSON.stringify([asString(productId), asString(skuId)]);
+  }
+
+  function cacheDelivery(cache, request, delivery) {
+    if (!cache || !delivery?.productId || !delivery?.skuId) return null;
+    const contextKey = createShippingContextKey(request);
+    cache.byContext.set(contextKey, delivery);
+    cache.latestContextBySku.set(productSkuKey(delivery.productId, delivery.skuId), contextKey);
+    return contextKey;
+  }
+
+  function getCachedDelivery(cache, productId, skuId) {
+    if (!cache || !productId || !skuId) return null;
+    const contextKey = cache.latestContextBySku.get(productSkuKey(productId, skuId));
+    return contextKey ? cache.byContext.get(contextKey) || null : null;
+  }
+
+  function applyCachedDelivery(product, cache) {
+    if (!product) return product;
+    const delivery = getCachedDelivery(cache, product.itemId, product.selectedSkuId);
+    return product.delivery === delivery ? product : { ...product, delivery };
   }
 
   function humanVariantName(value) {
@@ -161,9 +313,9 @@
         price: {
           current: normalizeMoney(currentAmount),
           regular: normalizeMoney(sku.amount),
-          buyer: normalizeMoney(firstDefined(sku.buyerPrice, sku.buyerPriceForLogistic)),
           discount: firstDefined(sku.discount, null),
         },
+        buyerPriceForLogistic: asString(firstDefined(sku.buyerPriceForLogistic, sku.buyerPrice)),
         stock: firstDefined(sku.availQuantity, sku.quantity, sku.stock, null),
         available: sku.disabled === undefined ? null : !sku.disabled,
         freightExt: firstDefined(sku.freightExt, null),
@@ -291,12 +443,14 @@
     if (!requestedSkuId || requestedSkuId === product.selectedSkuId) return product;
     const selectedSku = product.skus.find((sku) => sku.skuId === requestedSkuId);
     if (!selectedSku) return product;
+    // Delivery is SKU-specific; runtime may reapply only the new SKU's cache entry.
     return {
       ...product,
       url: normalizeItemUrl(pageUrl).href,
       selectedSkuId: requestedSkuId,
       selectedSku,
       price: selectedSku.price,
+      delivery: null,
       _meta: {
         ...product._meta,
         selectedSkuResolved: true,
@@ -326,6 +480,40 @@
     const combinationLabel = combinationCount === 1 ? 'combination' : 'combinations';
     const groups = product.variantGroups.map((group) => `${group.name}: ${group.values.length}`).join(', ');
     return `Ready · ${combinationCount} ${combinationLabel} · ${groups || 'no variant groups'} · source: ${formatSourceLabel(product._meta.source)}`;
+  }
+
+  function formatDeliveryDestination(destination) {
+    if (!destination) return '—';
+    const places = [destination.cityName, destination.regionName, destination.countryName].filter(Boolean);
+    const location = places.join(', ');
+    if (location && destination.countryCode) return `${location} (${destination.countryCode})`;
+    return location || destination.countryCode || '—';
+  }
+
+  function formatDeliveryEta(method) {
+    const range = method.etaStartDate && method.etaEndDate
+      ? `${method.etaStartDate} — ${method.etaEndDate}`
+      : method.etaStartDate || method.etaEndDate || null;
+    const display = method.dateFormat || method.dateDisplay;
+    return range && display ? `${range} (${display})` : range || display || '—';
+  }
+
+  function formatDelivery(delivery) {
+    if (!delivery) return '—';
+    const lines = [`Destination: ${formatDeliveryDestination(delivery.destination)}`];
+    if (!delivery.methods.length) return [...lines, 'Methods: —'].join('\n');
+    delivery.methods.forEach((method, index) => {
+      if (index) lines.push('');
+      const suffix = delivery.methods.length > 1 ? ` ${index + 1}` : '';
+      const services = [...new Set([method.serviceName, method.service].filter(Boolean))];
+      lines.push(
+        `Method${suffix}: ${method.groupName || '—'}`,
+        `Service: ${services.join(' / ') || '—'}`,
+        `Price: ${formatMoney(method.cost)}`,
+        `Estimated delivery: ${formatDeliveryEta(method)}`,
+      );
+    });
+    return lines.join('\n');
   }
 
   function formatVariantGroups(product) {
@@ -386,6 +574,9 @@
       `Regular price: ${formatMoney(selected?.price.regular)}`,
       `Stock: ${selected?.stock ?? '—'}`,
       '',
+      'DELIVERY:',
+      formatDelivery(product.delivery),
+      '',
       'VARIANT GROUPS:',
       formatVariantGroups(product) || '—',
       '',
@@ -407,6 +598,12 @@
     toggleMarketUrl,
     splitSkuPropIds,
     normalizeMoney,
+    normalizeDelivery,
+    createShippingContextKey,
+    createDeliveryCache,
+    cacheDelivery,
+    getCachedDelivery,
+    applyCachedDelivery,
     normalizeVariantGroups,
     normalizeSkus,
     normalizeSizeGuide,
@@ -419,6 +616,10 @@
     formatSelections,
     formatSourceLabel,
     formatProductStatus,
+    formatDelivery,
+    isShippingCalculateUrl,
+    redactSensitiveJson,
+    createShippingDebugCapture,
   };
 
   if (typeof module === 'object' && module.exports) module.exports = AliHelperCore;
@@ -496,6 +697,66 @@
     }
   }
 
+  function parseJsonBody(body) {
+    if (typeof body !== 'string' || !body.trim()) return null;
+    try { return JSON.parse(body); } catch (_) { return null; }
+  }
+
+  async function readFetchRequestJson(input, init) {
+    if (init && Object.prototype.hasOwnProperty.call(init, 'body')) return parseJsonBody(init.body);
+    if (input?.clone && typeof input.clone === 'function') {
+      try { return parseJsonBody(await input.clone().text()); } catch (_) { return null; }
+    }
+    return null;
+  }
+
+  function installShippingCalculateInterceptor(pageWindow, onCapture) {
+    const flag = '__aliHelperShippingCalculateInterceptorV1__';
+    if (!pageWindow || pageWindow[flag]) return;
+    pageWindow[flag] = true;
+    const matches = (input) => isShippingCalculateUrl(input, location.href);
+    const accept = (sourceUrl, transport, request, response) => {
+      onCapture(createShippingDebugCapture(sourceUrl, transport, request, response, location.href));
+    };
+
+    if (typeof pageWindow.fetch === 'function') {
+      const originalFetch = pageWindow.fetch;
+      pageWindow.fetch = function aliHelperShippingFetch(...args) {
+        const matched = matches(args[0]);
+        const requestJson = matched ? readFetchRequestJson(args[0], args[1]) : null;
+        const result = originalFetch.apply(this, args);
+        if (matched) {
+          Promise.all([requestJson, result.then((response) => response.clone().json())])
+            .then(([request, response]) => accept(args[0], 'fetch', request, response))
+            .catch(() => {});
+        }
+        return result;
+      };
+    }
+
+    const XHR = pageWindow.XMLHttpRequest;
+    if (XHR?.prototype) {
+      const originalOpen = XHR.prototype.open;
+      const originalSend = XHR.prototype.send;
+      XHR.prototype.open = function aliHelperShippingOpen(method, url, ...rest) {
+        this.__aliHelperShippingCalculateUrl = matches(url) ? String(url) : null;
+        return originalOpen.call(this, method, url, ...rest);
+      };
+      XHR.prototype.send = function aliHelperShippingSend(...args) {
+        if (this.__aliHelperShippingCalculateUrl) {
+          const request = parseJsonBody(args[0]);
+          this.addEventListener('loadend', () => {
+            try {
+              const response = this.responseType === 'json' ? this.response : JSON.parse(this.responseText);
+              accept(this.__aliHelperShippingCalculateUrl, 'xhr', request, response);
+            } catch (_) { /* non-JSON/blocked response */ }
+          }, { once: true });
+        }
+        return originalSend.apply(this, args);
+      };
+    }
+  }
+
   function findInSsrScripts() {
     const preferred = ['#__AER_DATA__', '#__NEXT_DATA__'];
     const scripts = [...preferred.map((selector) => document.querySelector(selector)), ...document.querySelectorAll('script[type="application/json"]')].filter(Boolean);
@@ -542,6 +803,7 @@
         .status.error { color:#8a1f11; background:#fff0ed; }
         details { margin-top:9px; border-top:1px solid #eee; padding-top:8px; }
         summary { cursor:pointer; } label { display:flex; gap:7px; margin-top:8px; }
+        .diagnostic { width:100%; margin-top:9px; }
         .meta { color:#666; margin-top:8px; font-size:11px; }
       </style>
       <section class="panel">
@@ -558,6 +820,7 @@
           <details>
             <summary>Settings</summary>
             <label><input type="checkbox" data-setting="autoRedirectComToRu"> Auto redirect COM → RU</label>
+            <button class="diagnostic" data-action="shipping-debug" disabled>Copy shipping debug</button>
           </details>
           <div class="meta">Read/copy/navigation only · v${VERSION}</div>
         </div>
@@ -568,7 +831,9 @@
     const status = shadow.querySelector('.status');
     const productButtons = ['product', 'variants', 'chatgpt'].map((name) => shadow.querySelector(`[data-action="${name}"]`));
     const autoRedirect = shadow.querySelector('[data-setting="autoRedirectComToRu"]');
+    const shippingDebug = shadow.querySelector('[data-action="shipping-debug"]');
     autoRedirect.checked = runtime.settings.autoRedirectComToRu;
+    shippingDebug.disabled = !runtime.shippingCapture;
     panel.classList.toggle('collapsed', runtime.settings.panelCollapsed);
     shadow.querySelector('[data-action="toggle"]').textContent = runtime.settings.panelCollapsed ? '+' : '—';
 
@@ -597,6 +862,8 @@
         copyWithFeedback(exportVariants(runtime.product), 'Variants');
       } else if (action === 'chatgpt' && runtime.product) {
         copyWithFeedback(exportForChatGPT(runtime.product), 'Product');
+      } else if (action === 'shipping-debug' && runtime.shippingCapture) {
+        copyWithFeedback(JSON.stringify(runtime.shippingCapture, null, 2), 'Shipping debug');
       }
     });
     autoRedirect.addEventListener('change', () => {
@@ -608,6 +875,9 @@
       setProduct(product) {
         productButtons.forEach((button) => { button.disabled = false; });
         flash(formatProductStatus(product));
+      },
+      setShippingCapture(capture) {
+        shippingDebug.disabled = !capture;
       },
       setStatus: flash,
     };
@@ -621,12 +891,21 @@
       return;
     }
 
-    const runtime = { settings, product: null, itemId: getItemId(location.href), ui: null, lastUrl: location.href };
+    const runtime = {
+      settings,
+      product: null,
+      shippingCapture: null,
+      deliveryCache: createDeliveryCache(),
+      itemId: getItemId(location.href),
+      ui: null,
+      lastUrl: location.href,
+    };
     const acceptProductData = (data, meta) => {
       const dataItemId = asString(firstDefined(data.productId, data.itemId, data.id, runtime.itemId));
       if (dataItemId !== runtime.itemId) return;
       try {
         runtime.product = normalizeProduct(data, location.href, { title: document.title.replace(/\s*\|\s*AliExpress.*$/i, ''), source: meta.source });
+        runtime.product = applyCachedDelivery(runtime.product, runtime.deliveryCache);
         runtime.ui?.setProduct(runtime.product);
       } catch (error) {
         runtime.ui?.setStatus(`productData found but normalization failed: ${error.message}`, true);
@@ -635,6 +914,18 @@
 
     const pageWindow = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     installProductDataInterceptor(pageWindow, acceptProductData);
+    installShippingCalculateInterceptor(pageWindow, (capture) => {
+      runtime.shippingCapture = capture;
+      runtime.ui?.setShippingCapture(capture);
+      const delivery = normalizeDelivery(capture.request, capture.response);
+      cacheDelivery(runtime.deliveryCache, capture.request, delivery);
+      if (runtime.product
+        && delivery.productId === runtime.product.itemId
+        && delivery.skuId === runtime.product.selectedSkuId) {
+        runtime.product = applyCachedDelivery(runtime.product, runtime.deliveryCache);
+        runtime.ui?.setProduct(runtime.product);
+      }
+    });
 
     const mount = () => {
       if (!document.body || document.getElementById('ali-helper-host')) return;
@@ -656,7 +947,7 @@
         } else if (runtime.product) {
           const updatedProduct = updateSelectedSku(runtime.product, location.href);
           if (updatedProduct !== runtime.product) {
-            runtime.product = updatedProduct;
+            runtime.product = applyCachedDelivery(updatedProduct, runtime.deliveryCache);
             runtime.ui?.setProduct(runtime.product);
           }
         }

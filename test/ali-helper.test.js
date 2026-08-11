@@ -27,6 +27,187 @@ test('recognizes only AliExpress item pages', () => {
   assert.equal(core.isItemPage('https://example.com/item/1005008195850531.html'), false);
 });
 
+test('shipping matcher accepts only the known AliExpress freight/calculate endpoint', () => {
+  const pageUrl = 'https://aliexpress.ru/item/1005008195850531.html';
+
+  assert.equal(core.isShippingCalculateUrl('/aer-api/v1/pdp/web/freight/calculate', pageUrl), true);
+  assert.equal(core.isShippingCalculateUrl('https://api.aliexpress.com/aer-api/v1/pdp/web/freight/calculate?synthetic=1', pageUrl), true);
+  assert.equal(core.isShippingCalculateUrl('/aer-api/v1/pdp/web/freight/calculate/', pageUrl), true);
+  assert.equal(core.isShippingCalculateUrl('https://example.com/aer-api/v1/pdp/web/freight/calculate', pageUrl), false);
+  assert.equal(core.isShippingCalculateUrl('/other/calculate', pageUrl), false);
+  assert.equal(core.isShippingCalculateUrl('/aer-api/v1/pdp/web/freight/calculator', pageUrl), false);
+  assert.equal(core.isShippingCalculateUrl('/aer-api/v1/pdp/web/freight?calculate=1', pageUrl), false);
+  assert.equal(core.isShippingCalculateUrl('/aer-api/v1/pdp/web/freight/calculate', 'https://example.com/item/1'), false);
+});
+
+test('synthetic shipping debug capture redacts sensitive JSON without changing its shape', () => {
+  const syntheticRequest = {
+    skuId: 'synthetic-sku',
+    token: 'synthetic-token',
+    destination: {
+      countryCode: 'MD',
+      city: 'Chisinau',
+      postalCode: 'MD-0000',
+      recipientName: 'Synthetic Person',
+    },
+  };
+  const syntheticResponse = {
+    data: { serviceName: 'Synthetic delivery', accountId: 'synthetic-account' },
+    email: 'synthetic@example.com',
+  };
+
+  const capture = core.createShippingDebugCapture(
+    'https://synthetic-user:synthetic-pass@api.aliexpress.com/aer-api/v1/pdp/web/freight/calculate?token=synthetic-token#fragment',
+    'fetch',
+    syntheticRequest,
+    syntheticResponse,
+    'https://aliexpress.ru/item/1005008195850531.html',
+  );
+
+  assert.equal(capture.sourceUrl, 'https://api.aliexpress.com/aer-api/v1/pdp/web/freight/calculate');
+  assert.equal(capture.transport, 'fetch');
+  assert.equal(capture.request.skuId, 'synthetic-sku');
+  assert.equal(capture.request.token, '[REDACTED]');
+  assert.equal(capture.request.destination.countryCode, 'MD');
+  assert.equal(capture.request.destination.city, 'Chisinau');
+  assert.equal(capture.request.destination.postalCode, '[REDACTED]');
+  assert.equal(capture.request.destination.recipientName, '[REDACTED]');
+  assert.equal(capture.response.data.serviceName, 'Synthetic delivery');
+  assert.equal(capture.response.data.accountId, '[REDACTED]');
+  assert.equal(capture.response.email, '[REDACTED]');
+  assert.equal(syntheticRequest.token, 'synthetic-token');
+});
+
+test('captured freight/calculate fixture normalizes SKU, destination, method, cost, and ETA', () => {
+  const fixture = loadFixture('shipping-calculate-1005008195850531.json');
+  const delivery = core.normalizeDelivery(fixture.request, fixture.response);
+
+  assert.equal(fixture.sourceUrl, 'https://aliexpress.ru/aer-api/v1/pdp/web/freight/calculate');
+  assert.equal(fixture.transport, 'fetch');
+  assert.equal(delivery.productId, '1005008195850531');
+  assert.equal(delivery.skuId, '12000056550848689');
+  assert.deepEqual(delivery.destination, {
+    countryCode: 'MD',
+    countryName: 'Moldova',
+    regionCode: '924500010000000000',
+    regionName: 'Kishinev Region',
+    cityCode: '924500010001000000',
+    cityName: 'Kishinev',
+  });
+  assert.equal(delivery.displayMultipleMethods, false);
+  assert.equal(delivery.methods.length, 1);
+  assert.equal(delivery.methods[0].groupName, 'Post office');
+  assert.equal(delivery.methods[0].serviceName, 'CAINIAO_STANDARD');
+  assert.equal(delivery.methods[0].service, '');
+  assert.equal(delivery.methods[0].cost.value, '8.52');
+  assert.equal(delivery.methods[0].cost.currency, 'USD');
+  assert.equal(delivery.methods[0].cost.formatted, '$ 8.52');
+  assert.equal(delivery.methods[0].etaStartDate, '2026-08-22');
+  assert.equal(delivery.methods[0].etaEndDate, '2026-08-25');
+  assert.equal(delivery.methods[0].dateDisplay, '2026-08-25');
+  assert.equal(delivery.methods[0].dateFormat, '22–25 August');
+  assert.equal(delivery.methods[0].tracking, false);
+  assert.equal(delivery.methods[0].serviceGroupType, 'rupost_self_pickup_point');
+  assert.equal(delivery.methods[0].passportRequired, false);
+});
+
+test('captured delivery appears in ChatGPT export for its selected SKU', () => {
+  const productFixture = loadFixture('product-1005008195850531.json');
+  const shippingFixture = loadFixture('shipping-calculate-1005008195850531.json');
+  const product = core.normalizeProduct(
+    productFixture.data,
+    'https://aliexpress.ru/item/1005008195850531.html?sku_id=12000056550848689',
+  );
+  product.delivery = core.normalizeDelivery(shippingFixture.request, shippingFixture.response);
+
+  const exported = core.exportForChatGPT(product);
+  assert.match(exported, /DELIVERY:\nDestination: Kishinev, Kishinev Region, Moldova \(MD\)/);
+  assert.match(exported, /Method: Post office/);
+  assert.match(exported, /Service: CAINIAO_STANDARD/);
+  assert.match(exported, /Price: \$ 8\.52/);
+  assert.match(exported, /Estimated delivery: 2026-08-22 — 2026-08-25 \(22–25 August\)/);
+});
+
+test('synthetic delivery keeps multiple methods and a zero-cost method', () => {
+  const delivery = core.normalizeDelivery(
+    { productId: 'synthetic-product', skuId: 'synthetic-sku', country: 'MD' },
+    {
+      displayMultipleMethods: true,
+      methods: [
+        { groupName: 'Synthetic free', serviceName: 'SYNTHETIC_FREE', amount: { value: 0, currency: 'USD', formatted: '$ 0.00' } },
+        { groupName: 'Synthetic paid', serviceName: 'SYNTHETIC_PAID', amount: { value: 4, currency: 'USD', formatted: '$ 4.00' } },
+      ],
+    },
+  );
+
+  assert.equal(delivery.methods.length, 2);
+  assert.equal(delivery.methods[0].cost.value, '0');
+  assert.equal(delivery.methods[0].cost.formatted, '$ 0.00');
+  assert.match(core.formatDelivery(delivery), /Method 1: Synthetic free/);
+  assert.match(core.formatDelivery(delivery), /Method 2: Synthetic paid/);
+});
+
+test('synthetic partial shipping response remains a valid neutral delivery', () => {
+  const request = { productId: 'synthetic-product', skuId: 'synthetic-sku', country: 'MD' };
+  const delivery = core.normalizeDelivery(
+    request,
+    { to: { countryName: 'Synthetic country' } },
+  );
+
+  assert.equal(delivery.skuId, 'synthetic-sku');
+  assert.equal(delivery.destination.countryCode, 'MD');
+  assert.equal(delivery.destination.countryName, 'Synthetic country');
+  assert.deepEqual(delivery.methods, []);
+  assert.equal(delivery.displayMultipleMethods, null);
+  assert.match(core.formatDelivery(delivery), /Methods: —/);
+
+  const cache = core.createDeliveryCache();
+  const product = { itemId: 'synthetic-product', selectedSkuId: 'synthetic-sku', title: 'Synthetic product', delivery: null };
+  core.cacheDelivery(cache, request, delivery);
+  const updated = core.applyCachedDelivery(product, cache);
+  assert.equal(updated.title, 'Synthetic product');
+  assert.equal(updated.delivery, delivery);
+});
+
+test('shipping cache key distinguishes material request context', () => {
+  const base = {
+    productId: 1,
+    skuId: 'synthetic-sku',
+    country: 'MD',
+    provinceCode: null,
+    cityCode: null,
+    tradeCurrency: 'USD',
+    count: 1,
+    buyerPrice: '192',
+    minPrice: 1.92,
+    maxPrice: 1.92,
+  };
+
+  assert.equal(core.createShippingContextKey(base), core.createShippingContextKey({ ...base }));
+  assert.notEqual(core.createShippingContextKey(base), core.createShippingContextKey({ ...base, productId: 2 }));
+  assert.notEqual(core.createShippingContextKey(base), core.createShippingContextKey({ ...base, skuId: 'other-synthetic-sku' }));
+  assert.notEqual(core.createShippingContextKey(base), core.createShippingContextKey({ ...base, country: 'RO' }));
+  assert.notEqual(core.createShippingContextKey(base), core.createShippingContextKey({ ...base, provinceCode: 'synthetic-province' }));
+  assert.notEqual(core.createShippingContextKey(base), core.createShippingContextKey({ ...base, cityCode: 'synthetic-city' }));
+  assert.notEqual(core.createShippingContextKey(base), core.createShippingContextKey({ ...base, tradeCurrency: 'EUR' }));
+  assert.notEqual(core.createShippingContextKey(base), core.createShippingContextKey({ ...base, count: 2 }));
+  assert.notEqual(core.createShippingContextKey(base), core.createShippingContextKey({ ...base, buyerPrice: '250' }));
+  assert.notEqual(core.createShippingContextKey(base), core.createShippingContextKey({ ...base, maxPrice: 2.5 }));
+});
+
+test('synthetic shipping cache retains contexts and points each SKU to its latest delivery', () => {
+  const cache = core.createDeliveryCache();
+  const baseRequest = { productId: 'synthetic-product', skuId: 'synthetic-sku', country: 'MD', tradeCurrency: 'USD', count: 1 };
+  const firstDelivery = { productId: 'synthetic-product', skuId: 'synthetic-sku', marker: 'first' };
+  const latestDelivery = { productId: 'synthetic-product', skuId: 'synthetic-sku', marker: 'latest' };
+
+  core.cacheDelivery(cache, { ...baseRequest, buyerPrice: '100' }, firstDelivery);
+  core.cacheDelivery(cache, { ...baseRequest, buyerPrice: '200' }, latestDelivery);
+
+  assert.equal(cache.byContext.size, 2);
+  assert.equal(core.getCachedDelivery(cache, 'synthetic-product', 'synthetic-sku'), latestDelivery);
+});
+
 test('real single-dimension fixture has Bundle: 7 values and 7 priceList SKUs', () => {
   const fixture = loadFixture('product-1005008195850531.json');
   const product = core.normalizeProduct(fixture.data, 'https://aliexpress.ru/item/1005008195850531.html?sku_id=12000056550848689');
@@ -42,8 +223,19 @@ test('real single-dimension fixture has Bundle: 7 values and 7 priceList SKUs', 
   assert.deepEqual({ raw: remoteValue.rawName, display: remoteValue.name }, { raw: 'Bundle8', display: '433 Remote' });
   assert.equal(product.skus.length, fixture.data.skuInfo.priceList.length);
   assert.equal(product.skus.length, 7);
-  assert.deepEqual(product.skus.find((sku) => sku.skuId === '12000056550848683').skuPropIds, ['357383']);
-  assert.deepEqual(product.skus.find((sku) => sku.skuId === '12000056550848689').skuPropIds, ['357390']);
+  const sixSixtySku = product.skus.find((sku) => sku.skuId === '12000056550848683');
+  const oneNinetyTwoSku = product.skus.find((sku) => sku.skuId === '12000056550848689');
+  assert.deepEqual(sixSixtySku.skuPropIds, ['357383']);
+  assert.deepEqual(oneNinetyTwoSku.skuPropIds, ['357390']);
+  assert.match(sixSixtySku.price.current.formatted, /^\$\u00a06\.60$/);
+  assert.equal(sixSixtySku.buyerPriceForLogistic, '660');
+  assert.match(oneNinetyTwoSku.price.current.formatted, /^\$\u00a01\.92$/);
+  assert.equal(oneNinetyTwoSku.buyerPriceForLogistic, '192');
+  assert.equal(Object.hasOwn(sixSixtySku.price, 'buyer'), false);
+  assert.equal(Object.hasOwn(oneNinetyTwoSku.price, 'buyer'), false);
+  const exportedSku = JSON.parse(core.exportProduct(product)).selectedSku;
+  assert.equal(exportedSku.buyerPriceForLogistic, '192');
+  assert.equal(Object.hasOwn(exportedSku.price, 'buyer'), false);
   assert.equal(product.selectedSku.selections[0].name, '433 Remote');
 });
 
@@ -164,7 +356,7 @@ test('updateSelectedSku changes only selected state for a valid SPA sku_id', () 
   product.delivery = delivery;
   product.reviews = reviews;
   const originalSelected = product.skus.find((sku) => sku.skuId === '12000049151727540');
-  const originalBuyerPrice = originalSelected.price.buyer;
+  const originalBuyerPriceForLogistic = originalSelected.buyerPriceForLogistic;
   const originalDiscount = originalSelected.price.discount;
   const originalSkuAttr = originalSelected.rawSkuAttr;
 
@@ -180,13 +372,46 @@ test('updateSelectedSku changes only selected state for a valid SPA sku_id', () 
   assert.equal(updated.sizeGuide, product.sizeGuide);
   assert.equal(updated.description, description);
   assert.equal(updated.store, store);
-  assert.equal(updated.delivery, delivery);
+  assert.equal(updated.delivery, null);
   assert.equal(updated.reviews, reviews);
-  assert.equal(updated.skus.find((sku) => sku.skuId === '12000049151727540').price.buyer, originalBuyerPrice);
+  assert.equal(updated.skus.find((sku) => sku.skuId === '12000049151727540').buyerPriceForLogistic, originalBuyerPriceForLogistic);
+  assert.equal(Object.hasOwn(updated.skus.find((sku) => sku.skuId === '12000049151727540').price, 'buyer'), false);
   assert.equal(updated.skus.find((sku) => sku.skuId === '12000049151727540').price.discount, originalDiscount);
   assert.equal(updated.skus.find((sku) => sku.skuId === '12000049151727540').rawSkuAttr, originalSkuAttr);
   assert.match(core.exportForChatGPT(updated), /Selected variants: Color: Lining B Pink; Size: L/);
   assert.match(core.exportForChatGPT(updated), /Price: \$\u00a026\.08/);
+});
+
+test('SKU change clears stale delivery and restores cached delivery when returning', () => {
+  const productFixture = loadFixture('product-1005008195850531.json');
+  const shippingFixture = loadFixture('shipping-calculate-1005008195850531.json');
+  const cache = core.createDeliveryCache();
+  const deliveryA = core.normalizeDelivery(shippingFixture.request, shippingFixture.response);
+  core.cacheDelivery(cache, shippingFixture.request, deliveryA);
+
+  let product = core.normalizeProduct(
+    productFixture.data,
+    'https://aliexpress.ru/item/1005008195850531.html?sku_id=12000056550848689',
+  );
+  product = core.applyCachedDelivery(product, cache);
+  assert.equal(product.delivery, deliveryA);
+  assert.equal(core.applyCachedDelivery({ ...product, itemId: 'other-item', delivery: null }, cache).delivery, null);
+
+  product = core.updateSelectedSku(
+    product,
+    'https://aliexpress.ru/item/1005008195850531.html?sku_id=12000056550848683',
+  );
+  product = core.applyCachedDelivery(product, cache);
+  assert.equal(product.selectedSkuId, '12000056550848683');
+  assert.equal(product.delivery, null);
+
+  product = core.updateSelectedSku(
+    product,
+    'https://aliexpress.ru/item/1005008195850531.html?sku_id=12000056550848689',
+  );
+  product = core.applyCachedDelivery(product, cache);
+  assert.equal(product.selectedSkuId, '12000056550848689');
+  assert.equal(product.delivery, deliveryA);
 });
 
 test('updateSelectedSku keeps the last valid selection for unknown or absent sku_id', () => {

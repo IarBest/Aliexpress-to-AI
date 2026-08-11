@@ -1,0 +1,76 @@
+{
+  "sourceUrl": "https://aliexpress.ru/aer-api/v1/pdp/web/freight/calculate",
+  "transport": "fetch",
+  "request": {
+    "productId": 1005008195850531,
+    "productIdV2": "1005008195850531",
+    "sendGoodsCountry": "",
+    "country": "MD",
+    "provinceCode": null,
+    "cityCode": null,
+    "skuId": "12000056550848689",
+    "count": 1,
+    "maxPrice": 1.92,
+    "minPrice": 1.92,
+    "tradeCurrency": "USD",
+    "displayMultipleFreight": false,
+    "ext": {
+      "p0": "12000056550848689",
+      "p1": "1.92",
+      "p3": "USD",
+      "p5": "0",
+      "p7": "{\"scItemId\":\"1019653428498\"}",
+      "hideShipFrom": "false",
+      "preferWarehouse": "{\"type\":\"dropshipping\",\"code\":\"ae_marketplace\",\"scItemId\":1019653428498,\"preferSellableQuantity\":1000}"
+    },
+    "sourceId": "0",
+    "sourceType": "",
+    "buyerPrice": "192",
+    "freeDelivery": null,
+    "isLocalSeller": false,
+    "unitPriceInfo": {}
+  },
+  "response": {
+    "from": {
+      "countryName": "",
+      "countryCode": ""
+    },
+    "to": {
+      "country": "MD",
+      "city": "924500010001000000",
+      "region": "924500010000000000",
+      "countryName": "Moldova",
+      "cityName": "Kishinev",
+      "regionName": "Kishinev Region"
+    },
+    "displayMultipleMethods": false,
+    "methods": [
+      {
+        "service": "",
+        "groupName": "Post office",
+        "dateDisplay": "2026-08-25",
+        "dateEstimated": "",
+        "dateFormat": "22–25 August",
+        "amount": {
+          "value": 8.52,
+          "currency": "USD",
+          "formatted": "$ 8.52"
+        },
+        "discount": 0,
+        "tracking": false,
+        "isHba": false,
+        "commitDay": 75,
+        "serviceGroupType": "rupost_self_pickup_point",
+        "serviceName": "CAINIAO_STANDARD",
+        "displayType": "",
+        "deliveryBy": 0,
+        "passportRequired": false,
+        "etaStartDeliveryDate": "2026-08-22",
+        "etaEndDeliveryDate": "2026-08-25"
+      }
+    ],
+    "multipleFreightVersion": 0,
+    "noticeType": "",
+    "freeMethods": []
+  }
+}

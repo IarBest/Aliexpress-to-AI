@@ -197,20 +197,24 @@ Acceptance: порядок seller content восстанавливается, а
 
 ## P2 — Shipping for selected SKU
 
-- [ ] Зафиксировать минимизированный request/response fixture `calculate` для
+- [x] Зафиксировать минимизированный request/response fixture `calculate` для
       одного SKU без account-sensitive данных.
 - [ ] Построить SKU-specific payload из `productId`, selected `skuId`, buyer
       price, count, destination/currency и `freightExt` только при необходимости.
-- [ ] Не использовать `logisticAmount` как стоимость доставки.
-- [ ] Нормализовать method/group, `serviceName`, cost, currency, ETA/date range
+- [x] Не использовать `logisticAmount` как стоимость доставки.
+- [x] Нормализовать method/group, `serviceName`, cost, currency, ETA/date range
       и destination, если оно известно.
-- [ ] Связать shipping result с конкретным SKU ID в normalized model.
+- [x] Связать shipping result с конкретным SKU ID в normalized model.
 - [ ] По умолчанию запрашивать shipping только для selected SKU по явному
       действию или строго контролируемому current-SKU flow.
-- [ ] Кэшировать результат по SKU/request context в рамках page session.
-- [ ] Инвалидировать/переключать displayed shipping при смене selected SKU.
+- [x] Кэшировать результат по SKU/request context в рамках page session.
+- [x] Инвалидировать/переключать displayed shipping при смене selected SKU.
 - [ ] Показать partial/error state при unavailable/blocked `calculate` response.
-- [ ] Добавить tests для free, paid и нескольких shipping methods.
+- [x] Добавить tests для free, paid и нескольких shipping methods.
+
+Passive runtime binding, page-session cache и защита от stale delivery
+подтверждены вторым live Tampermonkey smoke test. Ali Helper по-прежнему не
+строит и не отправляет собственный `calculate` request.
 
 Acceptance: стоимость и ETA принадлежат конкретному SKU; массовых запросов и
 подмены shipping через `logisticAmount` нет.
