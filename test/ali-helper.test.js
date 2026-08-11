@@ -2,78 +2,17 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const core = require('../src/ali-helper.user.js');
 
-function money(value) {
-  return { value: String(value), currency: 'USD', formatted: `$${value}` };
+function loadFixture(name) {
+  const fixturePath = path.join(__dirname, 'fixtures', name);
+  return JSON.parse(fs.readFileSync(fixturePath, 'utf8'));
 }
 
-function makeSingleDimensionFixture() {
-  const values = Array.from({ length: 7 }, (_, index) => ({
-    id: String(100 + index),
-    name: `Internal ${index + 1}`,
-    displayName: ['433 Remote', 'Wifi', 'Zigbee', 'RF Relay', 'Kit A', 'Kit B', 'Module'][index],
-  }));
-  return {
-    productId: '1005008195850531',
-    title: 'ZIGBEE Smart Switch',
-    activeSkuId: '12000000000000001',
-    skuInfo: {
-      propertyList: [{ id: '14', name: 'Bundle', values }],
-      priceList: values.map((value, index) => ({
-        skuId: `1200000000000000${index + 1}`,
-        skuPropIds: value.id,
-        activityAmount: money(1.92 + index),
-        amount: money(3.2 + index),
-        availQuantity: 100 - index,
-      })),
-    },
-  };
-}
-
-function makeMultiDimensionFixture() {
-  const colors = [
-    ['337970', 'Clear', 'Lining B Navy Blue'], ['337971', 'Pink', 'Lining B Pink'],
-    ['337972', 'Green', 'Deep Green B'], ['337973', 'Red', 'Lining B Wine Red'],
-    ['337974', 'Taupe', 'Lining B Taupe'], ['337975', 'Blue', 'Cup A Blue'],
-    ['337976', 'White', 'Cup A White'], ['337977', 'Black', 'Cup A Black'],
-    ['337978', 'Yellow', 'Cup A Yellow'],
-  ].map(([id, name, displayName]) => ({ id, name, displayName }));
-  const sizes = ['XS', 'S', 'M', 'L', 'XL'].map((name, index) => ({ id: String(343559 + index), name, displayName: name }));
-  const priceList = [];
-  let sequence = 0;
-  for (const color of colors) {
-    for (const size of sizes) {
-      sequence += 1;
-      priceList.push({
-        skuId: String(12000049151727500n + BigInt(sequence)),
-        skuPropIds: `${color.id},${size.id}`,
-        activityAmount: money(24 + sequence / 10),
-        amount: money(40),
-        availQuantity: sequence,
-      });
-    }
-  }
-  priceList[3].skuId = '12000049151727540';
-  return {
-    productId: '1005009452926938',
-    title: 'Vintage Blue Corset Midi Sundress',
-    activeSkuId: priceList[0].skuId,
-    skuInfo: {
-      propertyList: [
-        { id: '14', name: 'Color', values: colors },
-        { id: '5', name: 'Size', values: sizes },
-      ],
-      priceList,
-      sizeData: {
-        tables: [{
-          unit: 'CM',
-          columns: ['Size', 'Bust', 'Length', 'Waist'],
-          rows: [['XS', 80, 97, 65], ['S', 84, 98, 69], ['M', 88, 99, 73], ['L', 92, 100, 77], ['XL', 100, 101, 81]],
-        }],
-      },
-    },
-  };
+function clone(value) {
+  return JSON.parse(JSON.stringify(value));
 }
 
 test('normalizes COM URL with URL API, keeps sku_id and unknown params', () => {
@@ -88,40 +27,166 @@ test('recognizes only AliExpress item pages', () => {
   assert.equal(core.isItemPage('https://example.com/item/1005008195850531.html'), false);
 });
 
-test('single dimension fixture has Bundle: 7 values and 7 real SKUs', () => {
-  const product = core.normalizeProduct(makeSingleDimensionFixture(), 'https://aliexpress.ru/item/1005008195850531.html?sku_id=12000000000000004');
+test('real single-dimension fixture has Bundle: 7 values and 7 priceList SKUs', () => {
+  const fixture = loadFixture('product-1005008195850531.json');
+  const product = core.normalizeProduct(fixture, 'https://aliexpress.ru/item/1005008195850531.html?sku_id=12000056550848689');
+
+  assert.equal(product.itemId, '1005008195850531');
   assert.equal(product.variantGroups.length, 1);
   assert.equal(product.variantGroups[0].name, 'Bundle');
   assert.equal(product.variantGroups[0].values.length, 7);
+  assert.deepEqual(product.variantGroups[0].values.map((value) => value.name), [
+    '433 Remote',
+    '1CH Zigbee 7-32V',
+    '1CH Zigbee 85-250V',
+    '2CH Zigbee 7-32V',
+    '2CH Zigbee 85-250V',
+    '4CH Zigbee 7-32V',
+    '4CH Zigbee 85-250V',
+  ]);
+  assert.equal(product.skus.length, fixture.skuInfo.priceList.length);
   assert.equal(product.skus.length, 7);
-  assert.equal(product.selectedSkuId, '12000000000000004');
-  assert.equal(product.selectedSku.selections[0].name, 'RF Relay');
+  assert.equal(product.selectedSku.selections[0].name, '433 Remote');
 });
 
-test('multi dimension fixture uses priceList, URL SKU and displayName', () => {
-  const fixture = makeMultiDimensionFixture();
+test('real multi-dimension fixture maps priceList SKU through displayName', () => {
+  const fixture = loadFixture('product-1005009452926938.json');
   const product = core.normalizeProduct(fixture, 'https://aliexpress.ru/item/1005009452926938.html?sku_id=12000049151727540');
+
   assert.deepEqual(product.variantGroups.map((group) => [group.name, group.values.length]), [['Color', 9], ['Size', 5]]);
+  assert.equal(product.skus.length, fixture.skuInfo.priceList.length);
   assert.equal(product.skus.length, 45);
   assert.equal(product.selectedSkuId, '12000049151727540');
+  assert.deepEqual(product.selectedSku.skuPropIds, ['337970', '343562']);
   assert.deepEqual(product.selectedSku.selections.map((selection) => selection.name), ['Lining B Navy Blue', 'L']);
   assert.equal(product.selectedSku.selections[0].rawName, 'Clear');
-  assert.equal(product.sizeGuide.tables[0].rows.length, 5);
   assert.equal(JSON.parse(core.exportProduct(product)).skus.length, 45);
-  assert.match(core.exportForChatGPT(product), /Lining B Navy Blue/);
-  assert.match(core.exportForChatGPT(product), /Size \| Bust \| Length \| Waist/);
 });
 
-test('does not invent missing Cartesian combinations', () => {
-  const fixture = makeMultiDimensionFixture();
+test('real byUnitTables sizeData preserves separate CM and IN tables', () => {
+  const fixture = loadFixture('product-1005009452926938.json');
+  const product = core.normalizeProduct(fixture, 'https://aliexpress.ru/item/1005009452926938.html?sku_id=12000049151727540');
+  const cm = product.sizeGuide.tables.find((table) => table.unit === 'CM');
+  const inches = product.sizeGuide.tables.find((table) => table.unit === 'IN');
+
+  assert.equal(product.sizeGuide.tables.length, 2);
+  assert.deepEqual(cm.columns, ['Size', 'Bust Size', 'Skirt Length', 'Waist Size']);
+  assert.deepEqual(cm.rows[3], ['L', '92', '100', '77']);
+  assert.deepEqual(inches.columns, ['Size', 'Bust Size', 'Skirt Length', 'Waist Size']);
+  assert.deepEqual(inches.rows[3], ['L', '36.22', '39.37', '30.31']);
+  assert.notDeepEqual(cm.rows, inches.rows);
+
+  const exported = core.exportForChatGPT(product);
+  assert.match(exported, /Table \(CM\)/);
+  assert.match(exported, /Table \(IN\)/);
+  assert.match(exported, /Size \| Bust Size \| Skirt Length \| Waist Size/);
+});
+
+test('sizeData generic table fallback remains supported', () => {
+  const sizeGuide = core.normalizeSizeGuide({
+    tables: [{ unit: 'MM', columns: ['Size', 'Length'], rows: [['A', 125]] }],
+  });
+
+  assert.equal(sizeGuide.tables.length, 1);
+  assert.equal(sizeGuide.tables[0].unit, 'MM');
+  assert.deepEqual(sizeGuide.tables[0].rows, [['A', '125']]);
+});
+
+test('sizeData preserves an arbitrary byUnitTables key', () => {
+  const sizeGuide = core.normalizeSizeGuide({
+    byCountryTables: {
+      default: {
+        byUnitTables: {
+          MM: { titles: ['Size', 'Length'], rows: [['A', 125]] },
+        },
+      },
+    },
+  });
+
+  assert.equal(sizeGuide.tables.length, 1);
+  assert.equal(sizeGuide.tables[0].unit, 'MM');
+  assert.deepEqual(sizeGuide.tables[0].rows, [['A', '125']]);
+});
+
+test('does not invent a missing Cartesian combination', () => {
+  const fixture = clone(loadFixture('product-1005009452926938.json'));
   fixture.skuInfo.priceList.splice(10, 1);
   const product = core.normalizeProduct(fixture, 'https://aliexpress.ru/item/1005009452926938.html');
+
+  assert.equal(fixture.skuInfo.priceList.length, 44);
   assert.equal(product.skus.length, 44);
 });
 
+test('initial normalization falls back to activeSkuId when URL has no sku_id', () => {
+  const fixture = loadFixture('product-1005009452926938.json');
+  const product = core.normalizeProduct(fixture, 'https://aliexpress.ru/item/1005009452926938.html');
+
+  assert.equal(product.selectedSkuId, fixture.activeSkuId);
+  assert.deepEqual(product.selectedSku.selections.map((selection) => selection.name), ['Lining B Navy Blue', 'XS']);
+});
+
+test('initial normalization falls back to activeSkuId when URL sku_id is unknown', () => {
+  const fixture = loadFixture('product-1005009452926938.json');
+  const product = core.normalizeProduct(fixture, 'https://aliexpress.ru/item/1005009452926938.html?sku_id=99999999999999999');
+
+  assert.equal(product.selectedSkuId, fixture.activeSkuId);
+  assert.equal(product.selectedSku.skuId, fixture.activeSkuId);
+});
+
+test('updateSelectedSku changes only selected state for a valid SPA sku_id', () => {
+  const fixture = loadFixture('product-1005009452926938.json');
+  const product = core.normalizeProduct(fixture, 'https://aliexpress.ru/item/1005009452926938.html?sku_id=12000049151727540');
+  const description = { sentinel: 'description' };
+  const store = { sentinel: 'store' };
+  const delivery = { sentinel: 'delivery' };
+  const reviews = [{ sentinel: 'reviews' }];
+  product.description = description;
+  product.store = store;
+  product.delivery = delivery;
+  product.reviews = reviews;
+  const originalSelected = product.skus.find((sku) => sku.skuId === '12000049151727540');
+  originalSelected.price.buyer = { sentinel: 'buyer-price' };
+  originalSelected.price.discount = 'sentinel-discount';
+  originalSelected.rawSkuAttr = { sentinel: 'raw-sku-attr' };
+
+  const updated = core.updateSelectedSku(product, 'https://aliexpress.ru/item/1005009452926938.html?sku_id=12000049151727545');
+
+  assert.notEqual(updated, product);
+  assert.equal(updated.selectedSkuId, '12000049151727545');
+  assert.deepEqual(updated.selectedSku.selections.map((selection) => selection.name), ['Lining B Pink', 'L']);
+  assert.equal(updated.price.current.value, '24.90');
+  assert.equal(updated.selectedSku.stock, 19);
+  assert.equal(updated.variantGroups, product.variantGroups);
+  assert.equal(updated.skus, product.skus);
+  assert.equal(updated.sizeGuide, product.sizeGuide);
+  assert.equal(updated.description, description);
+  assert.equal(updated.store, store);
+  assert.equal(updated.delivery, delivery);
+  assert.equal(updated.reviews, reviews);
+  assert.equal(updated.skus.find((sku) => sku.skuId === '12000049151727540').price.buyer.sentinel, 'buyer-price');
+  assert.equal(updated.skus.find((sku) => sku.skuId === '12000049151727540').price.discount, 'sentinel-discount');
+  assert.equal(updated.skus.find((sku) => sku.skuId === '12000049151727540').rawSkuAttr.sentinel, 'raw-sku-attr');
+  assert.match(core.exportForChatGPT(updated), /Selected variants: Color: Lining B Pink; Size: L/);
+  assert.match(core.exportForChatGPT(updated), /Price: 24\.90 USD/);
+});
+
+test('updateSelectedSku keeps the last valid selection for unknown or absent sku_id', () => {
+  const fixture = loadFixture('product-1005009452926938.json');
+  const product = core.normalizeProduct(fixture, 'https://aliexpress.ru/item/1005009452926938.html?sku_id=12000049151727540');
+
+  const unknown = core.updateSelectedSku(product, 'https://aliexpress.ru/item/1005009452926938.html?sku_id=99999999999999999');
+  const absent = core.updateSelectedSku(product, 'https://aliexpress.ru/item/1005009452926938.html');
+
+  assert.equal(unknown, product);
+  assert.equal(absent, product);
+  assert.equal(product.selectedSkuId, '12000049151727540');
+  assert.equal(product.selectedSku.skuId, '12000049151727540');
+});
+
 test('recursively finds nested productData without a hardcoded path', () => {
-  const fixture = makeSingleDimensionFixture();
+  const fixture = loadFixture('product-1005008195850531.json');
   const found = core.findProductDataCandidate({ widgets: [{ children: [{ props: { response: { data: fixture } } }] }] });
+
   assert.equal(found.data, fixture);
   assert.match(found.path, /widgets/);
 });

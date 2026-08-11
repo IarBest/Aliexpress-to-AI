@@ -30,14 +30,14 @@ P0 является обязательным gate перед P1–P7.
 Текущий `normalizeSizeGuide()` передаёт unit только из полей объекта и теряет
 единицы, когда `CM` и `IN` являются ключами `byUnitTables`.
 
-- [ ] Добавить минимизированный regression fixture с реальным shape
+- [x] Добавить минимизированный regression fixture с реальным shape
       `byCountryTables -> byUnitTables -> CM/IN`.
-- [ ] Научить parser распознавать unit из ключа `byUnitTables`, не требуя поля
+- [x] Научить parser распознавать unit из ключа `byUnitTables`, не требуя поля
       `unit` внутри таблицы.
-- [ ] Сохранить две различимые normalized tables: `CM` и `IN`.
-- [ ] Сохранить generic fallback для иных table-like shapes.
-- [ ] Проверить порядок columns/rows и отсутствие смешивания CM/IN.
-- [ ] Проверить ChatGPT export: обе таблицы имеют явные unit labels.
+- [x] Сохранить две различимые normalized tables: `CM` и `IN`.
+- [x] Сохранить generic fallback для иных table-like shapes.
+- [x] Проверить порядок columns/rows и отсутствие смешивания CM/IN.
+- [x] Проверить ChatGPT export: обе таблицы имеют явные unit labels.
 
 Acceptance: настоящий AliExpress shape даёт две таблицы с корректными units;
 существующие generic cases продолжают работать.
@@ -49,13 +49,13 @@ Acceptance: настоящий AliExpress shape даёт две таблицы �
 raw SKU fields, buyer price, discount и будущие store/description/delivery/review
 данные.
 
-- [ ] Добавить чистую операцию наподобие `updateSelectedSku(product, currentUrl)`.
-- [ ] При SPA-изменении только `sku_id` обновлять `selectedSkuId`, `selectedSku`,
+- [x] Добавить чистую операцию наподобие `updateSelectedSku(product, currentUrl)`.
+- [x] При SPA-изменении только `sku_id` обновлять `selectedSkuId`, `selectedSku`,
       selected price и stock без повторной нормализации всего товара.
-- [ ] Сохранять остальные ссылки/поля normalized model неизменными, включая raw
+- [x] Сохранять остальные ссылки/поля normalized model неизменными, включая raw
       SKU data, buyer price, discount, size guide и будущие разделы.
-- [ ] Добавить unit test перехода с одного существующего SKU на другой.
-- [ ] Добавить unit test неизвестного/отсутствующего `sku_id` и documented
+- [x] Добавить unit test перехода с одного существующего SKU на другой.
+- [x] Добавить unit test неизвестного/отсутствующего `sku_id` и documented
       fallback к `activeSkuId` только там, где это действительно уместно.
 - [ ] Проверить, что экспорт и status panel отражают новый selected SKU.
 
@@ -68,20 +68,20 @@ Acceptance: SPA URL change корректно меняет выбранную к
 обезличенные минимизированные fragments фактических `productData` responses без
 cookies, auth/account данных и нерелевантной аналитики.
 
-- [ ] Добавить Fixture A для item `1005008195850531` с настоящими именами полей
+- [x] Добавить Fixture A для item `1005008195850531` с настоящими именами полей
       и значений: `Bundle` — 7 values, `priceList` — 7 SKU.
-- [ ] Проверить Fixture A: каждая комбинация происходит из `priceList`, а не из
+- [x] Проверить Fixture A: каждая комбинация происходит из `priceList`, а не из
       Cartesian product.
-- [ ] Добавить Fixture B для item `1005009452926938`: `Color` — 9, `Size` — 5,
+- [x] Добавить Fixture B для item `1005009452926938`: `Color` — 9, `Size` — 5,
       `priceList` — 45 SKU.
-- [ ] Проверить Fixture B: SKU `12000049151727540` соответствует
+- [x] Проверить Fixture B: SKU `12000049151727540` соответствует
       `Lining B Navy Blue + L`.
-- [ ] Сохранить в Fixture B raw Color `name: "Clear"` и проверить human-facing
+- [x] Сохранить в Fixture B raw Color `name: "Clear"` и проверить human-facing
       `displayName: "Lining B Navy Blue"`.
-- [ ] Включить в Fixture B настоящий `sizeData` с CM и IN, не упрощая shape ради
+- [x] Включить в Fixture B настоящий `sizeData` с CM и IN, не упрощая shape ради
       текущего parser.
-- [ ] Удалить из fixtures персональные, auth и tracking данные.
-- [ ] Оставить fixtures читаемыми и достаточно маленькими для review.
+- [x] Удалить из fixtures персональные, auth и tracking данные.
+- [x] Оставить fixtures читаемыми и достаточно маленькими для review.
 
 Acceptance: реальные counts, ID relations, `displayName` preference и обе size
 tables проверяются без искусственно сгенерированных комбинаций.

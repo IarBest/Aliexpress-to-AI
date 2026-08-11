@@ -203,7 +203,15 @@
       seen.add(value);
       const nextUnit = firstDefined(value.unit, value.measurementUnit, unit);
       if (looksLikeTable(value)) tables.push(normalizeTable(value, nextUnit));
-      for (const child of Object.values(value)) walk(child, nextUnit, depth + 1);
+      for (const [key, child] of Object.entries(value)) {
+        if (key === 'byUnitTables' && child && typeof child === 'object' && !Array.isArray(child)) {
+          for (const [unitKey, unitTable] of Object.entries(child)) {
+            walk(unitTable, unitKey, depth + 2);
+          }
+        } else {
+          walk(child, nextUnit, depth + 1);
+        }
+      }
     }
     walk(sizeData, null, 0);
     return { tables, raw: sizeData };
@@ -238,8 +246,13 @@
     const itemId = getItemId(url) || asString(firstDefined(productData.productId, productData.itemId, productData.id));
     const variantGroups = normalizeVariantGroups(productData.skuInfo.propertyList);
     const skus = normalizeSkus(productData.skuInfo.priceList, variantGroups);
-    const selectedSkuId = asString(firstDefined(new URL(pageUrl).searchParams.get('sku_id'), productData.activeSkuId));
-    const selectedSku = skus.find((sku) => sku.skuId === selectedSkuId) || null;
+    const urlSkuId = asString(new URL(pageUrl).searchParams.get('sku_id'));
+    const activeSkuId = asString(productData.activeSkuId);
+    const requestedSkuId = asString(firstDefined(urlSkuId, activeSkuId));
+    const selectedSku = skus.find((sku) => sku.skuId === requestedSkuId)
+      || skus.find((sku) => sku.skuId === activeSkuId)
+      || null;
+    const selectedSkuId = selectedSku?.skuId || requestedSkuId;
     return {
       itemId,
       title: asString(firstDefined(productData.title, productData.name, productData.productInfo?.title, fallbacks.title)),
@@ -259,8 +272,34 @@
       reviews: [],
       _meta: {
         source: fallbacks.source || 'productData',
-        activeSkuId: asString(productData.activeSkuId),
+        activeSkuId,
         selectedSkuResolved: Boolean(selectedSku),
+      },
+    };
+  }
+
+  // Once a product is normalized, an absent or unknown URL sku_id keeps the
+  // last valid selection. activeSkuId is only an initial normalization fallback.
+  function updateSelectedSku(product, pageUrl) {
+    if (!product || !Array.isArray(product.skus)) return product;
+    let requestedSkuId;
+    try {
+      requestedSkuId = asString(new URL(pageUrl).searchParams.get('sku_id'));
+    } catch (_) {
+      return product;
+    }
+    if (!requestedSkuId || requestedSkuId === product.selectedSkuId) return product;
+    const selectedSku = product.skus.find((sku) => sku.skuId === requestedSkuId);
+    if (!selectedSku) return product;
+    return {
+      ...product,
+      url: normalizeItemUrl(pageUrl).href,
+      selectedSkuId: requestedSkuId,
+      selectedSku,
+      price: selectedSku.price,
+      _meta: {
+        ...product._meta,
+        selectedSkuResolved: true,
       },
     };
   }
@@ -358,6 +397,7 @@
     normalizeSizeGuide,
     findProductDataCandidate,
     normalizeProduct,
+    updateSelectedSku,
     exportProduct,
     exportVariants,
     exportForChatGPT,
@@ -598,19 +638,11 @@
           runtime.product = null;
           runtime.ui?.setStatus('Product changed; waiting for productData…');
         } else if (runtime.product) {
-          runtime.product = normalizeProduct({
-            ...runtime.product,
-            activeSkuId: runtime.product._meta.activeSkuId,
-            skuInfo: {
-              propertyList: runtime.product.variantGroups.map((group) => ({ ...group, values: group.values })),
-              priceList: runtime.product.skus.map((sku) => ({
-                skuId: sku.skuId, skuPropIds: sku.skuPropIds.join(','), activityAmount: sku.price.current?.raw,
-                amount: sku.price.regular?.raw, availQuantity: sku.stock, freightExt: sku.freightExt, skuAttr: sku.rawSkuAttr,
-              })),
-              sizeData: runtime.product.sizeGuide?.raw,
-            },
-          }, location.href, { title: runtime.product.title, source: runtime.product._meta.source });
-          runtime.ui?.setProduct(runtime.product);
+          const updatedProduct = updateSelectedSku(runtime.product, location.href);
+          if (updatedProduct !== runtime.product) {
+            runtime.product = updatedProduct;
+            runtime.ui?.setProduct(runtime.product);
+          }
         }
       }
       if (!runtime.product) {

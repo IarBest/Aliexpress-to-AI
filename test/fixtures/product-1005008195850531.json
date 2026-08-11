@@ -1,0 +1,37 @@
+{
+  "productId": "1005008195850531",
+  "name": "ZIGBEE Smart Switch AC DC7-32V 85-250V Dry Contact Module Inching Self-Locking Relay Home Automation Timer Works with Tuya Alexa",
+  "activeSkuId": "12000056550848689",
+  "skuInfo": {
+    "propertyList": [
+      {
+        "id": "205",
+        "name": "Bundle",
+        "values": [
+          { "id": "357383", "name": "433 Remote", "displayName": "433 Remote" },
+          { "id": "357384", "name": "1CH Zigbee 7-32V", "displayName": "1CH Zigbee 7-32V" },
+          { "id": "357385", "name": "1CH Zigbee 85-250V", "displayName": "1CH Zigbee 85-250V" },
+          { "id": "357386", "name": "2CH Zigbee 7-32V", "displayName": "2CH Zigbee 7-32V" },
+          { "id": "357387", "name": "2CH Zigbee 85-250V", "displayName": "2CH Zigbee 85-250V" },
+          { "id": "357388", "name": "4CH Zigbee 7-32V", "displayName": "4CH Zigbee 7-32V" },
+          { "id": "357390", "name": "4CH Zigbee 85-250V", "displayName": "4CH Zigbee 85-250V" }
+        ]
+      }
+    ],
+    "priceList": [
+      {
+        "skuId": "12000056550848689",
+        "skuPropIds": "357383",
+        "activityAmount": { "value": "1.92", "currency": "USD", "formatted": "$1.92" },
+        "amount": { "value": "3.20", "currency": "USD", "formatted": "$3.20" },
+        "availQuantity": 999
+      },
+      { "skuId": "12000056550848690", "skuPropIds": "357384", "activityAmount": { "value": "4.68", "currency": "USD" }, "amount": { "value": "7.80", "currency": "USD" }, "availQuantity": 184 },
+      { "skuId": "12000056550848691", "skuPropIds": "357385", "activityAmount": { "value": "5.10", "currency": "USD" }, "amount": { "value": "8.50", "currency": "USD" }, "availQuantity": 176 },
+      { "skuId": "12000056550848692", "skuPropIds": "357386", "activityAmount": { "value": "7.44", "currency": "USD" }, "amount": { "value": "12.40", "currency": "USD" }, "availQuantity": 93 },
+      { "skuId": "12000056550848693", "skuPropIds": "357387", "activityAmount": { "value": "7.92", "currency": "USD" }, "amount": { "value": "13.20", "currency": "USD" }, "availQuantity": 88 },
+      { "skuId": "12000056550848694", "skuPropIds": "357388", "activityAmount": { "value": "12.48", "currency": "USD" }, "amount": { "value": "20.80", "currency": "USD" }, "availQuantity": 51 },
+      { "skuId": "12000056550848695", "skuPropIds": "357390", "activityAmount": { "value": "13.20", "currency": "USD" }, "amount": { "value": "22.00", "currency": "USD" }, "availQuantity": 47 }
+    ]
+  }
+}
