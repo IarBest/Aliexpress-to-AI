@@ -47,6 +47,20 @@ test('real single-dimension fixture has Bundle: 7 values and 7 priceList SKUs', 
   assert.equal(product.selectedSku.selections[0].name, '433 Remote');
 });
 
+test('formats product status with real combinations and a human-facing source', () => {
+  const fixture = loadFixture('product-1005008195850531.json');
+  const product = core.normalizeProduct(
+    fixture.data,
+    'https://aliexpress.ru/item/1005008195850531.html',
+    { source: 'network:productData' },
+  );
+
+  assert.equal(core.formatProductStatus(product), 'Ready · 7 combinations · Bundle: 7 · source: API');
+  assert.equal(core.formatSourceLabel('ssr:__AER_DATA__'), 'SSR');
+  assert.equal(core.formatSourceLabel('react:__reactProps'), 'React');
+  assert.equal(core.formatSourceLabel('custom-source'), 'custom-source');
+});
+
 test('real multi-dimension fixture maps priceList SKU through displayName', () => {
   const fixture = loadFixture('product-1005009452926938.json');
   const product = core.normalizeProduct(fixture.data, 'https://aliexpress.ru/item/1005009452926938.html?sku_id=12000049151727540');

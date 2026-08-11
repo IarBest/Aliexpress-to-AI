@@ -104,8 +104,8 @@ interceptor и Tampermonkey storage. Перед важными release milestone
 - [x] Сделать fresh reload item page, не полагаясь на уже hydrated SPA state.
 - [x] Проверить, что interceptor ловит настоящий `productData`.
 - [x] Проверить переход панели `Waiting -> Ready` без ручных кликов по SKU.
-- [x] Для item `1005008195850531` увидеть `Bundle: 7`, 7 SKU и source
-      `network:productData`.
+- [x] Для item `1005008195850531` увидеть status
+      `Ready · 7 combinations · Bundle: 7 · source: API`.
 - [x] Проверить, что Copy variants содержит ровно 7 реальных комбинаций.
 - [x] Сменить SKU на странице и проверить в normalized model и Copy for ChatGPT:
       SKU `12000056550848689`, `Bundle: 433 Remote`, price `$1.92`, regular price

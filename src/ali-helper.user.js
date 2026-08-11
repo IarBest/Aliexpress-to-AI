@@ -313,6 +313,21 @@
     return sku?.selections?.map((selection) => `${selection.groupName}: ${selection.name}`).join('; ') || '—';
   }
 
+  function formatSourceLabel(source) {
+    const value = asString(source) || 'unknown';
+    if (/^(?:network:)?productData$/i.test(value)) return 'API';
+    if (/^ssr(?::|$)/i.test(value)) return 'SSR';
+    if (/^react(?::|$)/i.test(value)) return 'React';
+    return value;
+  }
+
+  function formatProductStatus(product) {
+    const combinationCount = product.skus.length;
+    const combinationLabel = combinationCount === 1 ? 'combination' : 'combinations';
+    const groups = product.variantGroups.map((group) => `${group.name}: ${group.values.length}`).join(', ');
+    return `Ready · ${combinationCount} ${combinationLabel} · ${groups || 'no variant groups'} · source: ${formatSourceLabel(product._meta.source)}`;
+  }
+
   function formatVariantGroups(product) {
     return product.variantGroups.map((group) => `${group.name}:\n${group.values.map((value) => `- ${value.name} [${value.id}]`).join('\n')}`).join('\n\n');
   }
@@ -402,6 +417,8 @@
     exportVariants,
     exportForChatGPT,
     formatSelections,
+    formatSourceLabel,
+    formatProductStatus,
   };
 
   if (typeof module === 'object' && module.exports) module.exports = AliHelperCore;
@@ -590,8 +607,7 @@
     return {
       setProduct(product) {
         productButtons.forEach((button) => { button.disabled = false; });
-        const groups = product.variantGroups.map((group) => `${group.name}: ${group.values.length}`).join(', ');
-        flash(`Ready · ${product.skus.length} SKU · ${groups || 'no variant groups'} · ${product._meta.source}`);
+        flash(formatProductStatus(product));
       },
       setStatus: flash,
     };
