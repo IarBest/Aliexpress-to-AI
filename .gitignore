@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+
+# Test output
+coverage/
+.nyc_output/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Local source snapshot; the tracked source remains under src/ and test/
+/src.zip
