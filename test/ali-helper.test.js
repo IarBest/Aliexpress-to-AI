@@ -15,8 +15,8 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-test('normalizes COM URL with URL API, keeps sku_id and unknown params', () => {
-  const input = 'https://www.aliexpress.com/item/1005008195850531.html?spm=a2g0o&utm_source=x&sku_id=123&mystery=keep#frag';
+test('normalizes COM URL, removes tracking and hash, and keeps sku_id and unknown params', () => {
+  const input = 'https://www.aliexpress.com/item/1005008195850531.html?spm=a2g0o&utm_source=x&af=739_607243&sku_id=123&mystery=keep#frag';
   const result = core.normalizeItemUrl(input, 'ru');
   assert.equal(result.href, 'https://aliexpress.ru/item/1005008195850531.html?sku_id=123&mystery=keep');
 });

@@ -28,7 +28,7 @@
   const TRACKING_PARAM_NAMES = new Set([
     'spm', 'scm', 'pvid', 'algo_exp_id', 'pdp_npi', 'gps-id', 'ws_ab_test',
     'aff_fcid', 'aff_fsk', 'aff_platform', 'aff_trace_key', 'aff_short_key',
-    'affiliate_id', 'affiliate_key', 'terminal_id', 'afsmartredirect',
+    'affiliate_id', 'affiliate_key', 'terminal_id', 'af', 'afsmartredirect',
     'srcsns', 'spreadtype', 'biztype', 'social_params', 'gatewayadapt',
   ]);
 
