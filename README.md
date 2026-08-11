@@ -1,0 +1,27 @@
+# Ali Helper
+
+Минимальный read-only Tampermonkey userscript для страниц товаров AliExpress. Текущая итерация очищает и переключает URL, перехватывает `productData`, строит единую модель вариантов/SKU и копирует данные в обычном или ChatGPT-friendly виде.
+
+## Установка
+
+1. Откройте `src/ali-helper.user.js` как raw-файл или создайте новый userscript в Tampermonkey.
+2. Вставьте содержимое файла целиком и сохраните.
+3. Откройте страницу вида `https://aliexpress.ru/item/ITEM_ID.html`.
+
+Скрипт не покупает, не добавляет в корзину, не отправляет сообщения и не изменяет аккаунт. Он только читает уже загружаемые страницей данные, копирует текст и выполняет явную навигацию RU/COM.
+
+## Архитектура первой итерации
+
+- `URL`: распознавание item page, сохранение `sku_id`, удаление известных tracking-параметров, RU/COM.
+- `Sources`: перехват `fetch`/XHR `productData` на `document-start`; затем SSR JSON и React props как fallback.
+- `Normalize`: единая модель `product`; комбинации берутся только из `priceList`, а значения связываются через `skuPropIds`.
+- `Export`: отдельные чистые форматтеры для вариантов и ChatGPT — без зависимости от DOM.
+- `UI`: изолированная floating panel в Shadow DOM; настройки хранятся через Tampermonkey storage.
+
+## Проверка
+
+```text
+npm test
+```
+
+Тесты покрывают URL normalization и две исследованные формы данных: `Bundle` 7×1 и `Color` 9 × `Size` 5 с 45 реальными SKU, включая разрешение выбранного SKU из URL и `sizeData`.

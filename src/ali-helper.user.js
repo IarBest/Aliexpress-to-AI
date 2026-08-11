@@ -1,0 +1,627 @@
+// ==UserScript==
+// @name         Ali Helper
+// @namespace    https://github.com/local/ali-helper
+// @version      0.1.0
+// @description  Read-only AliExpress URL cleaner and product/variant exporter
+// @match        https://aliexpress.ru/item/*
+// @match        https://www.aliexpress.com/item/*
+// @match        https://aliexpress.com/item/*
+// @run-at       document-start
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_setClipboard
+// @grant        unsafeWindow
+// ==/UserScript==
+
+/* global GM_getValue, GM_setValue, GM_setClipboard, unsafeWindow */
+
+(function factory(root) {
+  'use strict';
+
+  const VERSION = '0.1.0';
+  const SETTINGS_KEY = 'ali-helper:settings:v1';
+  const DEFAULT_SETTINGS = Object.freeze({
+    autoRedirectComToRu: true,
+    panelCollapsed: false,
+  });
+
+  const TRACKING_PARAM_NAMES = new Set([
+    'spm', 'scm', 'pvid', 'algo_exp_id', 'pdp_npi', 'gps-id', 'ws_ab_test',
+    'aff_fcid', 'aff_fsk', 'aff_platform', 'aff_trace_key', 'aff_short_key',
+    'affiliate_id', 'affiliate_key', 'terminal_id', 'afsmartredirect',
+    'srcsns', 'spreadtype', 'biztype', 'social_params', 'gatewayadapt',
+  ]);
+
+  function asString(value) {
+    return value === null || value === undefined ? null : String(value);
+  }
+
+  function firstDefined(...values) {
+    return values.find((value) => value !== undefined && value !== null && value !== '');
+  }
+
+  function isItemPage(input) {
+    try {
+      const url = input instanceof URL ? input : new URL(input);
+      return /(^|\.)aliexpress\.(ru|com)$/i.test(url.hostname)
+        && /^\/item\/\d+(?:\.html)?\/?$/i.test(url.pathname);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function getItemId(input) {
+    try {
+      const url = input instanceof URL ? input : new URL(input);
+      return url.pathname.match(/^\/item\/(\d+)(?:\.html)?\/?$/i)?.[1] || null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function isTrackingParam(name) {
+    const normalized = name.toLowerCase();
+    return normalized.startsWith('utm_') || TRACKING_PARAM_NAMES.has(normalized);
+  }
+
+  function normalizeItemUrl(input, targetMarket) {
+    const url = input instanceof URL ? new URL(input.href) : new URL(input);
+    const itemId = getItemId(url);
+    if (!itemId) throw new Error('URL is not an AliExpress item page');
+
+    const requestedMarket = targetMarket || (/\.ru$/i.test(url.hostname) ? 'ru' : 'com');
+    url.protocol = 'https:';
+    url.hostname = requestedMarket === 'ru' ? 'aliexpress.ru' : 'www.aliexpress.com';
+    url.port = '';
+    url.pathname = `/item/${itemId}.html`;
+    url.hash = '';
+
+    for (const name of Array.from(url.searchParams.keys())) {
+      if (isTrackingParam(name)) url.searchParams.delete(name);
+    }
+    return url;
+  }
+
+  function toggleMarketUrl(input) {
+    const url = input instanceof URL ? input : new URL(input);
+    return normalizeItemUrl(url, /\.ru$/i.test(url.hostname) ? 'com' : 'ru');
+  }
+
+  function splitSkuPropIds(value) {
+    if (Array.isArray(value)) return value.map(asString).filter(Boolean);
+    return String(value || '').split(',').map((part) => part.trim()).filter(Boolean);
+  }
+
+  function normalizeMoney(value) {
+    if (value === null || value === undefined || value === '') return null;
+    if (typeof value === 'number' || typeof value === 'string') {
+      return { value: String(value), currency: null, formatted: String(value), raw: value };
+    }
+    if (typeof value !== 'object') return null;
+    const amount = firstDefined(value.value, value.amount, value.price, value.minAmount, value.minPrice);
+    const currency = firstDefined(value.currency, value.currencyCode, value.tradeCurrency);
+    const formatted = firstDefined(value.formatted, value.display, value.text, value.formattedAmount);
+    return {
+      value: asString(amount),
+      currency: asString(currency),
+      formatted: asString(formatted) || [amount, currency].filter(Boolean).join(' '),
+      raw: value,
+    };
+  }
+
+  function humanVariantName(value) {
+    return asString(firstDefined(value?.displayName, value?.name, value?.valueName, value?.id)) || 'Unknown';
+  }
+
+  function normalizeVariantGroups(propertyList) {
+    return (Array.isArray(propertyList) ? propertyList : []).map((group, groupIndex) => ({
+      id: asString(firstDefined(group.id, group.propertyId, group.skuPropertyId, groupIndex)),
+      name: asString(firstDefined(group.displayName, group.name, group.propertyName, `Variant ${groupIndex + 1}`)),
+      rawName: asString(group.name),
+      values: (Array.isArray(group.values) ? group.values : []).map((value) => ({
+        id: asString(firstDefined(value.id, value.propertyValueId, value.valueId)),
+        name: humanVariantName(value),
+        rawName: asString(value.name),
+        displayName: asString(value.displayName),
+        imagePreviewUrl: asString(value.imagePreviewUrl),
+        imageMainUrl: asString(value.imageMainUrl),
+        colorValue: asString(value.colorValue),
+        disabled: Boolean(value.disabled),
+      })),
+    }));
+  }
+
+  function buildVariantValueIndex(groups) {
+    const index = new Map();
+    for (const group of groups) {
+      for (const value of group.values) index.set(value.id, { group, value });
+    }
+    return index;
+  }
+
+  function normalizeSkus(priceList, variantGroups) {
+    const valueIndex = buildVariantValueIndex(variantGroups);
+    return (Array.isArray(priceList) ? priceList : []).map((sku) => {
+      const skuPropIds = splitSkuPropIds(firstDefined(sku.skuPropIds, sku.skuPropertyIds, sku.propIds));
+      const selections = skuPropIds.map((valueId) => {
+        const match = valueIndex.get(valueId);
+        return match ? {
+          groupId: match.group.id,
+          groupName: match.group.name,
+          valueId,
+          name: match.value.name,
+          rawName: match.value.rawName,
+        } : { groupId: null, groupName: 'Unknown', valueId, name: valueId, rawName: null };
+      });
+      const currentAmount = firstDefined(sku.activityAmount, sku.saleAmount, sku.amount);
+      return {
+        skuId: asString(firstDefined(sku.skuId, sku.id)),
+        skuPropIds,
+        selections,
+        price: {
+          current: normalizeMoney(currentAmount),
+          regular: normalizeMoney(sku.amount),
+          buyer: normalizeMoney(firstDefined(sku.buyerPrice, sku.buyerPriceForLogistic)),
+          discount: firstDefined(sku.discount, null),
+        },
+        stock: firstDefined(sku.availQuantity, sku.quantity, sku.stock, null),
+        available: sku.disabled === undefined ? null : !sku.disabled,
+        freightExt: firstDefined(sku.freightExt, null),
+        logisticAmount: firstDefined(sku.logisticAmount, null),
+        rawSkuAttr: firstDefined(sku.skuAttr, null),
+      };
+    });
+  }
+
+  function looksLikeTable(value) {
+    if (!value || typeof value !== 'object') return false;
+    const columns = firstDefined(value.columns, value.headers, value.header, value.titles);
+    const rows = firstDefined(value.rows, value.data, value.values, value.body);
+    return Array.isArray(columns) && Array.isArray(rows);
+  }
+
+  function normalizeTable(table, fallbackUnit) {
+    const rawColumns = firstDefined(table.columns, table.headers, table.header, table.titles, []);
+    const rawRows = firstDefined(table.rows, table.data, table.values, table.body, []);
+    return {
+      unit: asString(firstDefined(table.unit, table.measurementUnit, fallbackUnit)),
+      columns: rawColumns.map((column) => asString(firstDefined(column?.name, column?.title, column?.label, column)) || ''),
+      rows: rawRows.map((row) => {
+        const cells = Array.isArray(row) ? row : firstDefined(row?.cells, row?.values, row?.data, Object.values(row || {}));
+        return (Array.isArray(cells) ? cells : [cells]).map((cell) => asString(firstDefined(cell?.value, cell?.text, cell)) || '');
+      }),
+      raw: table,
+    };
+  }
+
+  function normalizeSizeGuide(sizeData) {
+    if (!sizeData) return null;
+    const tables = [];
+    const seen = new WeakSet();
+    function walk(value, unit, depth) {
+      if (!value || typeof value !== 'object' || depth > 12 || seen.has(value)) return;
+      seen.add(value);
+      const nextUnit = firstDefined(value.unit, value.measurementUnit, unit);
+      if (looksLikeTable(value)) tables.push(normalizeTable(value, nextUnit));
+      for (const child of Object.values(value)) walk(child, nextUnit, depth + 1);
+    }
+    walk(sizeData, null, 0);
+    return { tables, raw: sizeData };
+  }
+
+  function findProductDataCandidate(rootValue, limits = {}) {
+    const maxDepth = limits.maxDepth || 30;
+    const maxVisited = limits.maxVisited || 30000;
+    const seen = new WeakSet();
+    const stack = [{ value: rootValue, depth: 0, path: '$' }];
+    let visited = 0;
+    while (stack.length && visited < maxVisited) {
+      const current = stack.pop();
+      const value = current.value;
+      if (!value || typeof value !== 'object' || seen.has(value) || current.depth > maxDepth) continue;
+      seen.add(value);
+      visited += 1;
+      const skuInfo = value.skuInfo;
+      if (skuInfo && Array.isArray(skuInfo.propertyList) && Array.isArray(skuInfo.priceList)) {
+        return { data: value, path: current.path };
+      }
+      for (const [key, child] of Object.entries(value)) {
+        if (child && typeof child === 'object') stack.push({ value: child, depth: current.depth + 1, path: `${current.path}.${key}` });
+      }
+    }
+    return null;
+  }
+
+  function normalizeProduct(productData, pageUrl, fallbacks = {}) {
+    if (!productData?.skuInfo) throw new Error('productData.skuInfo is missing');
+    const url = normalizeItemUrl(pageUrl);
+    const itemId = getItemId(url) || asString(firstDefined(productData.productId, productData.itemId, productData.id));
+    const variantGroups = normalizeVariantGroups(productData.skuInfo.propertyList);
+    const skus = normalizeSkus(productData.skuInfo.priceList, variantGroups);
+    const selectedSkuId = asString(firstDefined(new URL(pageUrl).searchParams.get('sku_id'), productData.activeSkuId));
+    const selectedSku = skus.find((sku) => sku.skuId === selectedSkuId) || null;
+    return {
+      itemId,
+      title: asString(firstDefined(productData.title, productData.name, productData.productInfo?.title, fallbacks.title)),
+      url: url.href,
+      selectedSkuId,
+      gallery: [],
+      price: selectedSku?.price || null,
+      ratingSummary: null,
+      variantGroups,
+      skus,
+      selectedSku,
+      sizeGuide: normalizeSizeGuide(productData.skuInfo.sizeData),
+      characteristics: [],
+      description: null,
+      delivery: null,
+      store: null,
+      reviews: [],
+      _meta: {
+        source: fallbacks.source || 'productData',
+        activeSkuId: asString(productData.activeSkuId),
+        selectedSkuResolved: Boolean(selectedSku),
+      },
+    };
+  }
+
+  function formatMoney(money) {
+    if (!money) return '—';
+    return money.formatted || [money.value, money.currency].filter(Boolean).join(' ') || '—';
+  }
+
+  function formatSelections(sku) {
+    return sku?.selections?.map((selection) => `${selection.groupName}: ${selection.name}`).join('; ') || '—';
+  }
+
+  function formatVariantGroups(product) {
+    return product.variantGroups.map((group) => `${group.name}:\n${group.values.map((value) => `- ${value.name} [${value.id}]`).join('\n')}`).join('\n\n');
+  }
+
+  function formatSizeGuide(sizeGuide) {
+    if (!sizeGuide) return '—';
+    if (!sizeGuide.tables.length) return '[sizeData captured; unknown table shape]';
+    return sizeGuide.tables.map((table) => {
+      const unit = table.unit ? ` (${table.unit})` : '';
+      return [`Table${unit}`, table.columns.join(' | '), ...table.rows.map((row) => row.join(' | '))].join('\n');
+    }).join('\n\n');
+  }
+
+  function exportVariants(product) {
+    const combinations = product.skus.map((sku) => [
+      `SKU ${sku.skuId}`,
+      formatSelections(sku),
+      `Price: ${formatMoney(sku.price.current)}`,
+      `Regular: ${formatMoney(sku.price.regular)}`,
+      `Stock: ${sku.stock ?? '—'}`,
+    ].join(' | '));
+    return [
+      'ALIEXPRESS VARIANTS',
+      '',
+      `Title: ${product.title || '—'}`,
+      `URL: ${product.url}`,
+      `Item ID: ${product.itemId}`,
+      '',
+      'VARIANT GROUPS:',
+      formatVariantGroups(product) || '—',
+      '',
+      `SKU COMBINATIONS (${product.skus.length}):`,
+      combinations.join('\n') || '—',
+    ].join('\n');
+  }
+
+  function exportProduct(product) {
+    return JSON.stringify(product, null, 2);
+  }
+
+  function exportForChatGPT(product) {
+    const selected = product.selectedSku;
+    const prices = product.skus.map((sku) => sku.price.current?.value).filter(Boolean);
+    const priceSummary = selected ? formatMoney(selected.price.current) : [...new Set(prices)].slice(0, 5).join(' – ') || '—';
+    return [
+      'ALIEXPRESS PRODUCT',
+      '',
+      `Title: ${product.title || '—'}`,
+      `URL: ${product.url}`,
+      `Item ID: ${product.itemId}`,
+      '',
+      `Selected SKU: ${product.selectedSkuId || '—'}${selected ? '' : ' (not resolved)'}`,
+      `Selected variants: ${formatSelections(selected)}`,
+      '',
+      `Price: ${priceSummary}`,
+      `Regular price: ${formatMoney(selected?.price.regular)}`,
+      `Stock: ${selected?.stock ?? '—'}`,
+      '',
+      'VARIANT GROUPS:',
+      formatVariantGroups(product) || '—',
+      '',
+      'SKU COMBINATIONS:',
+      `${product.skus.length} real combinations from priceList (full list is available via Copy variants).`,
+      '',
+      'SIZE GUIDE:',
+      formatSizeGuide(product.sizeGuide),
+    ].join('\n');
+  }
+
+  const AliHelperCore = {
+    VERSION,
+    DEFAULT_SETTINGS,
+    isItemPage,
+    getItemId,
+    isTrackingParam,
+    normalizeItemUrl,
+    toggleMarketUrl,
+    splitSkuPropIds,
+    normalizeMoney,
+    normalizeVariantGroups,
+    normalizeSkus,
+    normalizeSizeGuide,
+    findProductDataCandidate,
+    normalizeProduct,
+    exportProduct,
+    exportVariants,
+    exportForChatGPT,
+    formatSelections,
+  };
+
+  if (typeof module === 'object' && module.exports) module.exports = AliHelperCore;
+  if (root) root.AliHelperCore = AliHelperCore;
+
+  if (typeof window === 'undefined' || typeof document === 'undefined') return;
+
+  function loadSettings() {
+    try {
+      return { ...DEFAULT_SETTINGS, ...(GM_getValue(SETTINGS_KEY, {}) || {}) };
+    } catch (_) {
+      return { ...DEFAULT_SETTINGS };
+    }
+  }
+
+  function saveSettings(settings) {
+    try { GM_setValue(SETTINGS_KEY, settings); } catch (_) { /* storage is optional */ }
+  }
+
+  function copyText(text) {
+    if (typeof GM_setClipboard === 'function') {
+      GM_setClipboard(text, 'text');
+      return Promise.resolve();
+    }
+    return navigator.clipboard.writeText(text);
+  }
+
+  function installProductDataInterceptor(pageWindow, onData) {
+    const flag = '__aliHelperProductDataInterceptorV1__';
+    if (!pageWindow || pageWindow[flag]) return;
+    pageWindow[flag] = true;
+    const matches = (input) => {
+      try {
+        const value = typeof input === 'string' ? input : input?.url;
+        return /\/productData(?:[/?]|$)/i.test(new URL(value, location.href).pathname);
+      } catch (_) { return false; }
+    };
+    const accept = (payload, sourceUrl) => {
+      const found = findProductDataCandidate(payload);
+      if (found) onData(found.data, { source: 'network:productData', sourceUrl, path: found.path });
+    };
+
+    if (typeof pageWindow.fetch === 'function') {
+      const originalFetch = pageWindow.fetch;
+      pageWindow.fetch = function aliHelperFetch(...args) {
+        const result = originalFetch.apply(this, args);
+        if (matches(args[0])) {
+          result.then((response) => response.clone().json())
+            .then((json) => accept(json, typeof args[0] === 'string' ? args[0] : args[0]?.url))
+            .catch(() => {});
+        }
+        return result;
+      };
+    }
+
+    const XHR = pageWindow.XMLHttpRequest;
+    if (XHR?.prototype) {
+      const originalOpen = XHR.prototype.open;
+      const originalSend = XHR.prototype.send;
+      XHR.prototype.open = function aliHelperOpen(method, url, ...rest) {
+        this.__aliHelperProductDataUrl = matches(url) ? String(url) : null;
+        return originalOpen.call(this, method, url, ...rest);
+      };
+      XHR.prototype.send = function aliHelperSend(...args) {
+        if (this.__aliHelperProductDataUrl) {
+          this.addEventListener('loadend', () => {
+            try {
+              const json = this.responseType === 'json' ? this.response : JSON.parse(this.responseText);
+              accept(json, this.__aliHelperProductDataUrl);
+            } catch (_) { /* non-JSON/blocked response */ }
+          }, { once: true });
+        }
+        return originalSend.apply(this, args);
+      };
+    }
+  }
+
+  function findInSsrScripts() {
+    const preferred = ['#__AER_DATA__', '#__NEXT_DATA__'];
+    const scripts = [...preferred.map((selector) => document.querySelector(selector)), ...document.querySelectorAll('script[type="application/json"]')].filter(Boolean);
+    for (const script of new Set(scripts)) {
+      try {
+        const found = findProductDataCandidate(JSON.parse(script.textContent || ''));
+        if (found) return { ...found, source: `ssr:${script.id || 'json-script'}` };
+      } catch (_) { /* malformed/unrelated JSON */ }
+    }
+    return null;
+  }
+
+  function findInReact() {
+    const roots = document.querySelectorAll('[class*="HazeProduct"], [class*="SnowProduct"], [class*="SnowSku"], #root, #__next');
+    for (const element of roots) {
+      for (const key of Object.keys(element)) {
+        if (!/^__(reactProps|reactFiber)\$/.test(key)) continue;
+        const found = findProductDataCandidate(element[key], { maxDepth: 40, maxVisited: 20000 });
+        if (found) return { ...found, source: `react:${key.split('$')[0]}` };
+      }
+    }
+    return null;
+  }
+
+  function createPanel(runtime) {
+    const host = document.createElement('div');
+    host.id = 'ali-helper-host';
+    host.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:2147483000;';
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = `
+      <style>
+        :host { all: initial; }
+        .panel { width: 320px; max-width: calc(100vw - 24px); color: #191919; background: #fff; border: 1px solid #ddd; border-radius: 12px; box-shadow: 0 8px 28px rgba(0,0,0,.22); font: 13px/1.35 Arial,sans-serif; overflow: hidden; }
+        header { display:flex; align-items:center; gap:8px; padding:10px 12px; background:#ffefe8; }
+        strong { flex:1; font-size:14px; }
+        .body { padding:10px; max-height:min(65vh,560px); overflow:auto; }
+        .panel.collapsed .body { display:none; }
+        button { border:1px solid #d7d7d7; border-radius:8px; background:#fff; color:#222; padding:7px 9px; cursor:pointer; font:inherit; }
+        button:hover { background:#f7f7f7; } button:disabled { opacity:.45; cursor:not-allowed; }
+        .icon { padding:4px 8px; }
+        .grid { display:grid; grid-template-columns:1fr 1fr; gap:7px; }
+        .wide { grid-column:1/-1; }
+        .status { margin:0 0 9px; padding:7px 8px; border-radius:7px; background:#f5f5f5; overflow-wrap:anywhere; }
+        .status.error { color:#8a1f11; background:#fff0ed; }
+        details { margin-top:9px; border-top:1px solid #eee; padding-top:8px; }
+        summary { cursor:pointer; } label { display:flex; gap:7px; margin-top:8px; }
+        .meta { color:#666; margin-top:8px; font-size:11px; }
+      </style>
+      <section class="panel">
+        <header><strong>Ali Helper</strong><button class="icon" data-action="toggle" title="Collapse/expand">—</button></header>
+        <div class="body">
+          <div class="status">Waiting for productData…</div>
+          <div class="grid">
+            <button data-action="clean-url">Copy clean URL</button>
+            <button data-action="market">RU / COM</button>
+            <button data-action="product" disabled>Copy product</button>
+            <button data-action="variants" disabled>Copy variants</button>
+            <button class="wide" data-action="chatgpt" disabled>Copy for ChatGPT</button>
+          </div>
+          <details>
+            <summary>Settings</summary>
+            <label><input type="checkbox" data-setting="autoRedirectComToRu"> Auto redirect COM → RU</label>
+          </details>
+          <div class="meta">Read/copy/navigation only · v${VERSION}</div>
+        </div>
+      </section>`;
+    (document.body || document.documentElement).appendChild(host);
+
+    const panel = shadow.querySelector('.panel');
+    const status = shadow.querySelector('.status');
+    const productButtons = ['product', 'variants', 'chatgpt'].map((name) => shadow.querySelector(`[data-action="${name}"]`));
+    const autoRedirect = shadow.querySelector('[data-setting="autoRedirectComToRu"]');
+    autoRedirect.checked = runtime.settings.autoRedirectComToRu;
+    panel.classList.toggle('collapsed', runtime.settings.panelCollapsed);
+    shadow.querySelector('[data-action="toggle"]').textContent = runtime.settings.panelCollapsed ? '+' : '—';
+
+    function flash(message, isError = false) {
+      status.textContent = message;
+      status.classList.toggle('error', isError);
+    }
+    async function copyWithFeedback(text, label) {
+      try { await copyText(text); flash(`${label} copied.`); } catch (error) { flash(`Copy failed: ${error.message}`, true); }
+    }
+    shadow.addEventListener('click', (event) => {
+      const action = event.target?.dataset?.action;
+      if (!action) return;
+      if (action === 'toggle') {
+        runtime.settings.panelCollapsed = !runtime.settings.panelCollapsed;
+        panel.classList.toggle('collapsed', runtime.settings.panelCollapsed);
+        event.target.textContent = runtime.settings.panelCollapsed ? '+' : '—';
+        saveSettings(runtime.settings);
+      } else if (action === 'clean-url') {
+        copyWithFeedback(normalizeItemUrl(location.href).href, 'Clean URL');
+      } else if (action === 'market') {
+        location.assign(toggleMarketUrl(location.href).href);
+      } else if (action === 'product' && runtime.product) {
+        copyWithFeedback(exportProduct(runtime.product), 'Product JSON');
+      } else if (action === 'variants' && runtime.product) {
+        copyWithFeedback(exportVariants(runtime.product), 'Variants');
+      } else if (action === 'chatgpt' && runtime.product) {
+        copyWithFeedback(exportForChatGPT(runtime.product), 'Product');
+      }
+    });
+    autoRedirect.addEventListener('change', () => {
+      runtime.settings.autoRedirectComToRu = autoRedirect.checked;
+      saveSettings(runtime.settings);
+      flash('Settings saved.');
+    });
+    return {
+      setProduct(product) {
+        productButtons.forEach((button) => { button.disabled = false; });
+        const groups = product.variantGroups.map((group) => `${group.name}: ${group.values.length}`).join(', ');
+        flash(`Ready · ${product.skus.length} SKU · ${groups || 'no variant groups'} · ${product._meta.source}`);
+      },
+      setStatus: flash,
+    };
+  }
+
+  function start() {
+    if (!isItemPage(location.href)) return;
+    const settings = loadSettings();
+    if (settings.autoRedirectComToRu && /(^|\.)aliexpress\.com$/i.test(location.hostname)) {
+      location.replace(normalizeItemUrl(location.href, 'ru').href);
+      return;
+    }
+
+    const runtime = { settings, product: null, itemId: getItemId(location.href), ui: null, lastUrl: location.href };
+    const acceptProductData = (data, meta) => {
+      const dataItemId = asString(firstDefined(data.productId, data.itemId, data.id, runtime.itemId));
+      if (dataItemId !== runtime.itemId) return;
+      try {
+        runtime.product = normalizeProduct(data, location.href, { title: document.title.replace(/\s*\|\s*AliExpress.*$/i, ''), source: meta.source });
+        runtime.ui?.setProduct(runtime.product);
+      } catch (error) {
+        runtime.ui?.setStatus(`productData found but normalization failed: ${error.message}`, true);
+      }
+    };
+
+    const pageWindow = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+    installProductDataInterceptor(pageWindow, acceptProductData);
+
+    const mount = () => {
+      if (!document.body || document.getElementById('ali-helper-host')) return;
+      runtime.ui = createPanel(runtime);
+      if (runtime.product) runtime.ui.setProduct(runtime.product);
+    };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount, { once: true });
+    else mount();
+
+    let attempts = 0;
+    const scanFallbacks = () => {
+      if (location.href !== runtime.lastUrl) {
+        runtime.lastUrl = location.href;
+        const nextItemId = getItemId(location.href);
+        if (nextItemId !== runtime.itemId) {
+          runtime.itemId = nextItemId;
+          runtime.product = null;
+          runtime.ui?.setStatus('Product changed; waiting for productData…');
+        } else if (runtime.product) {
+          runtime.product = normalizeProduct({
+            ...runtime.product,
+            activeSkuId: runtime.product._meta.activeSkuId,
+            skuInfo: {
+              propertyList: runtime.product.variantGroups.map((group) => ({ ...group, values: group.values })),
+              priceList: runtime.product.skus.map((sku) => ({
+                skuId: sku.skuId, skuPropIds: sku.skuPropIds.join(','), activityAmount: sku.price.current?.raw,
+                amount: sku.price.regular?.raw, availQuantity: sku.stock, freightExt: sku.freightExt, skuAttr: sku.rawSkuAttr,
+              })),
+              sizeData: runtime.product.sizeGuide?.raw,
+            },
+          }, location.href, { title: runtime.product.title, source: runtime.product._meta.source });
+          runtime.ui?.setProduct(runtime.product);
+        }
+      }
+      if (!runtime.product) {
+        const found = findInSsrScripts() || findInReact();
+        if (found) acceptProductData(found.data, found);
+        else if (++attempts === 8) runtime.ui?.setStatus('productData not found yet. Reload the page with Ali Helper enabled; SSR contains no SKU data.', true);
+      }
+    };
+    setInterval(scanFallbacks, 1000);
+    scanFallbacks();
+  }
+
+  start();
+})(typeof globalThis !== 'undefined' ? globalThis : this);
