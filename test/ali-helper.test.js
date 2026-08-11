@@ -56,6 +56,16 @@ function syntheticCharacteristicsDom(rows, outsideRows = []) {
   };
 }
 
+test('userscript metadata and runtime versions stay in sync', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'ali-helper.user.js'), 'utf8');
+  const metadataVersion = source.match(/^\/\/ @version\s+(\S+)\s*$/m);
+  const runtimeVersion = source.match(/^\s*const VERSION = ['"]([^'"]+)['"];\s*$/m);
+
+  assert.ok(metadataVersion, 'userscript metadata version is missing');
+  assert.ok(runtimeVersion, 'runtime VERSION constant is missing');
+  assert.equal(runtimeVersion[1], metadataVersion[1]);
+});
+
 test('normalizes COM URL, removes tracking and hash, and keeps sku_id and unknown params', () => {
   const input = 'https://www.aliexpress.com/item/1005008195850531.html?spm=a2g0o&utm_source=x&af=739_607243&sku_id=123&mystery=keep#frag';
   const result = core.normalizeItemUrl(input, 'ru');

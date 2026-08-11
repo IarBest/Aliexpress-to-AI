@@ -18,7 +18,7 @@
 (function factory(root) {
   'use strict';
 
-  const VERSION = '0.1.0';
+  const VERSION = '0.1.4';
   const SETTINGS_KEY = 'ali-helper:settings:v1';
   const CHARACTERISTICS_BOUNDARY_SELECTOR = '[class*="HazeProductCharacteristics__groupsContainerForSku"]';
   const CHARACTERISTICS_ITEM_SELECTOR = '[class*="HazeProductCharacteristics__itemForSku"]';
