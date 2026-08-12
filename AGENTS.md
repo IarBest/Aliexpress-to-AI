@@ -176,7 +176,8 @@ These facts are architecture constraints, not current implementation work.
 
 In the current maintainer Windows environment, Tampermonkey is configured to
 pick up saved changes to `src/ali-helper.user.js` directly from the local
-working tree.
+working tree. Treat that link as expected, not guaranteed: before accepting a
+live smoke result, verify that the page is executing the current dirty version.
 
 For local/dirty live smoke tests:
 
@@ -186,8 +187,9 @@ For local/dirty live smoke tests:
   AliExpress page and verify the changed behavior;
 - inability of browser automation to open `chrome-extension://...` Tampermonkey
   pages is not by itself a blocker for live testing in this environment;
-- if the new behavior does not appear, first verify whether Tampermonkey picked
-  up the saved local file before asking for manual installation or copy/paste.
+- if behavior is clearly from an older version, first recheck the local-file
+  link or the userscript copy Tampermonkey is executing before treating the
+  result as a product regression or asking for manual installation/copy-paste.
 
 This workflow is maintainer-environment-specific and must not be assumed for
 other machines or contributors.
