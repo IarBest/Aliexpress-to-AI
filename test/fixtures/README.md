@@ -47,3 +47,23 @@ precede its `A/B` text. Observation metadata records full-boundary lengths and
 counts without storing the complete 9 KB / 4.7 KB seller descriptions. These
 fixtures contain no account, authentication, cookie, analytics, or tracking
 data. Synthetic parser cases remain explicitly synthetic in the test names.
+
+The `rating-trade-*.json` files are minimized records of live observations made
+on 2026-08-12 after fresh product-page reloads. They combine primitive values
+observed in the existing `#__AER_DATA__` review widget with text from the scoped
+`HazeProductDescription` product header. They are deliberately not represented
+as original AliExpress response wrappers: analytics/tracking objects were not
+retained, only the raw rating primitive, trusted field paths, review count,
+separately observed (unused) feedback count, DOM display strings, stable class
+fragments, and expected P1 normalization. Bought counts were confirmed only in
+the scoped hydrated DOM. The current dress rating of 4.6 is a dated live value
+and does not replace older historical roadmap observations such as 4.8.
+
+A follow-up Tampermonkey smoke on 2026-08-12 confirmed the normalized rating
+and review values for both reference items. The relay still displayed 13
+bought. The dress displayed 414 bought on the later reload, one more than the
+413 captured in its fixture; this is expected live counter drift and the
+historical fixture remains unchanged. Additional item `1005005933779962`
+confirmed rating 4.8, 66 reviews, and 337 bought, and was used to verify that
+explicit pre-export hydration preserves rating/trade, seven characteristics,
+and seller description together.

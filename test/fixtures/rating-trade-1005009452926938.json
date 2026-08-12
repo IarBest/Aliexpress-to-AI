@@ -1,0 +1,32 @@
+{
+  "itemId": "1005009452926938",
+  "observedAt": "2026-08-12",
+  "sourceKind": "minimized live SSR and DOM observation",
+  "ssr": {
+    "ratingRaw": "4,6",
+    "ratingPaths": [
+      "$..props.analyticEvents.clickAllReviews.trackingInfo.overallRating",
+      "$..props.analyticEvents.viewWidgetReview.trackingInfo.overallRating"
+    ],
+    "reviewCount": 36,
+    "reviewCountPath": "$..props.resolveParams[\"review.productReviewsCount\"]",
+    "feedbackCountObservedButNotUsedForP1": 30
+  },
+  "dom": {
+    "ratingText": "4.6",
+    "reviewText": "36 reviews",
+    "boughtText": "413 bought",
+    "boundaryFragments": {
+      "root": "HazeProductDescription__root",
+      "extraInfo": "HazeProductDescription__extraInfo",
+      "rating": "HazeProductDescription__ratingWrap",
+      "reviews": "a[href=\"#reviews_anchor\"]",
+      "bought": "HazeProductDescription__buyCounter"
+    }
+  },
+  "expected": {
+    "rating": 4.6,
+    "reviewCount": 36,
+    "boughtCount": 413
+  }
+}

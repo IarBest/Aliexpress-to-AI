@@ -137,11 +137,24 @@ Acceptance: `product.gallery` не зависит от ChatGPT formatter и не
 
 ### Basic rating and trade summary
 
-- [ ] Извлечь product rating из structured data, затем semantic DOM fallback.
-- [ ] Нормализовать reviews/ratings count и bought/orders count.
-- [ ] Разделить неизвестное значение, настоящий `0` и отсутствующий источник.
-- [ ] Добавить regression tests для чисел с locale formatting (`3K`, пробелы,
+- [x] Извлечь product rating из structured data, затем semantic DOM fallback.
+- [x] Нормализовать reviews/ratings count и bought/orders count.
+- [x] Разделить неизвестное значение, настоящий `0` и отсутствующий источник.
+- [x] Добавить regression tests для чисел с locale formatting (`3K`, пробелы,
       запятая как decimal separator).
+
+Live Tampermonkey smoke подтверждён 2026-08-12:
+
+- item `1005008195850531`: rating `5`, reviews `5`, bought `13`; Copy product
+  также сохранил 8 characteristics и seller description (106 blocks);
+- item `1005009452926938`: rating `4.6`, reviews `36`; исторический fixture
+  зафиксировал bought `413`, а повторный fresh reload показал естественно
+  выросший live DOM count `414`; Copy product также сохранил 5 characteristics
+  и seller description (47 blocks);
+- дополнительный item `1005005933779962`: rating `4.8`, reviews `66`, bought
+  `337`; pre-export hydration race закрыт синхронным fallback enrichment перед
+  Copy product / Copy for ChatGPT, при этом сохранились 7 characteristics и
+  seller description с первым image URL.
 
 Acceptance: rating и trade counts попадают в normalized model без смешивания с
 seller rating или recommendation cards.

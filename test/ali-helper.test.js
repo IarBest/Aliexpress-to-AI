@@ -109,6 +109,56 @@ function syntheticDescriptionDom(html, options = {}) {
   };
 }
 
+function syntheticRatingDom(values, options = {}) {
+  const textNode = (text) => ({ innerText: text, textContent: text });
+  const extraInfo = {
+    querySelector(selector) {
+      if (selector.includes('ratingWrap')) return values.ratingText === null ? null : textNode(values.ratingText);
+      if (selector === 'a[href="#reviews_anchor"]') return values.reviewText === null ? null : textNode(values.reviewText);
+      if (selector.includes('buyCounter')) return values.boughtText === null ? null : textNode(values.boughtText);
+      return null;
+    },
+  };
+  const productRoot = {
+    matches(selector) { return selector.includes('HazeProductDescription__root'); },
+    querySelector(selector) {
+      if (selector === 'h1') return options.missingHeading ? null : textNode('Actual product');
+      if (selector.includes('HazeProductDescription__extraInfo')) return extraInfo;
+      return null;
+    },
+  };
+  const recommendationRoot = {
+    matches() { return true; },
+    querySelector(selector) {
+      if (selector === 'h1') return null;
+      if (selector.includes('HazeProductDescription__extraInfo')) return { textContent: '1.0 999 reviews 8K bought' };
+      return null;
+    },
+  };
+  const root = {
+    querySelectorAll(selector) {
+      return selector.includes('HazeProductDescription__root') ? [recommendationRoot, productRoot] : [];
+    },
+    querySelector() {
+      return options.sellerSentinel || options.recommendationSentinel || null;
+    },
+  };
+  return { root, productRoot, extraInfo, recommendationRoot };
+}
+
+function ratingSsrCandidate({ itemId, ratingRaw, reviewCount, feedbackCount }) {
+  const props = {
+    resolveParams: {},
+    analyticEvents: {
+      clickAllReviews: { trackingInfo: { itemId, overallRating: ratingRaw } },
+      viewWidgetReview: { trackingInfo: { itemId, overallRating: ratingRaw } },
+    },
+  };
+  if (reviewCount !== undefined) props.resolveParams['review.productReviewsCount'] = reviewCount;
+  if (feedbackCount !== undefined) props.resolveParams['review.productFeedbacksCount'] = feedbackCount;
+  return { props };
+}
+
 test('userscript metadata and runtime versions stay in sync', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'ali-helper.user.js'), 'utf8');
   const metadataVersion = source.match(/^\/\/ @version\s+(\S+)\s*$/m);
@@ -559,6 +609,226 @@ test('characteristics enrichment preserves the model and is reference-stable for
   Object.entries(sentinels).forEach(([key, value]) => assert.equal(updated[key], value));
   assert.equal(core.updateCharacteristics(updated, [{ name: 'Material', value: 'Polyester' }]), updated);
   assert.equal(core.updateCharacteristics(updated, []), updated);
+});
+
+test('localized rating parser accepts scoped decimal forms and preserves zero', () => {
+  assert.equal(core.parseLocalizedRating('5,0'), 5);
+  assert.equal(core.parseLocalizedRating('4,6'), 4.6);
+  assert.equal(core.parseLocalizedRating('4.6'), 4.6);
+  assert.equal(core.parseLocalizedRating(5), 5);
+  assert.equal(core.parseLocalizedRating(0), 0);
+  for (const value of [null, '', 'rating 4.6', 'garbage', 6, 100]) assert.equal(core.parseLocalizedRating(value), null);
+});
+
+test('localized count parser handles observed text, K suffixes, grouping spaces, and zero', () => {
+  const cases = new Map([
+    ['0', 0], [0, 0], ['13 bought', 13], ['413 purchased', 413],
+    ['3K', 3000], ['3K+', 3000], ['3,2K', 3200], ['3.2K', 3200],
+    ['1 234', 1234], ['1\u00a0234', 1234], ['1\u202f234', 1234], ['1,234', 1234],
+  ]);
+  cases.forEach((expected, value) => assert.equal(core.parseLocalizedCount(value), expected, JSON.stringify(value)));
+  for (const value of [null, '', 'sold 13', '1.2', '3M', -1, 1.5]) assert.equal(core.parseLocalizedCount(value), null);
+});
+
+test('captured live rating/trade observations normalize relay and dress values', () => {
+  for (const name of ['rating-trade-1005008195850531.json', 'rating-trade-1005009452926938.json']) {
+    const fixture = loadFixture(name);
+    const candidate = ratingSsrCandidate({
+      itemId: fixture.itemId,
+      ratingRaw: fixture.ssr.ratingRaw,
+      reviewCount: fixture.ssr.reviewCount,
+      feedbackCount: fixture.ssr.feedbackCountObservedButNotUsedForP1,
+    });
+    const structured = core.extractBasicRatingFromSsrData({ widgets: [candidate] }, fixture.itemId);
+    const dom = core.extractBasicRatingFromDom(syntheticRatingDom(fixture.dom).root);
+    const summary = core.mergeRatingSummary(structured, dom);
+    assert.equal(fixture.sourceKind, 'minimized live SSR and DOM observation');
+    assert.deepEqual(
+      { rating: summary.rating, reviewCount: summary.reviewCount, boughtCount: summary.boughtCount },
+      fixture.expected,
+    );
+    assert.deepEqual(summary.display, {
+      rating: fixture.dom.ratingText,
+      reviewCount: fixture.dom.reviewText,
+      boughtCount: fixture.dom.boughtText,
+    });
+  }
+});
+
+test('duplicate trusted SSR review widgets agree while conflicts stay unknown', () => {
+  const relay = ratingSsrCandidate({ itemId: 'relay', ratingRaw: '5,0', reviewCount: 5 });
+  const accepted = core.extractBasicRatingFromSsrData({ children: [relay, clone(relay)] }, 'relay');
+  assert.equal(accepted.rating, 5);
+  assert.equal(accepted.reviewCount, 5);
+  const dress = ratingSsrCandidate({ itemId: 'relay', ratingRaw: '4,6', reviewCount: 36 });
+  assert.equal(core.extractBasicRatingFromSsrData({ children: [relay, dress] }, 'relay'), null);
+
+  const conflictingSignals = ratingSsrCandidate({ itemId: 'relay', ratingRaw: '5,0', reviewCount: 5 });
+  conflictingSignals.props.analyticEvents.viewWidgetReview.trackingInfo.overallRating = '4,6';
+  const conservative = core.extractBasicRatingFromSsrData({ children: [conflictingSignals] }, 'relay');
+  assert.equal(conservative.rating, null);
+  assert.equal(conservative.reviewCount, 5);
+});
+
+test('SSR extractor ignores feedback count and incomplete root product placeholders', () => {
+  const root = {
+    rating: null,
+    reviews: '0',
+    tradeInfo: null,
+    children: [ratingSsrCandidate({ itemId: 'item', feedbackCount: 30 })],
+  };
+  assert.equal(core.extractBasicRatingFromSsrData(root, 'item'), null);
+  const trusted = ratingSsrCandidate({ itemId: 'item', ratingRaw: '4,6', reviewCount: 36, feedbackCount: 30 });
+  const summary = core.extractBasicRatingFromSsrData({ children: [trusted], reviews: '0' }, 'item');
+  assert.equal(summary.reviewCount, 36);
+  assert.equal(Object.hasOwn(summary, 'feedbackCount'), false);
+});
+
+test('SSR extractor prefers a coherent candidate over conflicting partial copies', () => {
+  const coherent = ratingSsrCandidate({ itemId: 'item', ratingRaw: '5,0', reviewCount: 5 });
+  const partialCount = ratingSsrCandidate({ itemId: 'item', reviewCount: 999 });
+  const summary = core.extractBasicRatingFromSsrData({ children: [coherent, partialCount] }, 'item');
+  assert.equal(summary.rating, 5);
+  assert.equal(summary.reviewCount, 5);
+});
+
+test('DOM rating/trade extraction is limited to the actual H1 product boundary', () => {
+  const fixture = loadFixture('rating-trade-1005009452926938.json');
+  const dom = syntheticRatingDom(fixture.dom, {
+    recommendationSentinel: { textContent: '1.0 999 reviews 8K sold' },
+    sellerSentinel: { textContent: "85% seller's rating" },
+  });
+  assert.equal(core.findProductHeaderBoundary(dom.root), dom.productRoot);
+  assert.deepEqual(core.extractBasicRatingFromDom(dom.root), {
+    rating: 4.6,
+    reviewCount: 36,
+    boughtCount: 413,
+    display: { rating: '4.6', reviewCount: '36 reviews', boughtCount: '413 bought' },
+  });
+});
+
+test('rating summary merge prioritizes SSR numerics, DOM bought/display, and later enrichment', () => {
+  const structured = {
+    rating: 5, reviewCount: 5, boughtCount: null,
+    display: { rating: null, reviewCount: null, boughtCount: null },
+  };
+  const dom = {
+    rating: 4.6, reviewCount: 4, boughtCount: 13,
+    display: { rating: '5.0', reviewCount: '5 reviews', boughtCount: '13 bought' },
+  };
+  const merged = core.mergeRatingSummary(structured, dom);
+  assert.deepEqual(merged, {
+    rating: 5, reviewCount: 5, boughtCount: 13,
+    display: { rating: '5.0', reviewCount: '5 reviews', boughtCount: '13 bought' },
+  });
+  const fixture = loadFixture('product-1005008195850531.json');
+  const product = core.normalizeProduct(fixture.data, 'https://aliexpress.ru/item/1005008195850531.html');
+  const structuredProduct = core.updateRatingSummary(product, structured);
+  const enriched = core.updateRatingSummary(structuredProduct, merged);
+  assert.equal(enriched.ratingSummary.boughtCount, 13);
+  assert.equal(core.updateRatingSummary(enriched, merged), enriched);
+  assert.equal(core.updateRatingSummary(enriched, null), enriched);
+});
+
+test('rating summary distinguishes real zero from unknown and remains reference-stable', () => {
+  const fixture = loadFixture('product-1005008195850531.json');
+  const product = core.normalizeProduct(fixture.data, 'https://aliexpress.ru/item/1005008195850531.html');
+  const zero = {
+    rating: 0, reviewCount: 0, boughtCount: 0,
+    display: { rating: '0', reviewCount: '0 reviews', boughtCount: '0 bought' },
+  };
+  const updated = core.updateRatingSummary(product, zero);
+  assert.deepEqual(updated.ratingSummary, zero);
+  assert.equal(core.updateRatingSummary(updated, { rating: null, reviewCount: null, boughtCount: null, display: {} }), updated);
+});
+
+test('same-item productData refresh and SKU switch preserve rating summary', () => {
+  const fixture = loadFixture('product-1005009452926938.json');
+  const initial = core.normalizeProduct(fixture.data, 'https://aliexpress.ru/item/1005009452926938.html?sku_id=12000049151727540');
+  const summary = {
+    rating: 4.6, reviewCount: 36, boughtCount: 413,
+    display: { rating: '4.6', reviewCount: '36 reviews', boughtCount: '413 bought' },
+  };
+  const enriched = core.updateRatingSummary(initial, summary);
+  const refreshed = core.updateRatingSummary(
+    core.normalizeProduct(fixture.data, 'https://aliexpress.ru/item/1005009452926938.html'),
+    enriched.ratingSummary,
+  );
+  const switched = core.updateSelectedSku(enriched, 'https://aliexpress.ru/item/1005009452926938.html?sku_id=12000049151727530');
+  assert.deepEqual(refreshed.ratingSummary, enriched.ratingSummary);
+  assert.equal(switched.ratingSummary, enriched.ratingSummary);
+});
+
+test('one pre-export fallback enrichment fills available DOM data and is reference-stable', () => {
+  const fixture = loadFixture('product-1005009452926938.json');
+  const pageUrl = 'https://aliexpress.ru/item/1005009452926938.html?sku_id=12000049151727540';
+  const delivery = { productId: fixture.data.productId, skuId: '12000049151727540', methods: [{ sentinel: 'delivery' }] };
+  const description = core.buildDescription(
+    'dom',
+    '<p>Existing description</p><img src="https://example.com/existing.jpg">',
+    [
+      { type: 'text', text: 'Existing description' },
+      { type: 'image', url: 'https://example.com/existing.jpg', alt: null },
+    ],
+  );
+  const ratingSummary = {
+    rating: 4.8,
+    reviewCount: 66,
+    boughtCount: 337,
+    display: { rating: '4.8', reviewCount: '66 reviews', boughtCount: '337 bought' },
+  };
+  const product = core.normalizeProduct(fixture.data, pageUrl);
+  product.delivery = delivery;
+  const selectedSku = product.selectedSku;
+  const selectedPrice = product.price;
+  assert.equal(product.ratingSummary, null);
+  assert.deepEqual(product.characteristics, []);
+  assert.equal(product.description, null);
+
+  const sources = {
+    structuredRating: null,
+    domRating: ratingSummary,
+    characteristics: [{ name: 'Material', value: 'Stainless steel' }],
+    description,
+  };
+  const updatedProduct = core.enrichProductFallbacks(product, sources);
+
+  assert.deepEqual(updatedProduct.characteristics, [{ name: 'Material', value: 'Stainless steel' }]);
+  assert.equal(updatedProduct.description, description);
+  assert.deepEqual(updatedProduct.ratingSummary, ratingSummary);
+  assert.equal(updatedProduct.delivery, delivery);
+  assert.equal(updatedProduct.selectedSku, selectedSku);
+  assert.equal(updatedProduct.price, selectedPrice);
+  assert.equal(updatedProduct.selectedSkuId, '12000049151727540');
+  assert.equal(core.enrichProductFallbacks(updatedProduct, sources), updatedProduct);
+});
+
+test('stale old product-header values cannot enrich a changed item', () => {
+  const oldDom = syntheticRatingDom({ ratingText: '5.0', reviewText: '5 reviews', boughtText: '13 bought' });
+  const newDom = syntheticRatingDom({ ratingText: '4.6', reviewText: '36 reviews', boughtText: '413 bought' });
+  const oldSummary = core.extractBasicRatingFromDom(oldDom.root);
+  const changedSummary = core.extractBasicRatingFromDom(newDom.root);
+  assert.equal(core.isStaleRatingSummary(oldDom.productRoot, oldSummary, oldDom.productRoot, oldSummary), true);
+  assert.equal(core.isStaleRatingSummary(oldDom.productRoot, changedSummary, oldDom.productRoot, oldSummary), false);
+  assert.equal(core.isStaleRatingSummary(newDom.productRoot, oldSummary, oldDom.productRoot, oldSummary), false);
+});
+
+test('ChatGPT rating/trade export uses display text, preserves zero, and excludes P3/seller values', () => {
+  const fixture = loadFixture('product-1005008195850531.json');
+  const product = core.normalizeProduct(fixture.data, 'https://aliexpress.ru/item/1005008195850531.html');
+  product.ratingSummary = {
+    rating: 5, reviewCount: 5, boughtCount: 13,
+    display: { rating: '5.0', reviewCount: '5 reviews', boughtCount: '13 bought' },
+  };
+  product.store = { rating: '91,63%' };
+  product.ratingSummary.feedbackCount = 2;
+  const output = core.exportForChatGPT(product);
+  assert.match(output, /RATING & TRADE:\nRating: 5\.0\nReviews: 5 reviews\nBought: 13 bought\n\nDELIVERY:/);
+  assert.doesNotMatch(output, /91,63|feedback|photos|distribution/i);
+  product.ratingSummary = { rating: 0, reviewCount: 0, boughtCount: 0, display: {} };
+  assert.match(core.exportForChatGPT(product), /Rating: 0\nReviews: 0\nBought: 0/);
+  product.ratingSummary = null;
+  assert.match(core.exportForChatGPT(product), /Rating: —\nReviews: —\nBought: —/);
 });
 
 test('captured dress fragment preserves four images before heading text inside one h1', () => {
