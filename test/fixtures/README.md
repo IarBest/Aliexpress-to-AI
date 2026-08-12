@@ -67,3 +67,15 @@ historical fixture remains unchanged. Additional item `1005005933779962`
 confirmed rating 4.8, 66 reviews, and 337 bought, and was used to verify that
 explicit pre-export hydration preserves rating/trade, seven characteristics,
 and seller description together.
+
+The `gallery-*.json` files are minimized complete product-level `props`
+fragments recaptured from the existing `#__AER_DATA__` script on 2026-08-12.
+They retain the exact item ID, title, ordered gallery records, partial
+`skuInfo: null`, `activeSkuId: "0"`, and observed null seller ID. The relay
+fixture contains its real leading video record and six image records; item
+`1005005933779962` contains six real image-only records. These are SSR
+fragments, not `productData` API captures, and do not establish an API gallery
+path. This captured `#__AER_DATA__` source is the only currently implemented
+runtime Gallery source. The scoped `SnowProductGallery` DOM was also inspected,
+but its fallback is deferred because the leading current SKU-main image cannot
+yet be separated safely in a DOM-only case.

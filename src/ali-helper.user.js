@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ali Helper
 // @namespace    https://github.com/local/ali-helper
-// @version      0.1.6
+// @version      0.1.7
 // @description  Read-only AliExpress URL cleaner and product/variant exporter
 // @match        https://aliexpress.ru/item/*
 // @match        https://www.aliexpress.com/item/*
@@ -18,7 +18,7 @@
 (function factory(root) {
   'use strict';
 
-  const VERSION = '0.1.6';
+  const VERSION = '0.1.7';
   const SETTINGS_KEY = 'ali-helper:settings:v1';
   const CHARACTERISTICS_BOUNDARY_SELECTOR = '[class*="HazeProductCharacteristics__groupsContainerForSku"]';
   const CHARACTERISTICS_ITEM_SELECTOR = '[class*="HazeProductCharacteristics__itemForSku"]';
@@ -495,6 +495,85 @@
     return { ...product, characteristics };
   }
 
+  function validGalleryUrl(value) {
+    if (typeof value !== 'string' || value !== value.trim() || !/^https?:\/\//i.test(value)) return null;
+    try {
+      const url = new URL(value);
+      return /^https?:$/.test(url.protocol) ? value : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function normalizeGallery(records, source) {
+    if (!Array.isArray(records) || !source) return null;
+    const items = [];
+    const seen = new Set();
+    for (const record of records) {
+      const imageUrl = validGalleryUrl(record?.imageUrl);
+      const previewUrl = validGalleryUrl(record?.previewUrl);
+      const videoUrl = record?.videoUrl === null || record?.videoUrl === undefined
+        ? null
+        : validGalleryUrl(record.videoUrl);
+      if (!imageUrl || !previewUrl || (record?.videoUrl !== null && record?.videoUrl !== undefined && !videoUrl)) continue;
+      const item = { type: videoUrl ? 'video' : 'image', imageUrl, previewUrl, videoUrl };
+      const key = JSON.stringify([item.type, item.imageUrl, item.previewUrl, item.videoUrl]);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      items.push(item);
+    }
+    return items.length ? { source, items } : null;
+  }
+
+  function galleriesEqual(left, right) {
+    if (left === right) return true;
+    if (!left || !right || left.source !== right.source
+      || !Array.isArray(left.items) || !Array.isArray(right.items)
+      || left.items.length !== right.items.length) return false;
+    return left.items.every((item, index) => {
+      const other = right.items[index];
+      return item.type === other?.type
+        && item.imageUrl === other.imageUrl
+        && item.previewUrl === other.previewUrl
+        && item.videoUrl === other.videoUrl;
+    });
+  }
+
+  function extractGalleryFromSsrData(rootValue, expectedItemId, limits = {}) {
+    const itemId = asString(expectedItemId);
+    if (!itemId) return null;
+    const maxDepth = limits.maxDepth || 40;
+    const maxVisited = limits.maxVisited || 30000;
+    const seen = new WeakSet();
+    const stack = [{ value: rootValue, depth: 0 }];
+    const candidates = [];
+    let visited = 0;
+    while (stack.length && visited < maxVisited) {
+      const current = stack.pop();
+      const value = current.value;
+      if (!value || typeof value !== 'object' || seen.has(value) || current.depth > maxDepth) continue;
+      seen.add(value);
+      visited += 1;
+      if (!Array.isArray(value) && value.props && typeof value.props === 'object') {
+        const props = value.props;
+        if (asString(props.id) === itemId && Array.isArray(props.gallery)) {
+          candidates.push(normalizeGallery(props.gallery, 'ssr:__AER_DATA__'));
+        }
+      }
+      for (const child of Object.values(value)) {
+        if (child && typeof child === 'object') stack.push({ value: child, depth: current.depth + 1 });
+      }
+    }
+    if (!candidates.length) return null;
+    const first = candidates[0];
+    return candidates.every((candidate) => galleriesEqual(first, candidate)) ? first : null;
+  }
+
+  function updateGallery(product, gallery) {
+    if (!product || !gallery || galleriesEqual(product.gallery, gallery)) return product;
+    return { ...product, gallery };
+  }
+
   function parseLocalizedRating(value) {
     if (value === null || value === undefined || value === '') return null;
     if (typeof value === 'number') return Number.isFinite(value) && value >= 0 && value <= 5 ? value : null;
@@ -651,6 +730,7 @@
 
   function enrichProductFallbacks(product, sources = {}) {
     let updatedProduct = product;
+    updatedProduct = updateGallery(updatedProduct, sources.structuredGallery);
     updatedProduct = updateRatingSummary(
       updatedProduct,
       mergeRatingSummary(sources.structuredRating, sources.domRating),
@@ -824,7 +904,7 @@
       title: asString(firstDefined(productData.title, productData.name, productData.productInfo?.title, fallbacks.title)),
       url: url.href,
       selectedSkuId,
-      gallery: [],
+      gallery: null,
       price: selectedSku?.price || null,
       ratingSummary: null,
       variantGroups,
@@ -960,6 +1040,13 @@
     }).filter(Boolean).join('\n');
   }
 
+  function formatGallery(gallery) {
+    if (!gallery?.items?.length) return '—';
+    return gallery.items.map((item, index) => item.type === 'video'
+      ? [`Item ${index + 1} (video)`, `Video: ${item.videoUrl}`, `Image/poster: ${item.imageUrl}`, `Preview: ${item.previewUrl}`].join('\n')
+      : [`Item ${index + 1} (image)`, `Image: ${item.imageUrl}`, `Preview: ${item.previewUrl}`].join('\n')).join('\n\n');
+  }
+
   function formatRatingSummary(summary) {
     const display = (field) => summary?.display?.[field] ?? summary?.[field] ?? '—';
     return [
@@ -1032,6 +1119,9 @@
       'CHARACTERISTICS:',
       formatCharacteristics(product.characteristics),
       '',
+      'GALLERY:',
+      formatGallery(product.gallery),
+      '',
       'DESCRIPTION:',
       formatDescription(product.description),
     ].join('\n');
@@ -1060,6 +1150,10 @@
     normalizeCharacteristics,
     extractCharacteristicsFromDom,
     updateCharacteristics,
+    normalizeGallery,
+    galleriesEqual,
+    extractGalleryFromSsrData,
+    updateGallery,
     parseLocalizedRating,
     parseLocalizedCount,
     extractBasicRatingFromSsrData,
@@ -1089,6 +1183,7 @@
     formatProductStatus,
     formatDelivery,
     formatRatingSummary,
+    formatGallery,
     formatDescription,
     isShippingCalculateUrl,
     redactSensitiveJson,
@@ -1251,6 +1346,15 @@
     }
   }
 
+  function findGalleryInSsr(expectedItemId, script = document.querySelector('#__AER_DATA__')) {
+    if (!script) return null;
+    try {
+      return extractGalleryFromSsrData(JSON.parse(script.textContent || ''), expectedItemId);
+    } catch (_) {
+      return null;
+    }
+  }
+
   function findInReact() {
     const roots = document.querySelectorAll('[class*="HazeProduct"], [class*="SnowProduct"], [class*="SnowSku"], #root, #__next');
     for (const element of roots) {
@@ -1391,6 +1495,9 @@
       descriptionBoundary: null,
       staleDescriptionBoundary: null,
       staleDescription: null,
+      gallerySsrScript: null,
+      gallerySsrItemId: null,
+      gallerySsr: null,
       ratingSsrScript: null,
       ratingSsrItemId: null,
       ratingSsrSummary: null,
@@ -1406,7 +1513,8 @@
       try {
         const normalized = normalizeProduct(data, location.href, { title: document.title.replace(/\s*\|\s*AliExpress.*$/i, ''), source: meta.source });
         const previousProduct = runtime.product;
-        runtime.product = updateCharacteristics(normalized, previousProduct?.characteristics);
+        runtime.product = updateGallery(normalized, previousProduct?.gallery);
+        runtime.product = updateCharacteristics(runtime.product, previousProduct?.characteristics);
         runtime.product = updateDescription(runtime.product, previousProduct?.description);
         runtime.product = updateRatingSummary(runtime.product, previousProduct?.ratingSummary);
         runtime.product = applyCachedDelivery(runtime.product, runtime.deliveryCache, runtime.shippingEnvironment);
@@ -1453,6 +1561,12 @@
         runtime.ratingSsrItemId = runtime.itemId;
         runtime.ratingSsrSummary = findBasicRatingInSsr(runtime.itemId, ssrScript);
       }
+      if (runtime.itemId === runtime.initialItemId
+        && (runtime.gallerySsrItemId !== runtime.itemId || runtime.gallerySsrScript !== ssrScript)) {
+        runtime.gallerySsrScript = ssrScript;
+        runtime.gallerySsrItemId = runtime.itemId;
+        runtime.gallerySsr = findGalleryInSsr(runtime.itemId, ssrScript);
+      }
 
       const ratingBoundary = findProductHeaderBoundary(document);
       const domRating = extractBasicRatingFromDom(document);
@@ -1498,6 +1612,7 @@
       }
 
       const updatedProduct = enrichProductFallbacks(runtime.product, {
+        structuredGallery: runtime.gallerySsr,
         structuredRating: runtime.ratingSsrSummary,
         domRating: currentDomRating,
         characteristics: currentCharacteristics,
@@ -1522,6 +1637,9 @@
           runtime.staleDescriptionBoundary = runtime.descriptionBoundary;
           runtime.staleDescription = runtime.product?.description || null;
           runtime.descriptionBoundary = null;
+          runtime.gallerySsrScript = null;
+          runtime.gallerySsrItemId = null;
+          runtime.gallerySsr = null;
           runtime.staleRatingBoundary = runtime.ratingBoundary;
           runtime.staleRatingDomSummary = runtime.ratingDomSummary;
           runtime.ratingBoundary = null;

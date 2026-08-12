@@ -125,12 +125,38 @@ region/session differences документируются отдельно от 
 
 ### Gallery
 
-- [ ] Найти structured gallery в `productData`/page data раньше DOM fallback.
-- [ ] Нормализовать main product image URLs и preview URLs без автоматического
+- [x] Найти structured gallery в `productData`/page data раньше DOM fallback.
+- [x] Нормализовать main product image URLs и preview URLs без автоматического
       скачивания.
-- [ ] Сохранить video URL и poster/preview, если они однозначно доступны.
-- [ ] Сохранить исходный порядок gallery и удалить только точные дубликаты.
-- [ ] Добавить cases без video, с video и с отсутствующей gallery.
+- [x] Сохранить video URL и poster/preview, если они однозначно доступны.
+- [x] Сохранить исходный порядок gallery и удалить только точные дубликаты.
+- [x] Добавить cases без video, с video и с отсутствующей gallery.
+
+Текущий подтверждённый runtime source — product-level `props.gallery` из
+`#__AER_DATA__`. Поиск bounded и structural, с точным совпадением item ID;
+глубокий widget path не хардкодится. Gallery path в `productData` API пока не
+подтверждён и не реализован. Scoped `SnowProductGallery` DOM исследован, но
+production DOM fallback намеренно отложен: hydrated DOM содержит leading
+current SKU-main, который пока нельзя надёжно отделить в DOM-only case. Поэтому
+runtime работает fail-closed и использует только подтверждённый SSR source;
+description, recommendation, store и injected images с Gallery не смешиваются.
+
+Live Tampermonkey smoke подтверждён 2026-08-12:
+
+- item `1005008195850531`: SSR source, 7 items, первый item — video
+  `5000454646732.mp4`; current SKU-main не добавлен. Сохранились rating/trade,
+  8 characteristics, 106 description blocks и native delivery;
+- item `1005009452926938`: SSR source, 7 items, первый item — video
+  `5000259286007.mp4`; SKU switch до `12000049151727540` сохранил Gallery,
+  `Lining B Navy Blue + L`, price `$26.08`, rating/trade, 5 characteristics и
+  47 description blocks;
+- item `1005005933779962`: SSR source, 6 image items, video отсутствует;
+  current SKU-main не добавлен. Сохранились rating/trade, 7 characteristics,
+  8 description blocks и native delivery.
+
+После fail-closed correction отдельный fresh reload item `1005008195850531`
+повторно подтвердил SSR source, 7 items, первый video и Gallery перед Description
+в Copy for ChatGPT.
 
 Acceptance: `product.gallery` не зависит от ChatGPT formatter и не включает
 картинки recommendation/store/extension DOM.

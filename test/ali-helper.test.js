@@ -584,8 +584,8 @@ test('ChatGPT export lists characteristics in normalized order and uses a neutra
   const exported = core.exportForChatGPT(product);
   const emptyExport = core.exportForChatGPT({ ...product, characteristics: [] });
 
-  assert.match(exported, /CHARACTERISTICS:\nFirst: One\nSecond: Two\n\nDESCRIPTION:/);
-  assert.match(emptyExport, /CHARACTERISTICS:\n—\n\nDESCRIPTION:/);
+  assert.match(exported, /CHARACTERISTICS:\nFirst: One\nSecond: Two\n\nGALLERY:\n—\n\nDESCRIPTION:/);
+  assert.match(emptyExport, /CHARACTERISTICS:\n—\n\nGALLERY:\n—\n\nDESCRIPTION:/);
 });
 
 test('characteristics enrichment preserves the model and is reference-stable for unchanged or absent data', () => {
@@ -609,6 +609,129 @@ test('characteristics enrichment preserves the model and is reference-stable for
   Object.entries(sentinels).forEach(([key, value]) => assert.equal(updated[key], value));
   assert.equal(core.updateCharacteristics(updated, [{ name: 'Material', value: 'Polyester' }]), updated);
   assert.equal(core.updateCharacteristics(updated, []), updated);
+});
+
+test('captured relay SSR gallery is found structurally and preserves video-first order', () => {
+  const fixture = loadFixture('gallery-1005008195850531.json');
+  const root = { unrelated: { widgets: [{ children: [{ deeper: fixture }] }] } };
+  const gallery = core.extractGalleryFromSsrData(root, fixture.props.id);
+
+  assert.equal(fixture.props.skuInfo, null);
+  assert.equal(fixture.props.activeSkuId, '0');
+  assert.equal(gallery.source, 'ssr:__AER_DATA__');
+  assert.equal(gallery.items.length, 7);
+  assert.deepEqual(gallery.items.map((item) => item.type), ['video', 'image', 'image', 'image', 'image', 'image', 'image']);
+  assert.deepEqual(gallery.items[0], {
+    type: 'video',
+    imageUrl: 'https://ae-pic-a1.aliexpress-media.com/kf/S0eab51705bf14f4fb4e86dccb88feb41a.jpg',
+    previewUrl: 'https://ae-pic-a1.aliexpress-media.com/kf/S0eab51705bf14f4fb4e86dccb88feb41a.jpg',
+    videoUrl: 'https://video.aliexpress-media.com/play/u/ae_sg_item/p/1/e/6/t/10301/5000454646732.mp4',
+  });
+  assert.equal(gallery.items.at(-1).imageUrl, 'https://ae-pic-a1.aliexpress-media.com/kf/Sd6f26cea218141799d5dcbdbe7db9fd0n.jpg');
+});
+
+test('captured no-video SSR gallery keeps all six observed image records', () => {
+  const fixture = loadFixture('gallery-1005005933779962.json');
+  const gallery = core.extractGalleryFromSsrData({ layout: [{ props: { id: 'recommendation', gallery: fixture.props.gallery } }, fixture] }, fixture.props.id);
+
+  assert.equal(gallery.items.length, 6);
+  assert.ok(gallery.items.every((item) => item.type === 'image' && item.videoUrl === null));
+  assert.deepEqual(gallery.items.map((item) => item.imageUrl), fixture.props.gallery.map((item) => item.imageUrl));
+});
+
+test('SSR gallery requires an exact expected item ID and rejects same-item conflicts', () => {
+  const fixture = loadFixture('gallery-1005008195850531.json');
+  assert.equal(core.extractGalleryFromSsrData({ nested: fixture }, '100500819585053'), null);
+  assert.equal(core.extractGalleryFromSsrData({ nested: fixture }, null), null);
+  const conflict = clone(fixture);
+  conflict.props.gallery[1].imageUrl = 'https://example.com/conflict.jpg';
+  assert.equal(core.extractGalleryFromSsrData({ copies: [fixture, clone(fixture)] }, fixture.props.id).items.length, 7);
+  assert.equal(core.extractGalleryFromSsrData({ copies: [fixture, conflict] }, fixture.props.id), null);
+});
+
+test('synthetic missing, empty, and invalid SSR gallery cases return null', () => {
+  assert.equal(core.extractGalleryFromSsrData({ props: { id: 'item' } }, 'item'), null);
+  assert.equal(core.extractGalleryFromSsrData({ props: { id: 'item', gallery: [] } }, 'item'), null);
+  assert.equal(core.extractGalleryFromSsrData({ props: { id: 'item', gallery: [{ imageUrl: 'data:image/png,x', previewUrl: 'https://example.com/p.jpg', videoUrl: null }] } }, 'item'), null);
+});
+
+test('synthetic gallery exact-dedupe preserves first occurrence and URL distinctions', () => {
+  const base = { imageUrl: 'https://example.com/a.jpg', previewUrl: 'https://example.com/a.jpg', videoUrl: null };
+  const gallery = core.normalizeGallery([
+    base,
+    clone(base),
+    { ...base, imageUrl: 'https://example.com/a.jpg_640x640.jpg' },
+    { ...base, imageUrl: 'https://example.com/a.jpg_.webp' },
+    { ...base, imageUrl: 'https://example.com/a.jpg?size=640' },
+    { ...base, previewUrl: 'https://example.com/preview.jpg' },
+  ], 'synthetic');
+
+  assert.equal(gallery.items.length, 5);
+  assert.equal(gallery.items[0].imageUrl, base.imageUrl);
+  assert.equal(gallery.items[0].previewUrl, base.previewUrl);
+  assert.equal(gallery.items[1].imageUrl, 'https://example.com/a.jpg_640x640.jpg');
+  assert.equal(gallery.items[4].previewUrl, 'https://example.com/preview.jpg');
+});
+
+test('gallery update and combined enrichment preserve unrelated normalized state', () => {
+  const productFixture = loadFixture('product-1005009452926938.json');
+  const galleryFixture = loadFixture('gallery-1005008195850531.json');
+  const pageUrl = 'https://aliexpress.ru/item/1005009452926938.html?sku_id=12000049151727540';
+  const product = core.normalizeProduct(productFixture.data, pageUrl);
+  const delivery = { sentinel: 'delivery' };
+  const description = core.buildDescription('dom', '<p>Existing</p>', [{ type: 'text', text: 'Existing' }]);
+  const ratingSummary = { rating: 4.6, reviewCount: 36, boughtCount: 414, display: {} };
+  product.delivery = delivery;
+  product.description = description;
+  product.ratingSummary = ratingSummary;
+  const selectedSku = product.selectedSku;
+  const price = product.price;
+  const gallery = core.normalizeGallery(galleryFixture.props.gallery, 'ssr:__AER_DATA__');
+  const updated = core.enrichProductFallbacks(product, {
+    structuredGallery: gallery,
+    characteristics: [{ name: 'Material', value: 'Polyester' }],
+  });
+
+  assert.equal(updated.gallery, gallery);
+  assert.equal(updated.delivery, delivery);
+  assert.equal(updated.description, description);
+  assert.equal(updated.ratingSummary, ratingSummary);
+  assert.equal(updated.selectedSku, selectedSku);
+  assert.equal(updated.price, price);
+  assert.equal(updated.selectedSkuId, '12000049151727540');
+  assert.deepEqual(updated.characteristics, [{ name: 'Material', value: 'Polyester' }]);
+  assert.equal(core.enrichProductFallbacks(updated, { structuredGallery: clone(gallery) }), updated);
+  const refreshed = core.updateGallery(core.normalizeProduct(productFixture.data, pageUrl), updated.gallery);
+  assert.equal(refreshed.gallery, updated.gallery);
+  assert.equal(core.updateSelectedSku(updated, 'https://aliexpress.ru/item/1005009452926938.html?sku_id=12000049151727530').gallery, gallery);
+});
+
+test('unknown DOM SKU-main is never used when structured gallery is unavailable', () => {
+  const product = { gallery: null };
+  const unknownDomGallery = core.normalizeGallery(
+    loadFixture('gallery-1005008195850531.json').props.gallery,
+    'dom:untrusted-sku-main',
+  );
+
+  assert.equal(core.enrichProductFallbacks(product, { domGallery: unknownDomGallery }), product);
+  assert.equal(product.gallery, null);
+});
+
+test('ChatGPT gallery export preserves every item and keeps description separate', () => {
+  const productFixture = loadFixture('product-1005008195850531.json');
+  const galleryFixture = loadFixture('gallery-1005008195850531.json');
+  const product = core.normalizeProduct(productFixture.data, 'https://aliexpress.ru/item/1005008195850531.html');
+  product.gallery = core.normalizeGallery(galleryFixture.props.gallery, 'ssr:__AER_DATA__');
+  product.description = core.buildDescription('dom', '<img src="https://example.com/description.jpg">', [
+    { type: 'image', url: 'https://example.com/description.jpg', alt: null },
+  ]);
+  const output = core.exportForChatGPT(product);
+
+  assert.match(output, /GALLERY:\nItem 1 \(video\)\nVideo: .*5000454646732\.mp4\nImage\/poster: .*S0eab.*\nPreview: .*S0eab/);
+  assert.match(output, /Item 7 \(image\)\nImage: .*Sd6f26.*\nPreview: .*Sd6f26/);
+  assert.match(output, /DESCRIPTION:\nImage 1: https:\/\/example\.com\/description\.jpg$/);
+  assert.doesNotMatch(core.formatGallery(product.gallery), /description\.jpg/);
+  assert.match(core.exportForChatGPT({ ...product, gallery: null }), /GALLERY:\n—\n\nDESCRIPTION:/);
 });
 
 test('localized rating parser accepts scoped decimal forms and preserves zero', () => {
