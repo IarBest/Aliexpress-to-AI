@@ -79,3 +79,18 @@ path. This captured `#__AER_DATA__` source is the only currently implemented
 runtime Gallery source. The scoped `SnowProductGallery` DOM was also inspected,
 but its fallback is deferred because the leading current SKU-main image cannot
 yet be separated safely in a DOM-only case.
+
+The `store-ssr-*.json` files are minimized store-widget `props` fragments
+recaptured from the existing `#__AER_DATA__` script on 2026-08-12. They retain
+the exact observed deep path as metadata, while tests deliberately nest the
+fragment independently so production search cannot depend on child indices.
+The retained values include the store/seller IDs, store URL, chat link,
+positive-feedback percentage, raw subscribers, subtitles, ignored stats, and
+one exact current-item analytics reference. WLIN had 2919 raw subscribers at
+recapture time (previously 2918); its display remained `3K subscribers`.
+
+`store-dom-1005005933779962.json` is a minimized live observation of the
+scoped `#storeInfo` boundary from the same date. It records the exact stable
+class fragments, element roles, texts, hrefs, and stat child-tag structure
+used by the DOM regression without adding a DOM library. Full CSS-module
+hashes are evidence only and are not used by production selectors.

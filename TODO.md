@@ -187,17 +187,50 @@ seller rating или recommendation cards.
 
 ### Store / seller
 
-- [ ] Извлечь store name и store URL в известных AliExpress boundaries:
-      `#storeInfo`, `RedStoreInfo` и product store container.
-- [ ] Получить store ID из `/store/ID`.
-- [ ] Предпочесть structured `productData.sellerId`; использовать `seller_id`
-      из scoped chat URL только как fallback.
-- [ ] Извлечь seller rating, subscribers и однозначные дополнительные stats.
-- [ ] Хранить item rating отдельно от seller rating.
-- [ ] Не включать Megabonus и другой third-party injected DOM.
-- [ ] Добавить regression для `WLIN OOTD Store`: store ID `1103330026`, seller ID
-      `2677490623`, seller rating `85%`, subscribers `3K`.
-- [ ] Проверить graceful result при частичных или отсутствующих store данных.
+- [x] Извлечь store name и store URL из подтверждённого store-level
+      `#__AER_DATA__` и scoped `#storeInfo` / `RedStoreInfo` DOM.
+- [x] Получить store ID только из подтверждённого URL shape
+      `https://aliexpress.ru/store/<digits>`.
+- [ ] Подтвердить `sellerId` в реально captured raw `productData` response и,
+      если поле действительно существует и однозначно связано с current item,
+      поставить его выше текущих SSR/DOM sources.
+- [x] Использовать текущий production priority для seller ID: matched
+      store-level `#__AER_DATA__` → `seller_id` из scoped `#storeInfo` chat URL
+      → `null`.
+- [x] Извлечь seller rating percentage и subscribers без включения
+      неподтверждённых дополнительных store stats.
+- [x] Хранить item rating отдельно от seller rating.
+- [x] Не включать Megabonus и другой third-party injected DOM.
+- [x] Добавить captured WLIN regression: store ID `1103330026`, seller ID
+      `2677490623`, seller rating `84.98%`, subscribers display `3K`.
+- [x] Проверить partial/absent Store и fail-closed conflicting/current-item
+      cases.
+
+Реализованная normalized модель `product.store` содержит `name`, `url`,
+`storeId`, `sellerId`, `sellerRating { kind, value, display }` и
+`subscribers { value, display }`. `storeId` и `sellerId` — разные идентификаторы;
+seller rating остаётся percentage и не преобразуется в 5-star scale. Store
+widget `"item's rating"` не экспортируется. `positiveReviews.number`, store
+stats/tags/orders не используются. DOM читается только внутри `#storeInfo`, а
+initial `#__AER_DATA__` не переносится на другой SPA item. Текущие production
+sources не выполняют дополнительных network requests.
+
+Live Tampermonkey smoke 2026-08-13 на реально активном Ali Helper `v0.1.7`:
+
+- WLIN / Dress `1005009452926938`: `WLIN OOTD Store`, store ID `1103330026`,
+  seller ID `2677490623`, seller rating `84.98` / `84,98% seller's rating`,
+  subscribers raw `2920` / display `3K subscribers`. Product rating `4.6`
+  остался отдельным, `"item's rating"` не экспортировался; SKU switch сохранил
+  Store, Gallery, characteristics и description. Captured fixture остаётся с
+  историческим raw subscribers `2919`.
+- Needles `1005005933779962`: `Better off Store`, store ID `1100036170`, seller
+  ID `2660067190`, seller rating `94.09` / `94,09% seller's rating`, subscribers
+  `320` / `320 subscribers`. Одновременно сохранились delivery, rating/trade,
+  characteristics, Gallery и Description.
+- Relay `1005008195850531`: `Scimagic-RC CHN Long Store`, store ID `5041265`,
+  seller ID `238863723`, seller rating `91.64` / `91,64% seller's rating`,
+  subscribers raw `3809` / display `4K subscribers`. Значения являются
+  динамическим live observation; drift от предыдущего наблюдения нормален.
 
 Acceptance: store/seller model формируется только из scoped semantic sources;
 item и seller ratings не смешиваются.

@@ -159,6 +159,48 @@ function ratingSsrCandidate({ itemId, ratingRaw, reviewCount, feedbackCount }) {
   return { props };
 }
 
+function syntheticStoreDom(fixture, options = {}) {
+  const anchor = (href) => ({
+    href,
+    getAttribute(name) { return name === 'href' ? href : null; },
+  });
+  const storeAnchor = anchor(fixture.header.storeHref);
+  const chatAnchor = anchor(options.chatHref ?? fixture.chat.href);
+  const title = {
+    innerText: fixture.header.title.text,
+    textContent: fixture.header.title.text,
+    closest(selector) { return selector === 'a[href]' ? storeAnchor : null; },
+  };
+  const stats = fixture.header.stats.map((stat) => ({ innerText: stat.text, textContent: stat.text }));
+  const header = {
+    querySelector(selector) {
+      if (selector.includes('RedStoreInfo_Header__title__')) return title;
+      if (selector.includes('RedStoreInfo_Header__headerContainer__')) return storeAnchor;
+      return null;
+    },
+    querySelectorAll(selector) {
+      return selector.includes('RedStoreInfo_StatItem__statItem__') ? stats : [];
+    },
+  };
+  const chatButton = { closest(selector) { return selector === 'a[href]' ? chatAnchor : null; } };
+  const boundary = {
+    matches(selector) { return selector === '#storeInfo'; },
+    querySelector(selector) {
+      if (selector === '[data-testid="store_header"]') return header;
+      if (selector === '[data-testid="seller_chat_btn"]') return options.missingChat ? null : chatButton;
+      return null;
+    },
+  };
+  return {
+    boundary,
+    megabonusSentinel: options.megabonusSentinel || null,
+    querySelector(selector) {
+      if (selector === '#storeInfo') return options.missingBoundary ? null : boundary;
+      return this.megabonusSentinel;
+    },
+  };
+}
+
 test('userscript metadata and runtime versions stay in sync', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'ali-helper.user.js'), 'utf8');
   const metadataVersion = source.match(/^\/\/ @version\s+(\S+)\s*$/m);
@@ -946,12 +988,322 @@ test('ChatGPT rating/trade export uses display text, preserves zero, and exclude
   product.store = { rating: '91,63%' };
   product.ratingSummary.feedbackCount = 2;
   const output = core.exportForChatGPT(product);
-  assert.match(output, /RATING & TRADE:\nRating: 5\.0\nReviews: 5 reviews\nBought: 13 bought\n\nDELIVERY:/);
+  assert.match(output, /RATING & TRADE:\nRating: 5\.0\nReviews: 5 reviews\nBought: 13 bought\n\nSTORE \/ SELLER:[\s\S]*\n\nDELIVERY:/);
   assert.doesNotMatch(output, /91,63|feedback|photos|distribution/i);
   product.ratingSummary = { rating: 0, reviewCount: 0, boughtCount: 0, display: {} };
   assert.match(core.exportForChatGPT(product), /Rating: 0\nReviews: 0\nBought: 0/);
   product.ratingSummary = null;
   assert.match(core.exportForChatGPT(product), /Rating: —\nReviews: —\nBought: —/);
+});
+
+test('seller percentage parser accepts captured locale forms and preserves true zero', () => {
+  assert.equal(core.parseLocalizedPercentage('85%'), 85);
+  assert.equal(core.parseLocalizedPercentage('84,98%'), 84.98);
+  assert.equal(core.parseLocalizedPercentage('84.98%'), 84.98);
+  assert.equal(core.parseLocalizedPercentage('0%'), 0);
+  assert.equal(core.parseLocalizedPercentage(0), 0);
+  assert.equal(core.parseLocalizedPercentage('4,4 item\'s rating'), null);
+  assert.equal(core.parseLocalizedPercentage('101%'), null);
+});
+
+test('captured WLIN SSR store is found structurally and bound to the exact current item', () => {
+  const fixture = loadFixture('store-ssr-1005009452926938.json');
+  const root = { unrelated: [{ childrenChanged: { widget: fixture.fragment } }] };
+  const store = core.extractStoreFromSsrData(root, fixture.itemId);
+
+  assert.equal(fixture.sourceKind, 'live #__AER_DATA__ observation');
+  assert.deepEqual(store, {
+    name: 'WLIN OOTD Store',
+    url: 'https://aliexpress.ru/store/1103330026',
+    storeId: '1103330026',
+    sellerId: '2677490623',
+    sellerRating: {
+      kind: 'positiveFeedbackPercentage',
+      value: 84.98,
+      display: "84,98% seller's rating",
+    },
+    subscribers: { value: 2919, display: '3K subscribers' },
+  });
+  assert.notEqual(store.storeId, store.sellerId);
+  assert.equal(core.extractStoreFromSsrData(root, '1005005933779962'), null);
+});
+
+test('synthetic chat-bound mutation of captured SSR yields a partial store', () => {
+  const fixture = loadFixture('store-ssr-1005009452926938.json');
+  const partial = clone(fixture.fragment);
+  delete partial.props.url;
+  delete partial.props.subscribersCount;
+  delete partial.props.positiveReviews;
+  delete partial.props.subscribersCountFormatted;
+  delete partial.props.stats;
+  delete partial.props.subtitles;
+  delete partial.props.analytics;
+
+  assert.deepEqual(core.extractStoreFromSsrData({ moved: partial }, fixture.itemId), {
+    name: 'WLIN OOTD Store',
+    url: null,
+    storeId: null,
+    sellerId: '2677490623',
+    sellerRating: {
+      kind: 'positiveFeedbackPercentage', value: null, display: null,
+    },
+    subscribers: { value: null, display: null },
+  });
+});
+
+test('synthetic analytics-bound mutation of captured SSR yields a partial store', () => {
+  const fixture = loadFixture('store-ssr-1005009452926938.json');
+  const partial = clone(fixture.fragment);
+  delete partial.props.chatLink;
+  delete partial.props.subscribersCount;
+  delete partial.props.positiveReviews;
+  delete partial.props.subscribersCountFormatted;
+  delete partial.props.stats;
+  delete partial.props.subtitles;
+
+  assert.deepEqual(core.extractStoreFromSsrData({ moved: partial }, fixture.itemId), {
+    name: 'WLIN OOTD Store',
+    url: 'https://aliexpress.ru/store/1103330026',
+    storeId: '1103330026',
+    sellerId: '2677490623',
+    sellerRating: {
+      kind: 'positiveFeedbackPercentage', value: null, display: null,
+    },
+    subscribers: { value: null, display: null },
+  });
+});
+
+test('synthetic generic analytics widget without store evidence is not accepted', () => {
+  const itemId = '1005009452926938';
+  assert.equal(core.extractStoreFromSsrData({
+    widget: {
+      props: {
+        id: '2677490623',
+        name: 'Not proven store',
+        analytics: { something: { itemId } },
+      },
+    },
+  }, itemId), null);
+});
+
+test('captured Needles SSR store keeps plain subscribers and ignores unsupported store stats', () => {
+  const fixture = loadFixture('store-ssr-1005005933779962.json');
+  const store = core.extractStoreFromSsrData({ moved: { again: [fixture.fragment] } }, fixture.itemId);
+
+  assert.equal(store.name, 'Better off Store');
+  assert.equal(store.storeId, '1100036170');
+  assert.equal(store.sellerId, '2660067190');
+  assert.deepEqual(store.sellerRating, {
+    kind: 'positiveFeedbackPercentage', value: 94.09, display: "94,09% seller's rating",
+  });
+  assert.deepEqual(store.subscribers, { value: 320, display: '320 subscribers' });
+  assert.equal(JSON.stringify(store).includes("item's rating"), false);
+  assert.equal(JSON.stringify(store).includes('5K reviews'), false);
+  assert.equal(JSON.stringify(store).includes('Orders delivered'), false);
+  assert.equal(store.sellerRating.value, fixture.fragment.props.positiveReviews.percentages);
+  assert.notEqual(store.sellerRating.value, Number(fixture.fragment.props.positiveReviews.number));
+});
+
+test('SSR store candidates fail closed for mismatched item or conflicting seller IDs', () => {
+  const fixture = loadFixture('store-ssr-1005009452926938.json');
+  const mismatch = clone(fixture.fragment);
+  mismatch.props.chatLink = mismatch.props.chatLink.replace(fixture.itemId, '1005005933779962');
+  assert.equal(core.extractStoreFromSsrData({ mismatch }, fixture.itemId), null);
+
+  const noBinding = clone(fixture.fragment);
+  noBinding.props.chatLink = null;
+  noBinding.props.analytics.viewStoreTop.trackingInfo.itemId = '1005005933779962';
+  assert.equal(core.extractStoreFromSsrData({ noBinding }, fixture.itemId), null);
+
+  const conflictingSeller = clone(fixture.fragment);
+  conflictingSeller.props.chatLink = conflictingSeller.props.chatLink.replace('seller_id=2677490623', 'seller_id=999');
+  const store = core.extractStoreFromSsrData({ conflictingSeller }, fixture.itemId);
+  assert.equal(store.sellerId, null);
+  assert.equal(store.name, 'WLIN OOTD Store');
+});
+
+test('conflicting matched SSR store candidates fail closed instead of mixing stores', () => {
+  const fixture = loadFixture('store-ssr-1005009452926938.json');
+  const conflictingStore = clone(fixture.fragment);
+  conflictingStore.props.name = 'Conflicting Store';
+  conflictingStore.props.url = 'https://aliexpress.ru/store/999';
+
+  assert.equal(core.extractStoreFromSsrData({
+    first: fixture.fragment,
+    second: conflictingStore,
+  }, fixture.itemId), null);
+});
+
+test('store URL parsing uses only the confirmed aliexpress.ru /store/digits shape', () => {
+  assert.equal(core.storeIdFromUrl('https://aliexpress.ru/store/1103330026'), '1103330026');
+  assert.equal(core.storeIdFromUrl('https://aliexpress.ru/store/1103330026/'), '1103330026');
+  assert.equal(core.storeIdFromUrl('https://www.aliexpress.com/store/1103330026'), null);
+  assert.equal(core.storeIdFromUrl('https://aliexpress.ru/shop/1103330026'), null);
+  assert.equal(core.storeIdFromUrl('https://example.com/store/1103330026'), null);
+
+  const unknown = core.normalizeStore({ name: 'Observed store', url: 'https://example.com/actual-store' });
+  assert.equal(unknown.url, 'https://example.com/actual-store');
+  assert.equal(unknown.storeId, null);
+});
+
+test('captured DOM store extraction stays inside #storeInfo and ignores item rating and Megabonus', () => {
+  const fixture = loadFixture('store-dom-1005005933779962.json');
+  const megabonus = { textContent: "99% seller's rating 8K subscribers", href: 'https://aliexpress.ru/store/999' };
+  const root = syntheticStoreDom(fixture, { megabonusSentinel: megabonus });
+  const store = core.extractStoreFromDom(root, fixture.itemId, `https://aliexpress.ru/item/${fixture.itemId}.html`);
+
+  assert.deepEqual(store, {
+    name: 'Better off Store',
+    url: 'https://aliexpress.ru/store/1100036170',
+    storeId: '1100036170',
+    sellerId: '2660067190',
+    sellerRating: {
+      kind: 'positiveFeedbackPercentage', value: 94.09, display: "94,09% seller's rating",
+    },
+    subscribers: { value: 320, display: '320 subscribers' },
+  });
+  assert.equal(JSON.stringify(store).includes("item's rating"), false);
+  assert.equal(JSON.stringify(store).includes('999'), false);
+});
+
+test('scoped DOM chat seller fallback rejects a mismatched chat item', () => {
+  const fixture = loadFixture('store-dom-1005005933779962.json');
+  const mismatchedHref = fixture.chat.href.replace(fixture.itemId, '1005009452926938');
+  assert.equal(core.extractStoreFromDom(
+    syntheticStoreDom(fixture, { chatHref: mismatchedHref }),
+    fixture.itemId,
+    `https://aliexpress.ru/item/${fixture.itemId}.html`,
+  ), null);
+  const partial = core.extractStoreFromDom(
+    syntheticStoreDom(fixture, { missingChat: true }),
+    fixture.itemId,
+    `https://aliexpress.ru/item/${fixture.itemId}.html`,
+  );
+  assert.equal(partial.sellerId, null);
+  assert.equal(partial.name, 'Better off Store');
+});
+
+test('store normalization preserves zeros, supports partial data, and returns null for total absence', () => {
+  assert.deepEqual(core.normalizeStore({
+    sellerRating: { value: 0, display: "0% seller's rating" },
+    subscribers: { value: '0', display: '0 subscribers' },
+  }), {
+    name: null,
+    url: null,
+    storeId: null,
+    sellerId: null,
+    sellerRating: {
+      kind: 'positiveFeedbackPercentage', value: 0, display: "0% seller's rating",
+    },
+    subscribers: { value: 0, display: '0 subscribers' },
+  });
+  assert.equal(core.normalizeStore({}), null);
+  assert.equal(core.normalizeStore(null), null);
+});
+
+test('store field merge keeps raw SSR subscribers with trusted rounded DOM display', () => {
+  const structured = core.normalizeStore({
+    name: 'Structured Store',
+    sellerRating: { value: 84.98 },
+    subscribers: { value: 2919 },
+  });
+  const dom = core.normalizeStore({
+    name: 'DOM Store',
+    url: 'https://aliexpress.ru/store/1103330026',
+    sellerId: '2677490623',
+    sellerRating: { value: 84.98, display: "84,98% seller's rating" },
+    subscribers: { value: 3000, display: '3K subscribers' },
+  });
+  const merged = core.mergeStore(structured, dom);
+  assert.equal(merged.name, 'Structured Store');
+  assert.equal(merged.storeId, '1103330026');
+  assert.equal(merged.sellerRating.display, "84,98% seller's rating");
+  assert.equal(merged.subscribers.value, 2919);
+  assert.equal(merged.subscribers.display, '3K subscribers');
+});
+
+test('store field merge keeps seller-rating conflict protection separate from subscribers', () => {
+  const structured = core.normalizeStore({
+    sellerRating: { value: 84.98 },
+    subscribers: { value: 2919 },
+  });
+  const conflictingDom = core.normalizeStore({
+    sellerRating: { value: 91.63, display: "91,63% seller's rating" },
+    subscribers: { value: 3000, display: '3K subscribers' },
+  });
+  const merged = core.mergeStore(structured, conflictingDom);
+
+  assert.deepEqual(merged.sellerRating, {
+    kind: 'positiveFeedbackPercentage', value: 84.98, display: null,
+  });
+  assert.deepEqual(merged.subscribers, { value: 2919, display: '3K subscribers' });
+});
+
+test('store enrichment is reference-stable and preserves all existing normalized fields', () => {
+  const productFixture = loadFixture('product-1005009452926938.json');
+  const galleryFixture = loadFixture('gallery-1005005933779962.json');
+  const storeFixture = loadFixture('store-ssr-1005009452926938.json');
+  const pageUrl = 'https://aliexpress.ru/item/1005009452926938.html?sku_id=12000049151727540';
+  const product = core.normalizeProduct(productFixture.data, pageUrl);
+  product.gallery = core.normalizeGallery(galleryFixture.props.gallery, 'ssr:__AER_DATA__');
+  product.ratingSummary = { rating: 4.6, reviewCount: 36, boughtCount: 414, display: {} };
+  product.characteristics = [{ name: 'Material', value: 'Cotton' }];
+  product.description = { source: 'dom', rawHtml: '<p>Seller text</p>', blocks: [{ type: 'text', text: 'Seller text' }] };
+  product.delivery = { productId: product.itemId, skuId: product.selectedSkuId, methods: [] };
+  const references = {
+    gallery: product.gallery,
+    ratingSummary: product.ratingSummary,
+    characteristics: product.characteristics,
+    description: product.description,
+    delivery: product.delivery,
+    selectedSku: product.selectedSku,
+    price: product.price,
+  };
+  const store = core.extractStoreFromSsrData(storeFixture.fragment, storeFixture.itemId);
+  const enriched = core.enrichProductFallbacks(product, { structuredStore: store });
+
+  assert.equal(enriched.store.name, 'WLIN OOTD Store');
+  Object.entries(references).forEach(([field, value]) => assert.equal(enriched[field], value));
+  assert.equal(core.enrichProductFallbacks(enriched, { structuredStore: clone(store) }), enriched);
+  assert.match(core.exportProduct(enriched), /"store": \{/);
+  assert.match(core.exportForChatGPT(enriched), /STORE \/ SELLER:\nStore: WLIN OOTD Store/);
+});
+
+test('same-item productData refresh and SKU switch preserve store while stale old-item DOM is rejected', () => {
+  const productFixture = loadFixture('product-1005009452926938.json');
+  const storeFixture = loadFixture('store-ssr-1005009452926938.json');
+  const store = core.extractStoreFromSsrData(storeFixture.fragment, storeFixture.itemId);
+  const initial = core.updateStore(core.normalizeProduct(
+    productFixture.data,
+    'https://aliexpress.ru/item/1005009452926938.html?sku_id=12000049151727540',
+  ), store);
+  const refreshed = core.updateStore(core.normalizeProduct(
+    productFixture.data,
+    'https://aliexpress.ru/item/1005009452926938.html',
+  ), initial.store);
+  const switched = core.updateSelectedSku(initial, 'https://aliexpress.ru/item/1005009452926938.html?sku_id=12000049151727530');
+  const oldBoundary = { sentinel: 'old store boundary' };
+
+  assert.deepEqual(refreshed.store, initial.store);
+  assert.equal(switched.store, initial.store);
+  assert.equal(core.isStaleStore(oldBoundary, clone(store), oldBoundary, store), true);
+  assert.equal(core.isStaleStore({ sentinel: 'new boundary' }, clone(store), oldBoundary, store), false);
+  assert.equal(core.extractStoreFromSsrData(storeFixture.fragment, '1005005933779962'), null);
+});
+
+test('ChatGPT store section handles full, zero, and absent store without item-rating leakage', () => {
+  const productFixture = loadFixture('product-1005009452926938.json');
+  const storeFixture = loadFixture('store-ssr-1005009452926938.json');
+  const product = core.normalizeProduct(productFixture.data, 'https://aliexpress.ru/item/1005009452926938.html');
+  product.store = core.extractStoreFromSsrData(storeFixture.fragment, storeFixture.itemId);
+  const output = core.exportForChatGPT(product);
+  assert.match(output, /RATING & TRADE:[\s\S]*STORE \/ SELLER:\nStore: WLIN OOTD Store[\s\S]*Seller rating value: 84\.98%[\s\S]*Subscribers value: 2919\n\nDELIVERY:/);
+  assert.doesNotMatch(output, /item's rating|4,4 item's rating/);
+
+  product.store = core.normalizeStore({ sellerRating: { value: 0 }, subscribers: { value: 0 } });
+  assert.match(core.exportForChatGPT(product), /Seller rating value: 0%[\s\S]*Subscribers value: 0/);
+  product.store = null;
+  assert.match(core.exportForChatGPT(product), /STORE \/ SELLER:\n—\n\nDELIVERY:/);
 });
 
 test('captured dress fragment preserves four images before heading text inside one h1', () => {

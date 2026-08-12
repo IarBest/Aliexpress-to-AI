@@ -1,0 +1,54 @@
+{
+  "sourceKind": "live #__AER_DATA__ observation",
+  "observedAt": "2026-08-12",
+  "itemId": "1005005933779962",
+  "observedPath": "$.widgets.0.children.0.children.0.children.0.children.0.children.0.children.0.children.0.children.0.children.0.props",
+  "fragment": {
+    "props": {
+      "name": "Better off Store",
+      "url": "https://aliexpress.ru/store/1100036170",
+      "id": "2660067190",
+      "subscribersCount": "320",
+      "chatLink": "https://aliexpress.ru/chat?entry_point=Pdp&type=bs&item_id=1005005933779962&seller_id=2660067190&sku_id=12000034911006412",
+      "positiveReviews": {
+        "number": "0",
+        "percentages": 94.09,
+        "percentagesFormatted": ""
+      },
+      "subscribersCountFormatted": "",
+      "stats": [
+        {
+          "description": "5K reviews were left for 864 items",
+          "type": 1,
+          "value": "4,7"
+        },
+        {
+          "description": "Orders delivered \nin 4 years and 7 months",
+          "type": 0,
+          "value": "5 348"
+        }
+      ],
+      "subtitles": [
+        {
+          "type": 0,
+          "value": "94,09% seller's rating"
+        },
+        {
+          "type": 1,
+          "value": "320 subscribers"
+        },
+        {
+          "type": 2,
+          "value": "4,7 item's rating"
+        }
+      ],
+      "analytics": {
+        "viewStoreTop": {
+          "trackingInfo": {
+            "itemId": "1005005933779962"
+          }
+        }
+      }
+    }
+  }
+}

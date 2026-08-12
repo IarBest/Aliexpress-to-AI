@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ali Helper
 // @namespace    https://github.com/local/ali-helper
-// @version      0.1.7
+// @version      0.1.8
 // @description  Read-only AliExpress URL cleaner and product/variant exporter
 // @match        https://aliexpress.ru/item/*
 // @match        https://www.aliexpress.com/item/*
@@ -18,7 +18,7 @@
 (function factory(root) {
   'use strict';
 
-  const VERSION = '0.1.7';
+  const VERSION = '0.1.8';
   const SETTINGS_KEY = 'ali-helper:settings:v1';
   const CHARACTERISTICS_BOUNDARY_SELECTOR = '[class*="HazeProductCharacteristics__groupsContainerForSku"]';
   const CHARACTERISTICS_ITEM_SELECTOR = '[class*="HazeProductCharacteristics__itemForSku"]';
@@ -29,6 +29,12 @@
   const PRODUCT_RATING_SELECTOR = '[class*="HazeProductDescription__ratingWrap"]';
   const PRODUCT_REVIEW_COUNT_SELECTOR = 'a[href="#reviews_anchor"]';
   const PRODUCT_BOUGHT_COUNT_SELECTOR = '[class*="HazeProductDescription__buyCounter"]';
+  const STORE_BOUNDARY_SELECTOR = '#storeInfo';
+  const STORE_HEADER_SELECTOR = '[data-testid="store_header"]';
+  const STORE_TITLE_SELECTOR = '[class*="RedStoreInfo_Header__title__"]';
+  const STORE_HEADER_LINK_SELECTOR = 'a[class*="RedStoreInfo_Header__headerContainer__"][href]';
+  const STORE_STAT_SELECTOR = '[class*="RedStoreInfo_StatItem__statItem__"]';
+  const STORE_CHAT_BUTTON_SELECTOR = '[data-testid="seller_chat_btn"]';
   const DESCRIPTION_BOUNDARY_SELECTOR = '#content_anchor';
   const DESCRIPTION_IGNORED_TAGS = new Set(['script', 'style', 'noscript', 'template']);
   const DESCRIPTION_BLOCK_TAGS = new Set([
@@ -601,6 +607,285 @@
     return Number.isSafeInteger(count) && count >= 0 ? count : null;
   }
 
+  function parseLocalizedPercentage(value) {
+    if (value === null || value === undefined || value === '') return null;
+    if (typeof value === 'number') return Number.isFinite(value) && value >= 0 && value <= 100 ? value : null;
+    if (typeof value !== 'string') return null;
+    const match = value.trim().match(/^(\d+(?:[.,]\d+)?)\s*%?$/);
+    if (!match) return null;
+    const percentage = Number(match[1].replace(',', '.'));
+    return Number.isFinite(percentage) && percentage >= 0 && percentage <= 100 ? percentage : null;
+  }
+
+  function safeHttpUrl(value, baseUrl) {
+    if (typeof value !== 'string' || value !== value.trim() || !value) return null;
+    try {
+      const url = new URL(value, baseUrl);
+      return /^https?:$/.test(url.protocol) ? value : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function storeIdFromUrl(value) {
+    const input = safeHttpUrl(value);
+    if (!input) return null;
+    try {
+      const url = new URL(input);
+      return url.hostname.toLowerCase() === 'aliexpress.ru'
+        ? url.pathname.match(/^\/store\/(\d+)\/?$/)?.[1] || null
+        : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function decimalId(value) {
+    const text = asString(value)?.trim();
+    return text && /^\d+$/.test(text) ? text : null;
+  }
+
+  function emptyStore() {
+    return {
+      name: null,
+      url: null,
+      storeId: null,
+      sellerId: null,
+      sellerRating: { kind: 'positiveFeedbackPercentage', value: null, display: null },
+      subscribers: { value: null, display: null },
+    };
+  }
+
+  function normalizeStore(input) {
+    if (!input || typeof input !== 'object') return null;
+    const store = emptyStore();
+    store.name = normalizeHumanText(input.name) || null;
+    store.url = safeHttpUrl(input.url);
+    store.storeId = storeIdFromUrl(store.url);
+    store.sellerId = decimalId(input.sellerId);
+    store.sellerRating.value = parseLocalizedPercentage(input.sellerRating?.value);
+    store.sellerRating.display = normalizeHumanText(input.sellerRating?.display) || null;
+    store.subscribers.value = parseLocalizedCount(input.subscribers?.value);
+    store.subscribers.display = normalizeHumanText(input.subscribers?.display) || null;
+    const hasValue = store.name || store.url || store.sellerId
+      || store.sellerRating.value !== null || store.sellerRating.display
+      || store.subscribers.value !== null || store.subscribers.display;
+    return hasValue ? store : null;
+  }
+
+  function parseStoreChatLink(value, expectedItemId, pageUrl) {
+    if (value && typeof value === 'object') {
+      const itemId = asString(firstDefined(value.item_id, value.itemId));
+      return itemId === asString(expectedItemId)
+        ? { itemId, sellerId: decimalId(firstDefined(value.seller_id, value.sellerId)) }
+        : null;
+    }
+    const input = safeHttpUrl(value, pageUrl || 'https://aliexpress.ru/');
+    if (!input) return null;
+    try {
+      const url = new URL(input, pageUrl || 'https://aliexpress.ru/');
+      if (!isAliExpressHostname(url.hostname)) return null;
+      const itemId = url.searchParams.get('item_id');
+      return itemId === asString(expectedItemId)
+        ? { itemId, sellerId: decimalId(url.searchParams.get('seller_id')) }
+        : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function hasMismatchedStoreChatItem(value, expectedItemId, pageUrl) {
+    if (!value) return false;
+    if (typeof value === 'object') {
+      const itemId = asString(firstDefined(value.item_id, value.itemId));
+      return Boolean(itemId && itemId !== asString(expectedItemId));
+    }
+    try {
+      const url = new URL(value, pageUrl || 'https://aliexpress.ru/');
+      const itemId = url.searchParams.get('item_id');
+      return Boolean(itemId && itemId !== asString(expectedItemId));
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function containsExpectedStoreItem(rootValue, expectedItemId, limits = {}) {
+    const itemId = asString(expectedItemId);
+    if (!rootValue || !itemId) return false;
+    const maxDepth = limits.maxDepth || 12;
+    const maxVisited = limits.maxVisited || 3000;
+    const seen = new WeakSet();
+    const stack = [{ value: rootValue, depth: 0 }];
+    let visited = 0;
+    while (stack.length && visited < maxVisited) {
+      const current = stack.pop();
+      const value = current.value;
+      if (!value || typeof value !== 'object' || seen.has(value) || current.depth > maxDepth) continue;
+      seen.add(value);
+      visited += 1;
+      for (const [key, child] of Object.entries(value)) {
+        if (/^item_?id$/i.test(key) && asString(child) === itemId) return true;
+        if (child && typeof child === 'object') stack.push({ value: child, depth: current.depth + 1 });
+      }
+    }
+    return false;
+  }
+
+  function subtitleValue(props, type) {
+    const matches = (Array.isArray(props?.subtitles) ? props.subtitles : [])
+      .filter((subtitle) => subtitle?.type === type)
+      .map((subtitle) => normalizeHumanText(subtitle.value))
+      .filter(Boolean);
+    return matches.length === 1 ? matches[0] : null;
+  }
+
+  function storeFromSsrProps(props, expectedItemId) {
+    if (!props || typeof props !== 'object' || Array.isArray(props)) return null;
+    if (hasMismatchedStoreChatItem(props.chatLink, expectedItemId)) return null;
+    const chat = parseStoreChatLink(props.chatLink, expectedItemId);
+    const analyticsMatched = containsExpectedStoreItem(props.analytics, expectedItemId);
+    if (!chat && !analyticsMatched) return null;
+    const subtitles = Array.isArray(props.subtitles) ? props.subtitles : [];
+    const hasStoreEvidence = Boolean(chat)
+      || Boolean(storeIdFromUrl(props.url))
+      || Object.prototype.hasOwnProperty.call(props, 'positiveReviews')
+      || Object.prototype.hasOwnProperty.call(props, 'subscribersCount')
+      || subtitles.some((subtitle) => subtitle?.type === 0 || subtitle?.type === 1);
+    if (!hasStoreEvidence) return null;
+    const propsSellerId = decimalId(props.id);
+    const sellerId = propsSellerId && chat?.sellerId && propsSellerId !== chat.sellerId
+      ? null
+      : propsSellerId || chat?.sellerId || null;
+    const sellerDisplay = subtitleValue(props, 0);
+    const subscriberDisplay = subtitleValue(props, 1);
+    return normalizeStore({
+      name: props.name,
+      url: props.url,
+      sellerId,
+      sellerRating: {
+        value: parseLocalizedPercentage(props.positiveReviews?.percentages),
+        display: /seller's rating/i.test(sellerDisplay || '') ? sellerDisplay : null,
+      },
+      subscribers: {
+        value: parseLocalizedCount(props.subscribersCount),
+        display: /subscribers/i.test(subscriberDisplay || '') ? subscriberDisplay : null,
+      },
+    });
+  }
+
+  function storesEqual(left, right) {
+    if (left === right) return true;
+    if (!left || !right) return false;
+    return left.name === right.name && left.url === right.url && left.storeId === right.storeId
+      && left.sellerId === right.sellerId
+      && left.sellerRating?.kind === right.sellerRating?.kind
+      && left.sellerRating?.value === right.sellerRating?.value
+      && left.sellerRating?.display === right.sellerRating?.display
+      && left.subscribers?.value === right.subscribers?.value
+      && left.subscribers?.display === right.subscribers?.display;
+  }
+
+  function extractStoreFromSsrData(rootValue, expectedItemId, limits = {}) {
+    const itemId = asString(expectedItemId);
+    if (!itemId) return null;
+    const maxDepth = limits.maxDepth || 40;
+    const maxVisited = limits.maxVisited || 30000;
+    const seen = new WeakSet();
+    const stack = [{ value: rootValue, depth: 0 }];
+    const candidates = [];
+    let visited = 0;
+    while (stack.length && visited < maxVisited) {
+      const current = stack.pop();
+      const value = current.value;
+      if (!value || typeof value !== 'object' || seen.has(value) || current.depth > maxDepth) continue;
+      seen.add(value);
+      visited += 1;
+      if (!Array.isArray(value) && value.props && typeof value.props === 'object') {
+        const candidate = storeFromSsrProps(value.props, itemId);
+        if (candidate) candidates.push(candidate);
+      }
+      for (const child of Object.values(value)) {
+        if (child && typeof child === 'object') stack.push({ value: child, depth: current.depth + 1 });
+      }
+    }
+    if (!candidates.length) return null;
+    const first = candidates[0];
+    return candidates.every((candidate) => storesEqual(first, candidate)) ? first : null;
+  }
+
+  function findStoreBoundary(rootNode) {
+    if (!rootNode) return null;
+    if (typeof rootNode.matches === 'function' && rootNode.matches(STORE_BOUNDARY_SELECTOR)) return rootNode;
+    return typeof rootNode.querySelector === 'function' ? rootNode.querySelector(STORE_BOUNDARY_SELECTOR) : null;
+  }
+
+  function extractStoreFromDom(rootNode, expectedItemId, pageUrl) {
+    const boundary = findStoreBoundary(rootNode);
+    if (!boundary) return null;
+    const header = boundary.querySelector?.(STORE_HEADER_SELECTOR);
+    const chatButton = boundary.querySelector?.(STORE_CHAT_BUTTON_SELECTOR);
+    const chatAnchor = chatButton?.closest?.('a[href]');
+    const chatHref = chatAnchor?.getAttribute?.('href') || chatAnchor?.href || null;
+    if (chatHref && !parseStoreChatLink(chatHref, expectedItemId, pageUrl)) return null;
+    const chat = parseStoreChatLink(chatHref, expectedItemId, pageUrl);
+    const title = header?.querySelector?.(STORE_TITLE_SELECTOR);
+    const storeAnchor = title?.closest?.('a[href]') || header?.querySelector?.(STORE_HEADER_LINK_SELECTOR);
+    const statTexts = Array.from(header?.querySelectorAll?.(STORE_STAT_SELECTOR) || [])
+      .map((element) => normalizeHumanText(element?.innerText ?? element?.textContent))
+      .filter(Boolean);
+    const sellerRatingDisplay = statTexts.find((text) => /^\d+(?:[.,]\d+)?\s*%\s*seller's rating$/i.test(text)) || null;
+    const subscribersDisplay = statTexts.find((text) => /^\d+(?:[.,]\d+)?\s*[Kk]?\+?\s+subscribers$/i.test(text)) || null;
+    return normalizeStore({
+      name: title?.innerText ?? title?.textContent,
+      url: storeAnchor?.getAttribute?.('href') || storeAnchor?.href || null,
+      sellerId: chat?.sellerId,
+      sellerRating: {
+        value: sellerRatingDisplay ? parseLocalizedPercentage(sellerRatingDisplay.match(/^\d+(?:[.,]\d+)?\s*%/)?.[0]) : null,
+        display: sellerRatingDisplay,
+      },
+      subscribers: {
+        value: parseLocalizedCount(subscribersDisplay),
+        display: subscribersDisplay,
+      },
+    });
+  }
+
+  function mergeStore(structured, dom) {
+    if (!structured && !dom) return null;
+    const structuredRating = structured?.sellerRating;
+    const domRating = dom?.sellerRating;
+    const ratingValue = structuredRating?.value ?? domRating?.value ?? null;
+    const ratingConflict = structuredRating?.value !== null && structuredRating?.value !== undefined
+      && domRating?.value !== null && domRating?.value !== undefined
+      && structuredRating.value !== domRating.value;
+    const sellerRating = {
+      value: ratingValue,
+      display: structuredRating?.display ?? (ratingConflict ? null : domRating?.display) ?? null,
+    };
+    const subscribers = {
+      value: structured?.subscribers?.value ?? dom?.subscribers?.value ?? null,
+      display: structured?.subscribers?.display ?? dom?.subscribers?.display ?? null,
+    };
+    return normalizeStore({
+      name: structured?.name ?? dom?.name,
+      url: structured?.url ?? dom?.url,
+      sellerId: structured?.sellerId ?? dom?.sellerId,
+      sellerRating,
+      subscribers,
+    });
+  }
+
+  function updateStore(product, patch) {
+    if (!product || !patch) return product;
+    const next = mergeStore(patch, product.store);
+    if (storesEqual(product.store, next)) return product;
+    return { ...product, store: next };
+  }
+
+  function isStaleStore(boundary, store, staleBoundary, staleStore) {
+    return Boolean(boundary && boundary === staleBoundary && storesEqual(store, staleStore));
+  }
+
   function emptyRatingSummary() {
     return {
       rating: null,
@@ -735,6 +1020,7 @@
       updatedProduct,
       mergeRatingSummary(sources.structuredRating, sources.domRating),
     );
+    updatedProduct = updateStore(updatedProduct, mergeStore(sources.structuredStore, sources.domStore));
     updatedProduct = updateCharacteristics(updatedProduct, sources.characteristics);
     updatedProduct = updateDescription(updatedProduct, sources.description);
     return updatedProduct;
@@ -1056,6 +1342,22 @@
     ].join('\n');
   }
 
+  function formatStore(store) {
+    if (!store) return '—';
+    const ratingValue = store.sellerRating?.value;
+    const subscriberValue = store.subscribers?.value;
+    return [
+      `Store: ${store.name || '—'}`,
+      `Store URL: ${store.url || '—'}`,
+      `Store ID: ${store.storeId || '—'}`,
+      `Seller ID: ${store.sellerId || '—'}`,
+      `Seller rating: ${store.sellerRating?.display || '—'}`,
+      `Seller rating value: ${ratingValue === null || ratingValue === undefined ? '—' : `${ratingValue}%`}`,
+      `Subscribers: ${store.subscribers?.display || '—'}`,
+      `Subscribers value: ${subscriberValue ?? '—'}`,
+    ].join('\n');
+  }
+
   function exportVariants(product) {
     const combinations = product.skus.map((sku) => [
       `SKU ${sku.skuId}`,
@@ -1103,6 +1405,9 @@
       '',
       'RATING & TRADE:',
       formatRatingSummary(product.ratingSummary),
+      '',
+      'STORE / SELLER:',
+      formatStore(product.store),
       '',
       'DELIVERY:',
       formatDelivery(product.delivery),
@@ -1156,6 +1461,19 @@
     updateGallery,
     parseLocalizedRating,
     parseLocalizedCount,
+    parseLocalizedPercentage,
+    storeIdFromUrl,
+    normalizeStore,
+    parseStoreChatLink,
+    containsExpectedStoreItem,
+    storeFromSsrProps,
+    extractStoreFromSsrData,
+    findStoreBoundary,
+    extractStoreFromDom,
+    mergeStore,
+    storesEqual,
+    updateStore,
+    isStaleStore,
     extractBasicRatingFromSsrData,
     findProductHeaderBoundary,
     extractBasicRatingFromDom,
@@ -1183,6 +1501,7 @@
     formatProductStatus,
     formatDelivery,
     formatRatingSummary,
+    formatStore,
     formatGallery,
     formatDescription,
     isShippingCalculateUrl,
@@ -1355,6 +1674,15 @@
     }
   }
 
+  function findStoreInSsr(expectedItemId, script = document.querySelector('#__AER_DATA__')) {
+    if (!script) return null;
+    try {
+      return extractStoreFromSsrData(JSON.parse(script.textContent || ''), expectedItemId);
+    } catch (_) {
+      return null;
+    }
+  }
+
   function findInReact() {
     const roots = document.querySelectorAll('[class*="HazeProduct"], [class*="SnowProduct"], [class*="SnowSku"], #root, #__next');
     for (const element of roots) {
@@ -1505,6 +1833,13 @@
       ratingDomSummary: null,
       staleRatingBoundary: null,
       staleRatingDomSummary: null,
+      storeSsrScript: null,
+      storeSsrItemId: null,
+      storeSsr: null,
+      storeBoundary: null,
+      storeDom: null,
+      staleStoreBoundary: null,
+      staleStoreDom: null,
       refreshProductEnrichment: null,
     };
     const acceptProductData = (data, meta) => {
@@ -1517,6 +1852,7 @@
         runtime.product = updateCharacteristics(runtime.product, previousProduct?.characteristics);
         runtime.product = updateDescription(runtime.product, previousProduct?.description);
         runtime.product = updateRatingSummary(runtime.product, previousProduct?.ratingSummary);
+        runtime.product = updateStore(runtime.product, previousProduct?.store);
         runtime.product = applyCachedDelivery(runtime.product, runtime.deliveryCache, runtime.shippingEnvironment);
         runtime.ui?.setProduct(runtime.product);
       } catch (error) {
@@ -1567,6 +1903,12 @@
         runtime.gallerySsrItemId = runtime.itemId;
         runtime.gallerySsr = findGalleryInSsr(runtime.itemId, ssrScript);
       }
+      if (runtime.itemId === runtime.initialItemId
+        && (runtime.storeSsrItemId !== runtime.itemId || runtime.storeSsrScript !== ssrScript)) {
+        runtime.storeSsrScript = ssrScript;
+        runtime.storeSsrItemId = runtime.itemId;
+        runtime.storeSsr = findStoreInSsr(runtime.itemId, ssrScript);
+      }
 
       const ratingBoundary = findProductHeaderBoundary(document);
       const domRating = extractBasicRatingFromDom(document);
@@ -1582,6 +1924,22 @@
         runtime.ratingDomSummary = currentDomRating;
         runtime.staleRatingBoundary = null;
         runtime.staleRatingDomSummary = null;
+      }
+
+      const storeBoundary = findStoreBoundary(document);
+      const domStore = extractStoreFromDom(document, runtime.itemId, location.href);
+      const staleStore = isStaleStore(
+        storeBoundary,
+        domStore,
+        runtime.staleStoreBoundary,
+        runtime.staleStoreDom,
+      );
+      const currentDomStore = staleStore ? null : domStore;
+      if (currentDomStore) {
+        runtime.storeBoundary = storeBoundary;
+        runtime.storeDom = currentDomStore;
+        runtime.staleStoreBoundary = null;
+        runtime.staleStoreDom = null;
       }
 
       const characteristicsBoundary = findCharacteristicsBoundary(document);
@@ -1615,6 +1973,8 @@
         structuredGallery: runtime.gallerySsr,
         structuredRating: runtime.ratingSsrSummary,
         domRating: currentDomRating,
+        structuredStore: runtime.storeSsr,
+        domStore: currentDomStore,
         characteristics: currentCharacteristics,
         description: currentDescription,
       });
@@ -1647,6 +2007,13 @@
           runtime.ratingSsrScript = null;
           runtime.ratingSsrItemId = null;
           runtime.ratingSsrSummary = null;
+          runtime.storeSsrScript = null;
+          runtime.storeSsrItemId = null;
+          runtime.storeSsr = null;
+          runtime.staleStoreBoundary = runtime.storeBoundary;
+          runtime.staleStoreDom = runtime.storeDom;
+          runtime.storeBoundary = null;
+          runtime.storeDom = null;
           runtime.itemId = nextItemId;
           runtime.product = null;
           runtime.shippingCapture = null;

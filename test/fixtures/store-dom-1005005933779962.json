@@ -1,0 +1,40 @@
+{
+  "sourceKind": "live DOM observation",
+  "observedAt": "2026-08-12",
+  "itemId": "1005005933779962",
+  "boundary": {
+    "id": "storeInfo",
+    "data-mobile-nav-id": "Seller"
+  },
+  "header": {
+    "className": "RedStoreInfo_Header__wrapper__1gc1b",
+    "testId": "store_header",
+    "storeHref": "https://aliexpress.ru/store/1100036170",
+    "title": {
+      "tagName": "H5",
+      "className": "RedStoreInfo_Header__title__1gc1b",
+      "text": "Better off Store"
+    },
+    "stats": [
+      {
+        "className": "RedStoreInfo_StatItem__statItem__1oblp",
+        "childTags": ["SPAN"],
+        "text": "94,09% seller's rating"
+      },
+      {
+        "className": "RedStoreInfo_StatItem__statItem__1oblp",
+        "childTags": ["SPAN"],
+        "text": "320 subscribers"
+      },
+      {
+        "className": "RedStoreInfo_StatItem__statItem__1oblp",
+        "childTags": ["svg", "SPAN"],
+        "text": "4,7 item's rating"
+      }
+    ]
+  },
+  "chat": {
+    "testId": "seller_chat_btn",
+    "href": "https://aliexpress.ru/chat?entry_point=Pdp&type=bs&item_id=1005005933779962&seller_id=2660067190&sku_id=12000034911006412"
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "sourceKind": "live #__AER_DATA__ observation",
+  "observedAt": "2026-08-12",
+  "itemId": "1005009452926938",
+  "observedPath": "$.widgets.0.children.0.children.0.children.0.children.0.children.0.children.0.children.0.children.0.children.0.props",
+  "fragment": {
+    "props": {
+      "name": "WLIN OOTD Store",
+      "url": "https://aliexpress.ru/store/1103330026",
+      "id": "2677490623",
+      "subscribersCount": "2919",
+      "chatLink": "https://aliexpress.ru/chat?entry_point=Pdp&type=bs&item_id=1005009452926938&seller_id=2677490623&sku_id=12000049151727540",
+      "positiveReviews": {
+        "number": "0",
+        "percentages": 84.98,
+        "percentagesFormatted": ""
+      },
+      "subscribersCountFormatted": "",
+      "stats": [
+        {
+          "description": "3K reviews were left for 685 items",
+          "type": 1,
+          "value": "4,4"
+        },
+        {
+          "description": "Orders delivered \nin 2 years and 8 months",
+          "type": 0,
+          "value": "11 262"
+        }
+      ],
+      "subtitles": [
+        {
+          "type": 0,
+          "value": "84,98% seller's rating"
+        },
+        {
+          "type": 1,
+          "value": "3K subscribers"
+        },
+        {
+          "type": 2,
+          "value": "4,4 item's rating"
+        }
+      ],
+      "analytics": {
+        "viewStoreTop": {
+          "trackingInfo": {
+            "itemId": "1005009452926938"
+          }
+        }
+      }
+    }
+  }
+}
