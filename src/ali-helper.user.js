@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ali Helper
 // @namespace    https://github.com/local/ali-helper
-// @version      0.1.9
+// @version      0.1.10
 // @description  Read-only AliExpress URL cleaner and product/variant exporter
 // @match        https://aliexpress.ru/item/*
 // @match        https://www.aliexpress.com/item/*
@@ -18,7 +18,7 @@
 (function factory(root) {
   'use strict';
 
-  const VERSION = '0.1.9';
+  const VERSION = '0.1.10';
   const SETTINGS_KEY = 'ali-helper:settings:v1';
   const CHARACTERISTICS_BOUNDARY_SELECTOR = '[class*="HazeProductCharacteristics__groupsContainerForSku"]';
   const CHARACTERISTICS_ITEM_SELECTOR = '[class*="HazeProductCharacteristics__itemForSku"]';
@@ -90,6 +90,26 @@
     try {
       const url = input instanceof URL ? input : new URL(input);
       return url.pathname.match(/^\/item\/(\d+)(?:\.html)?\/?$/i)?.[1] || null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function isReviewsPage(input) {
+    try {
+      const url = input instanceof URL ? input : new URL(input);
+      return /(^|\.)aliexpress\.(ru|com)$/i.test(url.hostname)
+        && /^\/item\/\d+\/reviews\/?$/i.test(url.pathname);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function getReviewsItemId(input) {
+    try {
+      const url = input instanceof URL ? input : new URL(input);
+      if (!/(^|\.)aliexpress\.(ru|com)$/i.test(url.hostname)) return null;
+      return url.pathname.match(/^\/item\/(\d+)\/reviews\/?$/i)?.[1] || null;
     } catch (_) {
       return null;
     }
@@ -591,6 +611,172 @@
   function updateGallery(product, gallery) {
     if (!product || !gallery || galleriesEqual(product.gallery, gallery)) return product;
     return { ...product, gallery };
+  }
+
+  function nullableString(value) {
+    return value === null || value === undefined ? null : (typeof value === 'string' ? value : undefined);
+  }
+
+  function normalizeReviewId(value) {
+    if (typeof value === 'string' && value) return value;
+    if (typeof value === 'number' && Number.isSafeInteger(value)) return String(value);
+    return null;
+  }
+
+  function normalizeReviewUrl(value) {
+    if (value === null || value === undefined) return null;
+    return validGalleryUrl(value) || undefined;
+  }
+
+  function normalizeReviewGrade(value) {
+    if (value === null || value === undefined) return null;
+    return Number.isInteger(value) && value >= 1 && value <= 5 ? value : undefined;
+  }
+
+  function normalizeReviewImage(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    const id = normalizeReviewId(raw.id);
+    const url = normalizeReviewUrl(raw.url);
+    return id && url ? { id, url } : null;
+  }
+
+  function normalizeReviewComment(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    const id = normalizeReviewId(raw.id);
+    const authorDisplayName = nullableString(raw.commenterName);
+    const authorInitials = nullableString(raw.commenterInitials);
+    const authorAvatarUrl = normalizeReviewUrl(raw.commenterAvatar);
+    const dateRaw = nullableString(raw.date);
+    const text = nullableString(raw.text);
+    const originalText = nullableString(raw.originalText);
+    if (!id || [authorDisplayName, authorInitials, authorAvatarUrl, dateRaw, text, originalText].includes(undefined)) return null;
+    return { id, authorDisplayName, authorInitials, authorAvatarUrl, dateRaw, text, originalText };
+  }
+
+  function normalizeReviewPart(raw, requireId = false) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)
+      || !Array.isArray(raw.images) || !Array.isArray(raw.comments)) return null;
+    const id = normalizeReviewId(raw.id);
+    const dateRaw = nullableString(raw.date);
+    const grade = normalizeReviewGrade(raw.grade);
+    const text = nullableString(raw.text);
+    const originalText = nullableString(raw.originalText);
+    const images = raw.images.map(normalizeReviewImage);
+    const comments = raw.comments.map(normalizeReviewComment);
+    if ((requireId && !id) || [dateRaw, grade, text, originalText].includes(undefined)
+      || images.includes(null) || comments.includes(null)) return null;
+    return { id, dateRaw, grade, text, originalText, images, comments };
+  }
+
+  function normalizeReviewRecord(raw, expectedItemId) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)
+      || !raw.product || typeof raw.product !== 'object' || Array.isArray(raw.product)
+      || !raw.reviewer || typeof raw.reviewer !== 'object' || Array.isArray(raw.reviewer)
+      || !raw.root || typeof raw.root !== 'object' || Array.isArray(raw.root)
+      || !raw.interaction || typeof raw.interaction !== 'object' || Array.isArray(raw.interaction)
+      || !Object.prototype.hasOwnProperty.call(raw, 'additional')) return null;
+    const productId = normalizeReviewId(raw.product.id);
+    const id = normalizeReviewId(raw.root.id);
+    const skuProperties = nullableString(raw.product.skuProperties);
+    const displayName = nullableString(raw.reviewer.name);
+    const initials = nullableString(raw.reviewer.initials);
+    const avatarUrl = normalizeReviewUrl(raw.reviewer.avatar);
+    const countryFlagUrl = normalizeReviewUrl(raw.reviewer.countryFlag);
+    const initialPart = normalizeReviewPart(raw.root, true);
+    const additionalPart = raw.additional === null ? null : normalizeReviewPart(raw.additional, true);
+    const likesAmount = raw.interaction.likesAmount;
+    if (!productId || productId !== asString(expectedItemId) || !id
+      || [skuProperties, displayName, initials, avatarUrl, countryFlagUrl].includes(undefined)
+      || !initialPart || (raw.additional !== null && !additionalPart)
+      || !Number.isSafeInteger(likesAmount) || likesAmount < 0) return null;
+    const { id: initialId, ...initial } = initialPart;
+    return {
+      id: initialId,
+      productId,
+      skuProperties,
+      reviewer: { displayName, initials, avatarUrl, countryFlagUrl },
+      initial,
+      additional: additionalPart,
+      likesAmount,
+    };
+  }
+
+  function normalizedReviewsEqual(left, right) {
+    return JSON.stringify(left) === JSON.stringify(right);
+  }
+
+  function normalizeReviewCandidate(records, expectedItemId) {
+    if (!Array.isArray(records) || !records.length) return null;
+    const reviews = [];
+    const byKey = new Map();
+    for (const raw of records) {
+      const review = normalizeReviewRecord(raw, expectedItemId);
+      if (!review) return null;
+      const key = `${review.productId}:${review.id}`;
+      const previous = byKey.get(key);
+      if (previous) {
+        if (!normalizedReviewsEqual(previous, review)) return null;
+        continue;
+      }
+      byKey.set(key, review);
+      reviews.push(review);
+    }
+    return reviews;
+  }
+
+  function inspectReviewsPageFromSsrData(rootValue, expectedItemId, limits = {}) {
+    const itemId = asString(expectedItemId);
+    if (!itemId || !/^\d+$/.test(itemId)) return { reviewPage: null, diagnostic: 'invalid-item-id' };
+    const maxDepth = limits.maxDepth || 45;
+    const maxVisited = limits.maxVisited || 30000;
+    const seen = new WeakSet();
+    const stack = [{ value: rootValue, depth: 0 }];
+    const candidates = [];
+    let invalidCandidate = false;
+    let visited = 0;
+    while (stack.length && visited < maxVisited) {
+      const current = stack.pop();
+      const value = current.value;
+      if (!value || typeof value !== 'object' || seen.has(value) || current.depth > maxDepth) continue;
+      seen.add(value);
+      visited += 1;
+      if (!Array.isArray(value)
+        && typeof value.widgetId === 'string'
+        && /(?:^|\/)RedReviewsProductFeedbackList\//.test(value.widgetId)
+        && value.props?.placement === 'PRP'
+        && value.props?.pageArea === 'screen'
+        && Array.isArray(value.props.reviews)) {
+        const reviews = normalizeReviewCandidate(value.props.reviews, itemId);
+        if (reviews) candidates.push(reviews);
+        else invalidCandidate = true;
+      }
+      for (const child of Object.values(value)) {
+        if (child && typeof child === 'object') stack.push({ value: child, depth: current.depth + 1 });
+      }
+    }
+    if (stack.length && visited >= maxVisited) return { reviewPage: null, diagnostic: 'traversal-limit' };
+    if (invalidCandidate) return { reviewPage: null, diagnostic: 'invalid-candidate' };
+    if (!candidates.length) return { reviewPage: null, diagnostic: 'no-candidate' };
+    const first = candidates[0];
+    if (!candidates.every((candidate) => normalizedReviewsEqual(first, candidate))) {
+      return { reviewPage: null, diagnostic: 'conflicting-candidates' };
+    }
+    return {
+      reviewPage: { itemId, source: 'ssr:__AER_DATA__', reviews: first },
+      diagnostic: 'ok',
+    };
+  }
+
+  function extractReviewsPageFromSsrData(rootValue, expectedItemId, limits = {}) {
+    return inspectReviewsPageFromSsrData(rootValue, expectedItemId, limits).reviewPage;
+  }
+
+  function exportReviewsPage(reviewPage) {
+    return JSON.stringify({
+      itemId: reviewPage.itemId,
+      source: reviewPage.source,
+      reviews: reviewPage.reviews,
+    }, null, 2);
   }
 
   function parseLocalizedRating(value) {
@@ -1707,6 +1893,8 @@
     DEFAULT_SETTINGS,
     isItemPage,
     getItemId,
+    isReviewsPage,
+    getReviewsItemId,
     isTrackingParam,
     normalizeItemUrl,
     toggleMarketUrl,
@@ -1729,6 +1917,11 @@
     galleriesEqual,
     extractGalleryFromSsrData,
     updateGallery,
+    normalizeReviewRecord,
+    normalizeReviewCandidate,
+    inspectReviewsPageFromSsrData,
+    extractReviewsPageFromSsrData,
+    exportReviewsPage,
     parseLocalizedRating,
     parseLocalizedCount,
     parseLocalizedPercentage,
@@ -1960,6 +2153,26 @@
     }
   }
 
+  function findReviewsPageInSsr(expectedItemId, script = document.querySelector('#__AER_DATA__')) {
+    if (!script) return { reviewPage: null, diagnostic: 'no-candidate' };
+    try {
+      return inspectReviewsPageFromSsrData(JSON.parse(script.textContent || ''), expectedItemId);
+    } catch (_) {
+      return { reviewPage: null, diagnostic: 'no-candidate' };
+    }
+  }
+
+  function reviewsDiagnosticMessage(diagnostic) {
+    const messages = {
+      'invalid-item-id': 'Reviews page item ID could not be resolved.',
+      'no-candidate': 'First-page SSR review list was not found.',
+      'invalid-candidate': 'First-page SSR review schema was not recognized safely.',
+      'conflicting-candidates': 'Conflicting first-page SSR review lists were found.',
+      'traversal-limit': 'SSR review scan reached its safety limit.',
+    };
+    return messages[diagnostic] || 'First-page SSR reviews were not found or were not trustworthy.';
+  }
+
   function findInReact() {
     const roots = document.querySelectorAll('[class*="HazeProduct"], [class*="SnowProduct"], [class*="SnowSku"], #root, #__next');
     for (const element of roots) {
@@ -2076,7 +2289,106 @@
     };
   }
 
+  function createReviewsPanel(runtime) {
+    const host = document.createElement('div');
+    host.id = 'ali-helper-host';
+    host.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:2147483000;';
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = `
+      <style>
+        :host { all: initial; }
+        .panel { width:320px; max-width:calc(100vw - 24px); color:#191919; background:#fff; border:1px solid #ddd; border-radius:12px; box-shadow:0 8px 28px rgba(0,0,0,.22); font:13px/1.35 Arial,sans-serif; overflow:hidden; }
+        header { display:flex; align-items:center; gap:8px; padding:10px 12px; background:#ffefe8; }
+        strong { flex:1; font-size:14px; }
+        .body { padding:10px; }
+        .panel.collapsed .body { display:none; }
+        button { border:1px solid #d7d7d7; border-radius:8px; background:#fff; color:#222; padding:7px 9px; cursor:pointer; font:inherit; }
+        button:disabled { opacity:.45; cursor:not-allowed; }
+        .icon { padding:4px 8px; }
+        .action { width:100%; }
+        .status { margin:0 0 9px; padding:7px 8px; border-radius:7px; background:#f5f5f5; overflow-wrap:anywhere; }
+        .status.error { color:#8a1f11; background:#fff0ed; }
+        .meta { color:#666; margin-top:8px; font-size:11px; }
+      </style>
+      <section class="panel">
+        <header><strong>Ali Helper</strong><button class="icon" data-action="toggle" title="Collapse/expand">—</button></header>
+        <div class="body">
+          <div class="status">Waiting for first-page SSR reviews…</div>
+          <button class="action" data-action="reviews" disabled>Copy reviews JSON</button>
+          <div class="meta">Read/copy/navigation only · v${VERSION}</div>
+        </div>
+      </section>`;
+    (document.body || document.documentElement).appendChild(host);
+    const panel = shadow.querySelector('.panel');
+    const status = shadow.querySelector('.status');
+    const copyButton = shadow.querySelector('[data-action="reviews"]');
+    panel.classList.toggle('collapsed', runtime.settings.panelCollapsed);
+    shadow.querySelector('[data-action="toggle"]').textContent = runtime.settings.panelCollapsed ? '+' : '—';
+    function flash(message, isError = false) {
+      status.textContent = message;
+      status.classList.toggle('error', isError);
+    }
+    shadow.addEventListener('click', async (event) => {
+      const action = event.target?.dataset?.action;
+      if (action === 'toggle') {
+        runtime.settings.panelCollapsed = !runtime.settings.panelCollapsed;
+        panel.classList.toggle('collapsed', runtime.settings.panelCollapsed);
+        event.target.textContent = runtime.settings.panelCollapsed ? '+' : '—';
+        saveSettings(runtime.settings);
+      } else if (action === 'reviews' && runtime.reviewPage) {
+        try {
+          await copyText(exportReviewsPage(runtime.reviewPage));
+          flash('Reviews JSON copied.');
+        } catch (error) {
+          flash(`Copy failed: ${error.message}`, true);
+        }
+      }
+    });
+    return {
+      setReviews(reviewPage) {
+        copyButton.disabled = false;
+        flash(`Reviews ready · ${reviewPage.reviews.length} first-page reviews · source: SSR`);
+      },
+      setStatus: flash,
+    };
+  }
+
+  function startReviewsPage() {
+    const runtime = {
+      settings: loadSettings(),
+      itemId: getReviewsItemId(location.href),
+      reviewPage: null,
+      ui: null,
+    };
+    const mount = () => {
+      if (!document.body || document.getElementById('ali-helper-host')) return;
+      runtime.ui = createReviewsPanel(runtime);
+      if (runtime.reviewPage) runtime.ui.setReviews(runtime.reviewPage);
+    };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount, { once: true });
+    else mount();
+
+    let attempts = 0;
+    const readSsr = () => {
+      if (runtime.reviewPage) return;
+      const inspection = findReviewsPageInSsr(runtime.itemId);
+      runtime.reviewPage = inspection.reviewPage;
+      if (runtime.reviewPage) {
+        runtime.ui?.setReviews(runtime.reviewPage);
+        return;
+      }
+      attempts += 1;
+      if (attempts < 8) setTimeout(readSsr, 500);
+      else runtime.ui?.setStatus(reviewsDiagnosticMessage(inspection.diagnostic), true);
+    };
+    readSsr();
+  }
+
   function start() {
+    if (isReviewsPage(location.href)) {
+      startReviewsPage();
+      return;
+    }
     if (!isItemPage(location.href)) return;
     const settings = loadSettings();
     if (settings.autoRedirectComToRu && /(^|\.)aliexpress\.com$/i.test(location.hostname)) {

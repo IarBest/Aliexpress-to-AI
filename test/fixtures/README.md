@@ -113,3 +113,13 @@ The historical roadmap reference 4.8 / 610 / 283 / 2001 /
 reconstructed as a fixture. Review topics remain optional, locale-guarded DOM
 data; their absence is represented as unknown rather than as an empty topic
 list.
+
+The `reviews-ssr-*.json` files are minimized sanitized derivatives of live
+first-page `#__AER_DATA__` captures made on 2026-08-13. Relay retains all five
+records, Dress all ten, and item `32882927175` retains the two records from its
+ten-record page that had real `additional` objects. Each fixture declares its
+sanitization explicitly. Public names, text, media URLs, and record/media IDs
+were deterministically pseudonymized while field presence, types, nullability,
+ordering, counts, SKU strings, dates, grades, likes, and initial/additional
+relationships were preserved. Analytics, tracking, personalized `isLiked`
+state, authentication/session data, and unrelated widgets were not retained.

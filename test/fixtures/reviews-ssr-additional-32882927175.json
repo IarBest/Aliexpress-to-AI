@@ -1,0 +1,35 @@
+{
+  "sourceKind": "minimized sanitized derivative of live #__AER_DATA__",
+  "capturedAt": "2026-08-13",
+  "itemId": "32882927175",
+  "sanitized": true,
+  "sanitizationNotes": [
+    "Two records with live-observed additional objects were retained from the ten-record first SSR page.",
+    "Reviewer fields, review text, media URLs, and review/media IDs were deterministically pseudonymized.",
+    "Dates, grades, likes, SKU string, separate initial/additional shapes, image counts, arrays, and nullability were preserved.",
+    "Analytics, tracking, personalized isLiked state, and unrelated widgets were removed."
+  ],
+  "widget": {
+    "widgetId": "bx/RedReviewsProductFeedbackList/0.35.0",
+    "props": {
+      "placement": "PRP",
+      "pageArea": "screen",
+      "reviews": [
+        {
+          "product": { "id": "32882927175", "skuProperties": "express | EU plug | 3 hole 2usb 2.5M", "sourceId": 0 },
+          "reviewer": { "name": "Reviewer A1", "initials": null, "avatar": null, "countryFlag": null },
+          "root": { "id": "additional-root-1", "date": "14 September 2024", "grade": 5, "text": "Initial review A1.", "originalText": null, "images": [{ "id": "initial-image-a1", "url": "https://fixtures.invalid/initial-a1.jpg" }], "comments": [] },
+          "additional": { "id": "additional-followup-1", "date": "Added 16 June 2026", "grade": 4, "text": "Follow-up review A1.", "originalText": null, "images": [{ "id": "followup-image-a1-1", "url": "https://fixtures.invalid/followup-a1-1.jpeg" }, { "id": "followup-image-a1-2", "url": "https://fixtures.invalid/followup-a1-2.jpeg" }, { "id": "followup-image-a1-3", "url": "https://fixtures.invalid/followup-a1-3.jpeg" }], "comments": [] },
+          "interaction": { "likesAmount": 3 }
+        },
+        {
+          "product": { "id": "32882927175", "skuProperties": "express | EU plug | 3 hole 2usb 2.5M", "sourceId": 0 },
+          "reviewer": { "name": "Reviewer A2", "initials": "A2", "avatar": "https://fixtures.invalid/avatar-a2.jpg", "countryFlag": "https://fixtures.invalid/ru.svg" },
+          "root": { "id": "additional-root-2", "date": "27 November 2024", "grade": 3, "text": "Initial review A2.", "originalText": null, "images": [{ "id": "initial-image-a2", "url": "https://fixtures.invalid/initial-a2.jpg" }], "comments": [] },
+          "additional": { "id": "additional-followup-2", "date": "Added 12 December 2024", "grade": 3, "text": "Follow-up review A2.", "originalText": null, "images": [], "comments": [] },
+          "interaction": { "likesAmount": 11 }
+        }
+      ]
+    }
+  }
+}

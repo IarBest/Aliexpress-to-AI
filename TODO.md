@@ -384,23 +384,127 @@ feedback; полная star distribution сохраняется и честно 
 
 ### First-page SSR reviews
 
-- [ ] Распознавать `/item/ITEM_ID/reviews` как отдельный read-only page context.
-- [ ] Рекурсивно искать объект с массивом reviews в `#__AER_DATA__` по структуре,
-      а не по глубокому `widgets[...]` path.
-- [ ] Ограничить recursive traversal depth/visited nodes и диагностировать
-      schema mismatch.
-- [ ] Нормализовать review как `{ id, productId, skuProperties, reviewer,
+- [x] Распознавать `/item/ITEM_ID/reviews` как отдельный read-only page context.
+- [x] Рекурсивно искать `RedReviewsProductFeedbackList/*` с массивом reviews
+      структурно, без hardcoded deep `widgets[...]` path.
+- [x] Ограничивать traversal depth/visited nodes и выдавать safe schema
+      diagnostics.
+- [x] Нормализовать review как `{ id, productId, skuProperties, reviewer,
       initial, additional, likesAmount }`.
-- [ ] В `initial` сохранять date, grade, translated text, original text, images
-      и comments.
-- [ ] В reviewer сохранять display name, initials/avatar и country flag/code,
-      если они доступны.
-- [ ] Использовать human `skuProperties` из review, не восстанавливать variant
-      через догадки.
-- [ ] Дедуплицировать только по устойчивому review ID.
+- [x] В `initial` сохранять `dateRaw`, grade, displayed text, `originalText`,
+      images и comments.
+- [x] В reviewer сохранять display name, initials, avatar URL и country flag URL.
+- [x] Использовать human `product.skuProperties` verbatim, не восстанавливать
+      SKU через product matrix.
+- [x] Дедуплицировать только по устойчивому `${productId}:${reviewId}`.
 
-Acceptance: первая SSR page извлекается без network pagination; initial и
-additional не схлопываются.
+Acceptance: первая SSR page извлекается без собственных network requests;
+`initial` и `additional` остаются независимыми; conflicting/malformed schema
+fail closed; safe diagnostic не содержит raw review данных.
+
+#### Reviews page context и SSR source
+
+Фактический route — `/item/<ITEM_ID>/reviews`. Item ID берётся только из
+pathname; query-параметры `sku_id`, `spm` и прочие не участвуют в item binding.
+Семантика существующих PDP helpers `isItemPage`/`getItemId` не менялась.
+Reviews page использует отдельный runtime, где productData и shipping
+interceptors не запускаются.
+
+Production candidate — widget family `RedReviewsProductFeedbackList/*`; numeric
+widget version, включая наблюдавшуюся `0.35.0`, не хардкодится. Guards:
+`placement === "PRP"`, `pageArea === "screen"`, а `props.reviews` является
+непустым массивом. Каждый review обязан иметь
+`record.product.id === item ID из pathname`; отсутствующий или несовпадающий ID
+делает весь candidate недоверенным. Deep `widgets[...]` path не является частью
+production schema.
+
+#### Normalized model
+
+```text
+review {
+  id,
+  productId,
+  skuProperties,
+  reviewer { displayName, initials, avatarUrl, countryFlagUrl },
+  initial {
+    dateRaw, grade, text, originalText,
+    images [{ id, url }],
+    comments [{
+      id, authorDisplayName, authorInitials, authorAvatarUrl,
+      dateRaw, text, originalText
+    }]
+  },
+  additional: null | {
+    id, dateRaw, grade, text, originalText, images, comments
+  },
+  likesAmount
+}
+```
+
+`text` и `originalText` не схлопываются, а `dateRaw` не преобразуется в Date.
+`additional` сохраняет собственные ID/rating/content; effective text/rating не
+вычисляются. `interaction.isLiked`, analytics и tracking не входят в normalized
+или export model. Country code/name не выводятся из имени SVG-файла; роль автора
+comment не угадывается.
+
+#### Dedupe, conflicts и safe diagnostics
+
+Dedupe key — `${productId}:${id}`. Для полностью одинакового normalized review
+с тем же key сохраняется первое вхождение; conflicting content с тем же key
+делает candidate недоверенным. Несколько identical ordered SSR candidates
+допустимы, conflicting candidates fail closed; lists не объединяются. Text,
+date и reviewer для dedupe не используются.
+
+Безопасные diagnostic states: `ok`, `invalid-item-id`, `no-candidate`,
+`invalid-candidate`, `conflicting-candidates`, `traversal-limit`. Они не содержат
+review text, IDs, raw paths, analytics, tracking payload или stack traces. После
+bounded retries reviews-page UI показывает соответствующую safe причину.
+
+#### Reviews-page UI и export
+
+Минимальный success status —
+`Reviews ready · N first-page reviews · source: SSR`; действие —
+`Copy reviews JSON`. Export имеет форму
+`{ itemId, source: "ssr:__AER_DATA__", reviews }`. Panel использует существующий
+collapse setting. Product buttons PDP не переносятся, reviews не сохраняются в
+persistent storage. Copy for ChatGPT reviews, Load more и pagination пока не
+реализованы.
+
+#### Captured fixtures и sanitization
+
+Real sanitized derivatives от 2026-08-13:
+
+- `reviews-ssr-1005008195850531.json` — Relay, 5 records;
+- `reviews-ssr-1005009452926938.json` — Dress, 10 records;
+- `reviews-ssr-additional-32882927175.json` — 2 records с реальным follow-up
+  shape.
+
+Fixtures явно помечены `sanitized: true`; `sanitizationNotes` перечисляют
+псевдонимизированные категории. Schema, nullability, order и relations сохранены;
+analytics, tracking и `isLiked` удалены. Эти derivatives не выдаются за raw
+captures.
+
+#### Live smoke — 2026-08-13
+
+- Relay: 5 SSR reviews, 5 direct DOM cards.
+- Dress: 10 SSR reviews, 10 DOM cards; первые ratings 5/5/3, human SKU и text
+  совпали; translated/original, images, comments и non-zero likes сохранены.
+- Needles: 10 SSR reviews; первые ratings 5/1/5 и SKU strings совпали;
+  rating-only cases с null text нормализованы корректно.
+- Item `32882927175`: 10 first-page reviews, 2 с `additional`; follow-up имеет
+  собственный ID, grade 4, `Added 16 June 2026`, text и 3 additional images.
+- Copy reviews JSON содержит только normalized data, без `analyticEvents`,
+  `trackingInfo`, `isLiked` и `spm`.
+
+Smoke выполнялся на реально активном Ali Helper v0.1.9.
+
+#### Оставшиеся ограничения
+
+Будущими остаются page 2+, review API requests, pagination, filters/sort
+requests, SSR + API merge, Load reviews, configurable cap и progress across
+multiple pages. Live regression для `additional.grade = null`, несколько
+additional objects и review videos пока не наблюдались. `product.reviews` на PDP
+не сохраняется и не объединяется с reviews-page model.
 
 ## P4 — Reviews pagination and follow-ups
 

@@ -1,0 +1,85 @@
+{
+  "sourceKind": "minimized sanitized derivative of live #__AER_DATA__",
+  "capturedAt": "2026-08-13",
+  "itemId": "1005009452926938",
+  "sanitized": true,
+  "sanitizationNotes": [
+    "Reviewer and commenter display names, avatar URLs, review/comment text, and record/media IDs were deterministically pseudonymized.",
+    "The ten-record order, SKU strings, dates, grades, likes, field presence, arrays, and nullability were preserved.",
+    "Analytics, tracking, personalized isLiked state, and unrelated widgets were removed."
+  ],
+  "widget": {
+    "widgetId": "bx/RedReviewsProductFeedbackList/0.35.0",
+    "props": {
+      "placement": "PRP",
+      "pageArea": "screen",
+      "reviews": [
+        {
+          "product": { "id": "1005009452926938", "skuProperties": "Lining B Navy Blue | M", "sourceId": 0 },
+          "reviewer": { "name": "Reviewer D1", "initials": null, "avatar": "https://fixtures.invalid/avatar-d1.png", "countryFlag": "https://fixtures.invalid/ru.svg" },
+          "root": {
+            "id": "dress-review-1", "date": "1 June 2026", "grade": 5, "text": "Translated dress review D1.", "originalText": "Original dress review D1.",
+            "images": [{ "id": "dress-image-1", "url": "https://fixtures.invalid/dress-image-1.jpeg" }],
+            "comments": [{ "id": "dress-comment-1", "commenterAvatar": "https://fixtures.invalid/store.png", "commenterInitials": null, "commenterName": "Store D", "date": "6 June 2026", "text": "Public reply D1.", "originalText": null }]
+          },
+          "additional": null,
+          "interaction": { "likesAmount": 8 }
+        },
+        {
+          "product": { "id": "1005009452926938", "skuProperties": "Lining B Pink | XL", "sourceId": 0 },
+          "reviewer": { "name": "Anonymous user", "initials": null, "avatar": "https://fixtures.invalid/anonymous.png", "countryFlag": null },
+          "root": { "id": "dress-review-2", "date": "10 July 2026", "grade": 5, "text": "Translated dress review D2.", "originalText": "Original dress review D2.", "images": [{ "id": "dress-image-2", "url": "https://fixtures.invalid/dress-image-2.jpg" }], "comments": [{ "id": "dress-comment-2", "commenterAvatar": "https://fixtures.invalid/store.png", "commenterInitials": null, "commenterName": "Store D", "date": "22 July 2026", "text": "Public reply D2.", "originalText": null }] },
+          "additional": null, "interaction": { "likesAmount": 2 }
+        },
+        {
+          "product": { "id": "1005009452926938", "skuProperties": "Deep Green B | XS", "sourceId": 0 },
+          "reviewer": { "name": "Anonymous user", "initials": null, "avatar": "https://fixtures.invalid/anonymous.png", "countryFlag": null },
+          "root": { "id": "dress-review-3", "date": "24 June 2026", "grade": 3, "text": "Translated dress review D3.", "originalText": "Original dress review D3.", "images": [{ "id": "dress-image-3", "url": "https://fixtures.invalid/dress-image-3.jpeg" }], "comments": [{ "id": "dress-comment-3", "commenterAvatar": "https://fixtures.invalid/store.png", "commenterInitials": null, "commenterName": "Store D", "date": "30 June 2026", "text": "Public reply D3.", "originalText": null }] },
+          "additional": null, "interaction": { "likesAmount": 1 }
+        },
+        {
+          "product": { "id": "1005009452926938", "skuProperties": "Lining B Pink | XS", "sourceId": 0 },
+          "reviewer": { "name": "Anonymous user", "initials": null, "avatar": "https://fixtures.invalid/anonymous.png", "countryFlag": null },
+          "root": { "id": "dress-review-4", "date": "23 July 2026", "grade": 5, "text": "Translated dress review D4.", "originalText": "Original dress review D4.", "images": [{ "id": "dress-image-4", "url": "https://fixtures.invalid/dress-image-4.jpeg" }], "comments": [{ "id": "dress-comment-4", "commenterAvatar": "https://fixtures.invalid/store.png", "commenterInitials": null, "commenterName": "Store D", "date": "27 July 2026", "text": "Public reply D4.", "originalText": null }] },
+          "additional": null, "interaction": { "likesAmount": 0 }
+        },
+        {
+          "product": { "id": "1005009452926938", "skuProperties": "Lining B Navy Blue | L", "sourceId": 0 },
+          "reviewer": { "name": "Anonymous user", "initials": null, "avatar": "https://fixtures.invalid/anonymous.png", "countryFlag": null },
+          "root": { "id": "dress-review-5", "date": "21 April 2026", "grade": 5, "text": "Translated dress review D5.", "originalText": "Original dress review D5.", "images": [], "comments": [] },
+          "additional": null, "interaction": { "likesAmount": 0 }
+        },
+        {
+          "product": { "id": "1005009452926938", "skuProperties": "Lining B Navy Blue | XL", "sourceId": 0 },
+          "reviewer": { "name": "Anonymous user", "initials": null, "avatar": "https://fixtures.invalid/anonymous.png", "countryFlag": null },
+          "root": { "id": "dress-review-6", "date": "6 July 2026", "grade": 4, "text": "Translated dress review D6.", "originalText": "Original dress review D6.", "images": [], "comments": [{ "id": "dress-comment-6", "commenterAvatar": "https://fixtures.invalid/store.png", "commenterInitials": null, "commenterName": "Store D", "date": "12 July 2026", "text": "Public reply D6.", "originalText": null }] },
+          "additional": null, "interaction": { "likesAmount": 1 }
+        },
+        {
+          "product": { "id": "1005009452926938", "skuProperties": "Lining B Wine Red | S", "sourceId": 0 },
+          "reviewer": { "name": "Reviewer D7", "initials": null, "avatar": "https://fixtures.invalid/avatar-d7.jpg", "countryFlag": "https://fixtures.invalid/mx.svg" },
+          "root": { "id": "dress-review-7", "date": "10 July 2026", "grade": 4, "text": "Translated dress review D7.", "originalText": "Original dress review D7.", "images": [{ "id": "dress-image-7", "url": "https://fixtures.invalid/dress-image-7.jpg" }], "comments": [] },
+          "additional": null, "interaction": { "likesAmount": 0 }
+        },
+        {
+          "product": { "id": "1005009452926938", "skuProperties": "Lining B Taupe | XS", "sourceId": 0 },
+          "reviewer": { "name": "Anonymous user", "initials": null, "avatar": "https://fixtures.invalid/anonymous.png", "countryFlag": null },
+          "root": { "id": "dress-review-8", "date": "6 June 2026", "grade": 5, "text": "Translated dress review D8.", "originalText": "Original dress review D8.", "images": [], "comments": [{ "id": "dress-comment-8", "commenterAvatar": "https://fixtures.invalid/store.png", "commenterInitials": null, "commenterName": "Store D", "date": "9 June 2026", "text": "Public reply D8.", "originalText": null }] },
+          "additional": null, "interaction": { "likesAmount": 1 }
+        },
+        {
+          "product": { "id": "1005009452926938", "skuProperties": "Cup A Taupe | S", "sourceId": 0 },
+          "reviewer": { "name": "Reviewer D9", "initials": "D9", "avatar": null, "countryFlag": "https://fixtures.invalid/vn.svg" },
+          "root": { "id": "dress-review-9", "date": "19 May 2026", "grade": 5, "text": "Displayed dress review D9.", "originalText": null, "images": [{ "id": "dress-image-9", "url": "https://fixtures.invalid/dress-image-9.png" }], "comments": [{ "id": "dress-comment-9", "commenterAvatar": "https://fixtures.invalid/store.png", "commenterInitials": null, "commenterName": "Store D", "date": "22 May 2026", "text": "Public reply D9.", "originalText": null }] },
+          "additional": null, "interaction": { "likesAmount": 8 }
+        },
+        {
+          "product": { "id": "1005009452926938", "skuProperties": "Lining B Wine Red | XS", "sourceId": 0 },
+          "reviewer": { "name": "Anonymous user", "initials": null, "avatar": "https://fixtures.invalid/anonymous.png", "countryFlag": null },
+          "root": { "id": "dress-review-10", "date": "24 May 2026", "grade": 5, "text": "Translated dress review D10.", "originalText": "Original dress review D10.", "images": [], "comments": [{ "id": "dress-comment-10", "commenterAvatar": "https://fixtures.invalid/store.png", "commenterInitials": null, "commenterName": "Store D", "date": "2 June 2026", "text": "Public reply D10.", "originalText": null }] },
+          "additional": null, "interaction": { "likesAmount": 0 }
+        }
+      ]
+    }
+  }
+}

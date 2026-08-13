@@ -1,0 +1,55 @@
+{
+  "sourceKind": "minimized sanitized derivative of live #__AER_DATA__",
+  "capturedAt": "2026-08-13",
+  "itemId": "1005008195850531",
+  "sanitized": true,
+  "sanitizationNotes": [
+    "Reviewer display names, avatar URLs, review text, and review IDs were deterministically pseudonymized.",
+    "Country flag URL categories and all observed nullability were preserved.",
+    "Analytics, tracking, personalized isLiked state, and unrelated widgets were removed."
+  ],
+  "widget": {
+    "widgetId": "bx/RedReviewsProductFeedbackList/0.35.0",
+    "props": {
+      "placement": "PRP",
+      "pageArea": "screen",
+      "reviews": [
+        {
+          "product": { "id": "1005008195850531", "skuProperties": null, "sourceId": 0 },
+          "reviewer": { "name": "Reviewer R1", "initials": null, "avatar": "https://fixtures.invalid/avatar-r1.jpg", "countryFlag": "https://fixtures.invalid/ru.svg" },
+          "root": { "id": "relay-review-1", "date": "16 December 2025", "grade": 5, "text": "Translated relay review R1.", "originalText": "Original relay review R1.", "images": [], "comments": [] },
+          "additional": null,
+          "interaction": { "likesAmount": 0 }
+        },
+        {
+          "product": { "id": "1005008195850531", "skuProperties": "1CH Zigbee 7-32V", "sourceId": 0 },
+          "reviewer": { "name": "Anonymous user", "initials": null, "avatar": "https://fixtures.invalid/anonymous.png", "countryFlag": null },
+          "root": { "id": "relay-review-2", "date": "19 July 2026", "grade": 5, "text": "Displayed relay review R2.", "originalText": null, "images": [], "comments": [] },
+          "additional": null,
+          "interaction": { "likesAmount": 0 }
+        },
+        {
+          "product": { "id": "1005008195850531", "skuProperties": "2CH Zigbee 7-32V", "sourceId": 0 },
+          "reviewer": { "name": "Anonymous user", "initials": null, "avatar": "https://fixtures.invalid/anonymous.png", "countryFlag": null },
+          "root": { "id": "relay-review-3", "date": "21 July 2026", "grade": 5, "text": null, "originalText": null, "images": [], "comments": [] },
+          "additional": null,
+          "interaction": { "likesAmount": 0 }
+        },
+        {
+          "product": { "id": "1005008195850531", "skuProperties": "1CH Zigbee 7-32V", "sourceId": 0 },
+          "reviewer": { "name": "Reviewer R4", "initials": "R4", "avatar": null, "countryFlag": null },
+          "root": { "id": "relay-review-4", "date": "20 January 2025", "grade": 5, "text": null, "originalText": null, "images": [], "comments": [] },
+          "additional": null,
+          "interaction": { "likesAmount": 0 }
+        },
+        {
+          "product": { "id": "1005008195850531", "skuProperties": "2CH Zigbee 7-32V", "sourceId": 0 },
+          "reviewer": { "name": "Reviewer R5", "initials": "R5", "avatar": null, "countryFlag": "https://fixtures.invalid/it.svg" },
+          "root": { "id": "relay-review-5", "date": "8 January 2025", "grade": 5, "text": null, "originalText": null, "images": [], "comments": [] },
+          "additional": null,
+          "interaction": { "likesAmount": 0 }
+        }
+      ]
+    }
+  }
+}

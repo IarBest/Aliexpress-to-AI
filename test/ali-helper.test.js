@@ -2172,3 +2172,295 @@ test('recursively finds nested productData without a hardcoded path', () => {
   assert.equal(found.data, fixture.data);
   assert.match(found.path, /widgets/);
 });
+
+test('recognizes exact AliExpress reviews routes without changing PDP semantics', () => {
+  const base = 'https://aliexpress.ru/item/1005009452926938/reviews';
+  assert.equal(core.isReviewsPage(base), true);
+  assert.equal(core.isReviewsPage(`${base}?sku_id=12000049151727538`), true);
+  assert.equal(core.isReviewsPage(`${base}?spm=tracking&anything=kept`), true);
+  assert.equal(core.getReviewsItemId(`${base}?sku_id=1#fragment`), '1005009452926938');
+  assert.equal(core.isReviewsPage('https://aliexpress.ru/item/1005009452926938.html'), false);
+  assert.equal(core.isReviewsPage(`${base}/extra`), false);
+  assert.equal(core.isReviewsPage('https://example.com/item/1005009452926938/reviews'), false);
+  assert.equal(core.getReviewsItemId('https://example.com/item/1005009452926938/reviews'), null);
+  assert.equal(core.isItemPage('https://aliexpress.ru/item/1005009452926938.html'), true);
+  assert.equal(core.isItemPage(base), false);
+  assert.equal(core.getItemId(base), null);
+});
+
+test('extracts the real minimized Relay first-page SSR candidate by structure', () => {
+  const fixture = loadFixture('reviews-ssr-1005008195850531.json');
+  const nested = { arbitrary: { deep: [{ unrelated: [] }, { candidate: fixture.widget }] } };
+  const result = core.extractReviewsPageFromSsrData(nested, fixture.itemId);
+  assert.equal(fixture.sanitized, true);
+  assert.equal(fixture.capturedAt, '2026-08-13');
+  assert.equal(result.itemId, fixture.itemId);
+  assert.equal(result.source, 'ssr:__AER_DATA__');
+  assert.equal(result.reviews.length, 5);
+  assert.deepEqual(result.reviews.map((review) => review.id), fixture.widget.props.reviews.map((review) => review.root.id));
+});
+
+test('normalizes Relay sparse and rating-only natural cases without inferred fields', () => {
+  const fixture = loadFixture('reviews-ssr-1005008195850531.json');
+  const reviews = core.extractReviewsPageFromSsrData({ widget: fixture.widget }, fixture.itemId).reviews;
+  assert.equal(reviews[0].skuProperties, null);
+  assert.equal(reviews[0].reviewer.initials, null);
+  assert.equal(reviews[1].reviewer.countryFlagUrl, null);
+  assert.equal(reviews[3].reviewer.avatarUrl, null);
+  assert.equal(reviews[2].initial.text, null);
+  assert.equal(reviews[2].initial.originalText, null);
+  assert.deepEqual(reviews[2].initial.images, []);
+  assert.deepEqual(reviews[2].initial.comments, []);
+  assert.equal(reviews[2].additional, null);
+  assert.equal(reviews[2].likesAmount, 0);
+  assert.equal(Object.hasOwn(reviews[0].initial, 'effectiveText'), false);
+  assert.equal(Object.hasOwn(reviews[0], 'countryCode'), false);
+});
+
+test('normalizes Dress text, media, comments, reviewer and non-zero likes', () => {
+  const fixture = loadFixture('reviews-ssr-1005009452926938.json');
+  const result = core.extractReviewsPageFromSsrData({ movedAgain: [{ widget: fixture.widget }] }, fixture.itemId);
+  assert.equal(result.reviews.length, 10);
+  const first = result.reviews[0];
+  assert.equal(first.productId, fixture.itemId);
+  assert.equal(first.skuProperties, 'Lining B Navy Blue | M');
+  assert.deepEqual(first.reviewer, {
+    displayName: 'Reviewer D1',
+    initials: null,
+    avatarUrl: 'https://fixtures.invalid/avatar-d1.png',
+    countryFlagUrl: 'https://fixtures.invalid/ru.svg',
+  });
+  assert.equal(first.initial.dateRaw, '1 June 2026');
+  assert.equal(first.initial.grade, 5);
+  assert.equal(first.initial.text, 'Translated dress review D1.');
+  assert.equal(first.initial.originalText, 'Original dress review D1.');
+  assert.deepEqual(first.initial.images, [{ id: 'dress-image-1', url: 'https://fixtures.invalid/dress-image-1.jpeg' }]);
+  assert.deepEqual(first.initial.comments[0], {
+    id: 'dress-comment-1',
+    authorDisplayName: 'Store D',
+    authorInitials: null,
+    authorAvatarUrl: 'https://fixtures.invalid/store.png',
+    dateRaw: '6 June 2026',
+    text: 'Public reply D1.',
+    originalText: null,
+  });
+  assert.equal(first.likesAmount, 8);
+  assert.equal(result.reviews[8].initial.originalText, null);
+});
+
+test('keeps text and originalText independent, including both-null reviews', () => {
+  const relay = loadFixture('reviews-ssr-1005008195850531.json');
+  const dress = loadFixture('reviews-ssr-1005009452926938.json');
+  const relayReviews = core.extractReviewsPageFromSsrData(relay, relay.itemId).reviews;
+  const dressReviews = core.extractReviewsPageFromSsrData(dress, dress.itemId).reviews;
+  assert.notEqual(relayReviews[0].initial.text, relayReviews[0].initial.originalText);
+  assert.equal(dressReviews[8].initial.text, 'Displayed dress review D9.');
+  assert.equal(dressReviews[8].initial.originalText, null);
+  assert.equal(relayReviews[2].initial.text, null);
+  assert.equal(relayReviews[2].initial.originalText, null);
+  assert.equal(Object.hasOwn(dressReviews[0].initial, 'language'), false);
+  assert.equal(Object.hasOwn(dressReviews[0].initial, 'effectiveText'), false);
+});
+
+test('normalizes real-observed additional objects separately from initial reviews', () => {
+  const fixture = loadFixture('reviews-ssr-additional-32882927175.json');
+  const result = core.extractReviewsPageFromSsrData({ widgets: [fixture.widget] }, fixture.itemId);
+  assert.equal(result.reviews.length, 2);
+  const first = result.reviews[0];
+  assert.equal(first.id, 'additional-root-1');
+  assert.equal(first.additional.id, 'additional-followup-1');
+  assert.notEqual(first.id, first.additional.id);
+  assert.equal(first.additional.dateRaw, 'Added 16 June 2026');
+  assert.equal(first.additional.grade, 4);
+  assert.equal(first.additional.text, 'Follow-up review A1.');
+  assert.equal(first.additional.originalText, null);
+  assert.equal(first.initial.images.length, 1);
+  assert.equal(first.additional.images.length, 3);
+  assert.deepEqual(first.additional.comments, []);
+  assert.equal(first.likesAmount, 3);
+});
+
+test('accepts widget family version drift and requires PRP screen placement', () => {
+  const fixture = loadFixture('reviews-ssr-additional-32882927175.json');
+  const versionDrift = clone(fixture);
+  versionDrift.widget.widgetId = 'bx/RedReviewsProductFeedbackList/0.99.1';
+  assert.ok(core.extractReviewsPageFromSsrData(versionDrift, fixture.itemId));
+  const wrongPlacement = clone(fixture);
+  wrongPlacement.widget.props.placement = 'PDP';
+  assert.equal(core.extractReviewsPageFromSsrData(wrongPlacement, fixture.itemId), null);
+  const wrongArea = clone(fixture);
+  wrongArea.widget.props.pageArea = 'carousel';
+  assert.equal(core.extractReviewsPageFromSsrData(wrongArea, fixture.itemId), null);
+});
+
+test('requires exact current product binding for every review and rejects empty lists', () => {
+  const fixture = loadFixture('reviews-ssr-1005008195850531.json');
+  assert.equal(core.extractReviewsPageFromSsrData(fixture, '999'), null);
+  const mixed = clone(fixture);
+  mixed.widget.props.reviews[2].product.id = '999';
+  assert.equal(core.extractReviewsPageFromSsrData(mixed, fixture.itemId), null);
+  const missing = clone(fixture);
+  delete missing.widget.props.reviews[1].product.id;
+  assert.equal(core.extractReviewsPageFromSsrData(missing, fixture.itemId), null);
+  const empty = clone(fixture);
+  empty.widget.props.reviews = [];
+  assert.equal(core.extractReviewsPageFromSsrData(empty, fixture.itemId), null);
+});
+
+test('ignores gallery, topic, summary and unrelated review-shaped arrays', () => {
+  const fixture = loadFixture('reviews-ssr-1005008195850531.json');
+  const root = {
+    gallery: { widgetId: 'bx/RedReviewsGallery/0.31.1', props: { placement: 'PRP', pageArea: 'screen', reviews: fixture.widget.props.reviews } },
+    topics: { widgetId: 'bx/RedReviewsTags/0.8.0', props: { placement: 'PRP', pageArea: 'screen', reviews: fixture.widget.props.reviews } },
+    candidate: fixture.widget,
+  };
+  assert.equal(core.extractReviewsPageFromSsrData(root, fixture.itemId).reviews.length, 5);
+  delete root.candidate;
+  assert.equal(core.extractReviewsPageFromSsrData(root, fixture.itemId), null);
+});
+
+test('bounded traversal does not depend on a diagnostic deep path', () => {
+  const fixture = loadFixture('reviews-ssr-1005008195850531.json');
+  let within = fixture.widget;
+  for (let index = 0; index < 20; index += 1) within = { moved: within };
+  assert.ok(core.extractReviewsPageFromSsrData(within, fixture.itemId));
+  let beyond = fixture.widget;
+  for (let index = 0; index < 50; index += 1) beyond = { moved: beyond };
+  assert.equal(core.extractReviewsPageFromSsrData(beyond, fixture.itemId, { maxDepth: 10 }), null);
+  assert.equal(core.extractReviewsPageFromSsrData({ noise: [{}, {}, fixture.widget] }, fixture.itemId, { maxVisited: 1 }), null);
+});
+
+test('deduplicates identical same-key records and keeps first source occurrence', () => {
+  const fixture = loadFixture('reviews-ssr-1005008195850531.json');
+  const first = fixture.widget.props.reviews[0];
+  fixture.widget.props.reviews.splice(1, 0, clone(first));
+  const result = core.extractReviewsPageFromSsrData(fixture, fixture.itemId);
+  assert.equal(result.reviews.length, 5);
+  assert.equal(result.reviews[0].id, 'relay-review-1');
+});
+
+test('fails a candidate on conflicting duplicate content for the same stable key', () => {
+  const fixture = loadFixture('reviews-ssr-1005008195850531.json');
+  const conflict = clone(fixture.widget.props.reviews[0]);
+  conflict.root.text = 'Conflicting content.';
+  fixture.widget.props.reviews.push(conflict);
+  assert.equal(core.extractReviewsPageFromSsrData(fixture, fixture.itemId), null);
+});
+
+test('does not deduplicate equal content when review IDs differ', () => {
+  const fixture = loadFixture('reviews-ssr-1005008195850531.json');
+  const secondId = clone(fixture.widget.props.reviews[0]);
+  secondId.root.id = 'relay-review-distinct';
+  fixture.widget.props.reviews.push(secondId);
+  const result = core.extractReviewsPageFromSsrData(fixture, fixture.itemId);
+  assert.equal(result.reviews.length, 6);
+});
+
+test('accepts identical multiple SSR candidates and rejects candidate conflicts', () => {
+  const fixture = loadFixture('reviews-ssr-1005008195850531.json');
+  const identical = { one: fixture.widget, elsewhere: { two: clone(fixture.widget) } };
+  assert.equal(core.extractReviewsPageFromSsrData(identical, fixture.itemId).reviews.length, 5);
+  const conflicting = clone(fixture.widget);
+  conflicting.props.reviews[0].root.text = 'Candidate conflict.';
+  assert.equal(core.extractReviewsPageFromSsrData({ one: fixture.widget, two: conflicting }, fixture.itemId), null);
+  const reordered = clone(fixture.widget);
+  reordered.props.reviews.reverse();
+  assert.equal(core.extractReviewsPageFromSsrData({ one: fixture.widget, two: reordered }, fixture.itemId), null);
+});
+
+test('fails closed when any matching SSR candidate is structurally malformed', () => {
+  const fixture = loadFixture('reviews-ssr-1005008195850531.json');
+  const malformed = clone(fixture.widget);
+  delete malformed.props.reviews[0].root.id;
+  assert.equal(core.extractReviewsPageFromSsrData({ valid: fixture.widget, malformed }, fixture.itemId), null);
+});
+
+test('strict review normalization fails the whole candidate for malformed records', () => {
+  const fixture = loadFixture('reviews-ssr-1005008195850531.json');
+  const mutations = [
+    (record) => { delete record.root.id; },
+    (record) => { record.root.images = {}; },
+    (record) => { record.root.comments = null; },
+    (record) => { record.additional = {}; },
+    (record) => { record.interaction.likesAmount = '0'; },
+    (record) => { record.root.grade = 6; },
+    (record) => { record.reviewer.avatar = 'javascript:alert(1)'; },
+  ];
+  mutations.forEach((mutate) => {
+    const malformed = clone(fixture);
+    mutate(malformed.widget.props.reviews[0]);
+    assert.equal(core.extractReviewsPageFromSsrData(malformed, fixture.itemId), null);
+  });
+});
+
+test('strict additional, image and comment shapes fail closed', () => {
+  const fixture = loadFixture('reviews-ssr-additional-32882927175.json');
+  const mutations = [
+    (record) => { delete record.additional.id; },
+    (record) => { record.additional.images = null; },
+    (record) => { record.additional.comments = {}; },
+    (record) => { record.additional.images[0].url = 'data:image/png;base64,x'; },
+    (record) => { delete record.root.images[0].id; },
+  ];
+  mutations.forEach((mutate) => {
+    const malformed = clone(fixture);
+    mutate(malformed.widget.props.reviews[0]);
+    assert.equal(core.extractReviewsPageFromSsrData(malformed, fixture.itemId), null);
+  });
+});
+
+test('preserves source order and verbatim SKU/date strings without page-size inference', () => {
+  const relay = loadFixture('reviews-ssr-1005008195850531.json');
+  const additional = loadFixture('reviews-ssr-additional-32882927175.json');
+  const relayResult = core.extractReviewsPageFromSsrData(relay, relay.itemId);
+  const additionalResult = core.extractReviewsPageFromSsrData(additional, additional.itemId);
+  assert.deepEqual(relayResult.reviews.map((review) => review.id), ['relay-review-1', 'relay-review-2', 'relay-review-3', 'relay-review-4', 'relay-review-5']);
+  assert.equal(relayResult.reviews.length, 5);
+  assert.equal(additionalResult.reviews[0].skuProperties, 'express | EU plug | 3 hole 2usb 2.5M');
+  assert.equal(additionalResult.reviews[0].additional.dateRaw, 'Added 16 June 2026');
+  assert.equal(Object.hasOwn(additionalResult, 'pageSize'), false);
+  assert.equal(Object.hasOwn(additionalResult, 'hasNext'), false);
+});
+
+test('reviews-page JSON export contains only the normalized safe model', () => {
+  const fixture = loadFixture('reviews-ssr-1005009452926938.json');
+  fixture.widget.props.reviews[0].root.analyticEvents = { trackingInfo: { spm: 'secret-ish-tracking' } };
+  fixture.widget.props.reviews[0].interaction.isLiked = true;
+  const reviewPage = core.extractReviewsPageFromSsrData(fixture, fixture.itemId);
+  const text = core.exportReviewsPage(reviewPage);
+  const exported = JSON.parse(text);
+  assert.deepEqual(Object.keys(exported), ['itemId', 'source', 'reviews']);
+  assert.equal(exported.itemId, fixture.itemId);
+  assert.equal(exported.reviews.length, 10);
+  assert.doesNotMatch(text, /analyticEvents|trackingInfo|isLiked|spm|secret-ish-tracking/);
+  assert.equal(Object.hasOwn(exported.reviews[0].initial, 'effectiveRating'), false);
+});
+
+test('SSR review inspection reports success without changing the extracted page model', () => {
+  const fixture = loadFixture('reviews-ssr-1005009452926938.json');
+  const inspection = core.inspectReviewsPageFromSsrData(fixture, fixture.itemId);
+  assert.equal(inspection.diagnostic, 'ok');
+  assert.equal(inspection.reviewPage.reviews.length, 10);
+  assert.deepEqual(core.extractReviewsPageFromSsrData(fixture, fixture.itemId), inspection.reviewPage);
+});
+
+test('SSR review inspection distinguishes safe failure diagnostics without raw details', () => {
+  const fixture = loadFixture('reviews-ssr-1005008195850531.json');
+  const malformed = clone(fixture);
+  delete malformed.widget.props.reviews[0].root.id;
+  const conflicting = clone(fixture.widget);
+  conflicting.props.reviews[0].root.text = 'Synthetic conflict.';
+  const cases = [
+    [core.inspectReviewsPageFromSsrData(fixture, null), 'invalid-item-id'],
+    [core.inspectReviewsPageFromSsrData(fixture, 'not-an-item-id'), 'invalid-item-id'],
+    [core.inspectReviewsPageFromSsrData({ unrelated: true }, fixture.itemId), 'no-candidate'],
+    [core.inspectReviewsPageFromSsrData(malformed, fixture.itemId), 'invalid-candidate'],
+    [core.inspectReviewsPageFromSsrData({ one: fixture.widget, two: conflicting }, fixture.itemId), 'conflicting-candidates'],
+    [core.inspectReviewsPageFromSsrData({ noise: [{}, {}, fixture.widget] }, fixture.itemId, { maxVisited: 1 }), 'traversal-limit'],
+  ];
+  cases.forEach(([inspection, expected]) => {
+    assert.equal(inspection.reviewPage, null);
+    assert.equal(inspection.diagnostic, expected);
+    assert.deepEqual(Object.keys(inspection).sort(), ['diagnostic', 'reviewPage']);
+  });
+});
