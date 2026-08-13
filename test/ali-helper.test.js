@@ -852,7 +852,9 @@ test('ChatGPT gallery export preserves every item and keeps description separate
 
   assert.match(output, /GALLERY:\nItem 1 \(video\)\nVideo: .*5000454646732\.mp4\nImage\/poster: .*S0eab.*\nPreview: .*S0eab/);
   assert.match(output, /Item 7 \(image\)\nImage: .*Sd6f26.*\nPreview: .*Sd6f26/);
-  assert.match(output, /DESCRIPTION:\nImage 1: https:\/\/example\.com\/description\.jpg$/);
+  assert.match(output, /DESCRIPTION:\nBlocks: 1\nText\/heading\/link blocks: 0\nImages: 1\nLinks: 0\nText characters: 0/);
+  assert.doesNotMatch(output.slice(output.indexOf('DESCRIPTION:')), /https:\/\/example\.com\/description\.jpg/);
+  assert.match(output, /1 image URLs omitted/);
   assert.doesNotMatch(core.formatGallery(product.gallery), /description\.jpg/);
   assert.match(core.exportForChatGPT({ ...product, gallery: null }), /GALLERY:\n—\n\nDESCRIPTION:/);
 });
@@ -1964,7 +1966,25 @@ test('productData.description is not treated as full seller description', () => 
   assert.equal(product.description, null);
 });
 
-test('ChatGPT export preserves description order, excludes raw HTML, and marks absence', () => {
+test('short text-only ChatGPT description preserves ordered content without a limitation marker', () => {
+  const description = core.buildDescription('dom', '<synthetic>', [
+    { type: 'heading', level: 2, text: 'Materials' },
+    { type: 'text', text: 'Cotton and linen.' },
+  ]);
+
+  assert.equal(core.formatDescriptionForChatGPT(description), [
+    'Blocks: 2',
+    'Text/heading/link blocks: 2',
+    'Images: 0',
+    'Links: 0',
+    'Text characters: 26',
+    '',
+    'Materials',
+    'Cotton and linen.',
+  ].join('\n'));
+});
+
+test('ChatGPT description omits image URLs while full export retains every image in order', () => {
   const fixture = loadFixture('product-1005008195850531.json');
   const product = core.normalizeProduct(fixture.data, 'https://aliexpress.ru/item/1005008195850531.html');
   const rawHtml = '<p>RAW_SENTINEL</p>';
@@ -1976,26 +1996,132 @@ test('ChatGPT export preserves description order, excludes raw HTML, and marks a
     { type: 'image', url: 'https://example.com/two.jpg', alt: null },
   ]);
 
-  const exported = core.exportForChatGPT(product);
-  const emptyExport = core.exportForChatGPT({ ...product, description: null });
+  const mainExport = core.exportForChatGPT(product);
+  const fullExport = core.exportDescription(product);
 
   assert.match(core.exportProduct(product), /RAW_SENTINEL/);
-  assert.match(exported, /DESCRIPTION:\nBefore\nImage 1: https:\/\/example\.com\/one\.jpg\nA\/B\nDetails — https:\/\/example\.com\/details\nImage 2: https:\/\/example\.com\/two\.jpg$/);
-  assert.doesNotMatch(exported, /RAW_SENTINEL/);
-  assert.match(emptyExport, /DESCRIPTION:\n—$/);
+  assert.match(mainExport, /DESCRIPTION:\nBlocks: 5\nText\/heading\/link blocks: 3\nImages: 2\nLinks: 1\nText characters: 16\n\nBefore\nA\/B\nDetails/);
+  assert.doesNotMatch(mainExport, /https:\/\/example\.com\/(?:one\.jpg|two\.jpg|details)/);
+  assert.match(mainExport, /\[Description limited: 2 image URLs, 1 link URLs omitted\. Use Copy description for the full ordered normalized description\.\]$/);
+  assert.doesNotMatch(mainExport, /RAW_SENTINEL/);
+
+  const firstImage = fullExport.indexOf('Image 1: https://example.com/one.jpg');
+  const link = fullExport.indexOf('Details — https://example.com/details');
+  const secondImage = fullExport.indexOf('Image 2: https://example.com/two.jpg');
+  assert.ok(firstImage > -1 && firstImage < link && link < secondImage);
+  assert.doesNotMatch(fullExport, /RAW_SENTINEL/);
 });
 
-test('ChatGPT description export does not truncate a 41-image sequence', () => {
+test('a many-image description reports omissions without leaking image URLs', () => {
   const blocks = Array.from({ length: 41 }, (_, index) => ({
     type: 'image',
     url: `https://example.com/${index + 1}.jpg`,
     alt: null,
   }));
-  const output = core.formatDescription(core.buildDescription('dom', '<synthetic>', blocks));
+  blocks.splice(20, 0, { type: 'text', text: 'Useful seller text' });
+  const description = core.buildDescription('dom', '<synthetic>', blocks);
+  const mainOutput = core.formatDescriptionForChatGPT(description);
+  const fullOutput = core.formatDescription(description);
 
-  assert.match(output, /^Image 1: https:\/\/example\.com\/1\.jpg/);
-  assert.match(output, /Image 41: https:\/\/example\.com\/41\.jpg$/);
-  assert.equal(output.split('\n').length, 41);
+  assert.match(mainOutput, /Blocks: 42[\s\S]*Images: 41[\s\S]*Useful seller text/);
+  assert.doesNotMatch(mainOutput, /https:\/\/example\.com/);
+  assert.match(mainOutput, /41 image URLs omitted/);
+  assert.match(fullOutput, /^Image 1: https:\/\/example\.com\/1\.jpg/);
+  assert.match(fullOutput, /Image 41: https:\/\/example\.com\/41\.jpg$/);
+  assert.ok(fullOutput.indexOf('/20.jpg') < fullOutput.indexOf('Useful seller text'));
+  assert.ok(fullOutput.indexOf('Useful seller text') < fullOutput.indexOf('/21.jpg'));
+});
+
+test('link blocks keep visible text in main export and destinations only in full export', () => {
+  const description = core.buildDescription('dom', '<synthetic>', [
+    { type: 'text', text: 'Start' },
+    { type: 'link', text: 'Care guide', url: 'https://example.com/care' },
+    { type: 'image', url: 'https://example.com/chart.jpg', alt: null, linkUrl: 'https://example.com/chart' },
+  ]);
+  const mainOutput = core.formatDescriptionForChatGPT(description);
+  const fullOutput = core.formatDescription(description);
+
+  assert.match(mainOutput, /Links: 2[\s\S]*Start\nCare guide/);
+  assert.doesNotMatch(mainOutput, /https:\/\/example\.com/);
+  assert.match(mainOutput, /1 image URLs, 2 link URLs omitted/);
+  assert.match(fullOutput, /Care guide — https:\/\/example\.com\/care/);
+  assert.match(fullOutput, /Image 1: https:\/\/example\.com\/chart\.jpg → https:\/\/example\.com\/chart/);
+});
+
+test('ChatGPT description enforces the default 2500-character text budget', () => {
+  const first = 'A'.repeat(1400);
+  const second = 'B'.repeat(1300);
+  const description = core.buildDescription('dom', '<synthetic>', [
+    { type: 'text', text: first },
+    { type: 'heading', level: 2, text: second },
+    { type: 'text', text: 'TAIL' },
+  ]);
+  const output = core.formatDescriptionForChatGPT(description);
+  const body = output.split('\n\n')[1];
+
+  assert.equal(body, `${first}\n${'B'.repeat(1100)}`);
+  assert.equal(first.length + 1100, 2500);
+  assert.match(output, /Text characters: 2704/);
+  assert.match(output, /\[Description limited: 204 text characters omitted\./);
+  assert.doesNotMatch(output, /TAIL/);
+});
+
+test('ChatGPT description truncates an oversized block instead of dropping it', () => {
+  const description = core.buildDescription('dom', '<synthetic>', [
+    { type: 'heading', level: 1, text: 'ABCDEFGHIJ' },
+    { type: 'text', text: 'later' },
+  ]);
+  const output = core.formatDescriptionForChatGPT(description, { textBudget: 6 });
+
+  assert.match(output, /Text characters: 15\n\nABCDEF\n\n\[Description limited: 9 text characters omitted\./);
+  assert.doesNotMatch(output, /later/);
+});
+
+test('description formatters have stable missing-description semantics', () => {
+  const fixture = loadFixture('product-1005008195850531.json');
+  const product = core.normalizeProduct(fixture.data, 'https://aliexpress.ru/item/1005008195850531.html');
+
+  assert.equal(core.formatDescriptionForChatGPT(null), '—');
+  assert.equal(core.formatDescriptionForChatGPT({ blocks: [] }), '—');
+  assert.match(core.exportForChatGPT({ ...product, description: null }), /DESCRIPTION:\n—$/);
+  assert.match(core.exportDescription({ ...product, description: null }), /Blocks: 0\nImages: 0\nLinks: 0\n\nDESCRIPTION:\n—$/);
+});
+
+test('main product export bounds only Description and leaves Gallery and section order intact', () => {
+  const fixture = loadFixture('product-1005008195850531.json');
+  const product = core.normalizeProduct(fixture.data, 'https://aliexpress.ru/item/1005008195850531.html');
+  product.gallery = {
+    items: [{ type: 'image', imageUrl: 'https://gallery.example/full.jpg', previewUrl: 'https://gallery.example/preview.jpg' }],
+  };
+  product.description = core.buildDescription('dom', '<p>RAW_ONLY</p>', [
+    { type: 'text', text: 'Seller copy' },
+    { type: 'image', url: 'https://description.example/image.jpg', alt: null },
+  ]);
+  const output = core.exportForChatGPT(product);
+
+  assert.match(output, /GALLERY:\nItem 1 \(image\)\nImage: https:\/\/gallery\.example\/full\.jpg\nPreview: https:\/\/gallery\.example\/preview\.jpg\n\nDESCRIPTION:/);
+  assert.doesNotMatch(output, /https:\/\/description\.example/);
+  assert.ok(output.indexOf('CHARACTERISTICS:') < output.indexOf('GALLERY:'));
+  assert.ok(output.indexOf('GALLERY:') < output.indexOf('DESCRIPTION:'));
+});
+
+test('full Description export is isolated from raw HTML and unrelated product data', () => {
+  const product = {
+    title: 'Test item',
+    url: 'https://aliexpress.ru/item/123.html',
+    itemId: '123',
+    store: { name: 'UNRELATED_STORE_SENTINEL' },
+    reviews: [{ text: 'UNRELATED_REVIEW_SENTINEL' }],
+    description: core.buildDescription('dom', '<p>RAW_HTML_SENTINEL</p>', [
+      { type: 'text', text: 'Complete text' },
+      { type: 'image', url: 'https://example.com/full.jpg', alt: null },
+    ]),
+  };
+  const output = core.exportDescription(product);
+
+  assert.match(output, /^ALIEXPRESS DESCRIPTION\n\nTitle: Test item/);
+  assert.match(output, /Source: dom[\s\S]*Blocks: 2\nImages: 1\nLinks: 0[\s\S]*DESCRIPTION:\nComplete text\nImage 1: https:\/\/example\.com\/full\.jpg$/);
+  assert.doesNotMatch(output, /RAW_HTML_SENTINEL|UNRELATED_STORE_SENTINEL|UNRELATED_REVIEW_SENTINEL/);
 });
 
 test('stale description boundary is rejected until its identity or content changes', () => {

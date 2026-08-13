@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ali Helper
 // @namespace    https://github.com/local/ali-helper
-// @version      0.1.12
+// @version      0.1.13
 // @description  Read-only AliExpress URL cleaner and product/variant exporter
 // @match        https://aliexpress.ru/item/*
 // @match        https://www.aliexpress.com/item/*
@@ -18,7 +18,7 @@
 (function factory(root) {
   'use strict';
 
-  const VERSION = '0.1.12';
+  const VERSION = '0.1.13';
   const SETTINGS_KEY = 'ali-helper:settings:v1';
   const NATIVE_REVIEW_PATHNAME = '/aer-jsonapi/review/v5/desktop/product-reviews';
   const REVIEW_CAPTURE_CAP = 30;
@@ -2125,6 +2125,61 @@
     }).filter(Boolean).join('\n');
   }
 
+  function getDescriptionStats(description) {
+    const blocks = description?.blocks || [];
+    const textualBlocks = blocks.filter((block) => block.type === 'text' || block.type === 'heading' || block.type === 'link');
+    return {
+      blockCount: blocks.length,
+      textualBlockCount: textualBlocks.length,
+      imageCount: blocks.filter((block) => block.type === 'image').length,
+      linkCount: blocks.filter((block) => (block.type === 'link' && block.url) || (block.type === 'image' && block.linkUrl)).length,
+      textCharacterCount: textualBlocks.reduce((total, block) => total + String(block.text || '').length, 0),
+    };
+  }
+
+  function formatDescriptionForChatGPT(description, options = {}) {
+    if (!description?.blocks?.length) return '—';
+    const budget = Number.isFinite(options.textBudget) && options.textBudget >= 0
+      ? Math.floor(options.textBudget)
+      : 2500;
+    const stats = getDescriptionStats(description);
+    const content = [];
+    let emittedCharacters = 0;
+
+    for (const block of description.blocks) {
+      if (block.type !== 'text' && block.type !== 'heading' && block.type !== 'link') continue;
+      const text = String(block.text || '');
+      const remaining = budget - emittedCharacters;
+      if (remaining <= 0) break;
+      if (text.length <= remaining) {
+        content.push(text);
+        emittedCharacters += text.length;
+      } else {
+        content.push(text.slice(0, remaining));
+        emittedCharacters += remaining;
+        break;
+      }
+    }
+
+    const omittedTextCharacters = stats.textCharacterCount - emittedCharacters;
+    const omissions = [];
+    if (omittedTextCharacters) omissions.push(`${omittedTextCharacters} text characters`);
+    if (stats.imageCount) omissions.push(`${stats.imageCount} image URLs`);
+    if (stats.linkCount) omissions.push(`${stats.linkCount} link URLs`);
+    const lines = [
+      `Blocks: ${stats.blockCount}`,
+      `Text/heading/link blocks: ${stats.textualBlockCount}`,
+      `Images: ${stats.imageCount}`,
+      `Links: ${stats.linkCount}`,
+      `Text characters: ${stats.textCharacterCount}`,
+    ];
+    if (content.length) lines.push('', ...content);
+    if (omissions.length) {
+      lines.push('', `[Description limited: ${omissions.join(', ')} omitted. Use Copy description for the full ordered normalized description.]`);
+    }
+    return lines.join('\n');
+  }
+
   function formatGallery(gallery) {
     if (!gallery?.items?.length) return '—';
     return gallery.items.map((item, index) => item.type === 'video'
@@ -2196,6 +2251,26 @@
     return JSON.stringify(product, null, 2);
   }
 
+  function exportDescription(product) {
+    const description = product?.description;
+    const stats = getDescriptionStats(description);
+    return [
+      'ALIEXPRESS DESCRIPTION',
+      '',
+      `Title: ${product?.title || '—'}`,
+      `URL: ${product?.url || '—'}`,
+      `Item ID: ${product?.itemId || '—'}`,
+      `Source: ${description?.source || '—'}`,
+      '',
+      `Blocks: ${stats.blockCount}`,
+      `Images: ${stats.imageCount}`,
+      `Links: ${stats.linkCount}`,
+      '',
+      'DESCRIPTION:',
+      formatDescription(description),
+    ].join('\n');
+  }
+
   function exportForChatGPT(product) {
     const selected = product.selectedSku;
     const prices = product.skus.map((sku) => sku.price.current?.value).filter(Boolean);
@@ -2239,7 +2314,7 @@
       formatGallery(product.gallery),
       '',
       'DESCRIPTION:',
-      formatDescription(product.description),
+      formatDescriptionForChatGPT(product.description),
     ].join('\n');
   }
 
@@ -2335,6 +2410,7 @@
     updateSelectedSku,
     exportProduct,
     exportVariants,
+    exportDescription,
     exportForChatGPT,
     formatSelections,
     formatSourceLabel,
@@ -2344,6 +2420,7 @@
     formatStore,
     formatGallery,
     formatDescription,
+    formatDescriptionForChatGPT,
     isShippingCalculateUrl,
     redactSensitiveJson,
     createShippingDebugCapture,
@@ -2614,6 +2691,7 @@
             <button data-action="product" disabled>Copy product</button>
             <button data-action="variants" disabled>Copy variants</button>
             <button class="wide" data-action="chatgpt" disabled>Copy for ChatGPT</button>
+            <button class="wide" data-action="description" disabled>Copy description</button>
           </div>
           <details>
             <summary>Settings</summary>
@@ -2627,7 +2705,7 @@
 
     const panel = shadow.querySelector('.panel');
     const status = shadow.querySelector('.status');
-    const productButtons = ['product', 'variants', 'chatgpt'].map((name) => shadow.querySelector(`[data-action="${name}"]`));
+    const productButtons = ['product', 'variants', 'chatgpt', 'description'].map((name) => shadow.querySelector(`[data-action="${name}"]`));
     const autoRedirect = shadow.querySelector('[data-setting="autoRedirectComToRu"]');
     const shippingDebug = shadow.querySelector('[data-action="shipping-debug"]');
     autoRedirect.checked = runtime.settings.autoRedirectComToRu;
@@ -2662,6 +2740,9 @@
       } else if (action === 'chatgpt' && runtime.product) {
         runtime.refreshProductEnrichment?.();
         copyWithFeedback(exportForChatGPT(runtime.product), 'Product');
+      } else if (action === 'description' && runtime.product) {
+        runtime.refreshProductEnrichment?.();
+        copyWithFeedback(exportDescription(runtime.product), 'Description');
       } else if (action === 'shipping-debug' && runtime.shippingCapture) {
         copyWithFeedback(JSON.stringify(runtime.shippingCapture, null, 2), 'Shipping debug');
       }

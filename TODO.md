@@ -677,6 +677,12 @@ texts или images.
 - [x] Не выводить автоматически сотни SKU или reviews.
 - [ ] Для больших sections показывать summary/current data и предоставлять
       отдельный explicit full export action.
+      Description покрыт отдельно: основной product ChatGPT export сохраняет
+      normalized heading/text/link visible text в source order с бюджетом 2500
+      символов, исключает image URLs и link destination URLs, сообщает counts и
+      explicit omission diagnostics; `Copy description` экспортирует полный
+      ordered normalized Description без `rawHtml`. Общий пункт остаётся открыт
+      для других sections, которым в будущем действительно потребуется limiting.
 - [x] Проверить deterministic output на regression fixtures.
 
 Reviews ChatGPT export: default sample = 5; formatter clamp = 1–20;
