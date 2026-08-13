@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ali Helper
 // @namespace    https://github.com/local/ali-helper
-// @version      0.1.11
+// @version      0.1.12
 // @description  Read-only AliExpress URL cleaner and product/variant exporter
 // @match        https://aliexpress.ru/item/*
 // @match        https://www.aliexpress.com/item/*
@@ -18,7 +18,7 @@
 (function factory(root) {
   'use strict';
 
-  const VERSION = '0.1.11';
+  const VERSION = '0.1.12';
   const SETTINGS_KEY = 'ali-helper:settings:v1';
   const NATIVE_REVIEW_PATHNAME = '/aer-jsonapi/review/v5/desktop/product-reviews';
   const REVIEW_CAPTURE_CAP = 30;
@@ -791,6 +791,102 @@
       reviews: reviewPage.reviews,
     };
     return JSON.stringify(exported, null, 2);
+  }
+
+  function humanizeReviewsSource(source) {
+    return ({
+      'ssr:__AER_DATA__': 'SSR',
+      'ssr+native': 'SSR + passive native',
+      'native:product-reviews': 'passive native',
+    })[source] || 'unknown';
+  }
+
+  function formatReviewsPages(pages) {
+    if (!Array.isArray(pages) || !pages.length) return '—';
+    const contiguous = pages[0] === 1 && pages.every((page, index) => page === index + 1);
+    return contiguous && pages.length > 1 ? `1–${pages.at(-1)}` : pages.join(', ');
+  }
+
+  function indentReviewText(value) {
+    return String(value).split(/\r\n|\r|\n/).map((line) => `  ${line}`).join('\n');
+  }
+
+  function formatReviewTextFields(part) {
+    if (part.text === null && part.originalText === null) return ['Text: none'];
+    const lines = [];
+    if (part.text !== null) lines.push('Displayed text:', indentReviewText(part.text));
+    if (part.originalText !== null) lines.push('Original text:', indentReviewText(part.originalText));
+    return lines;
+  }
+
+  function formatReviewComments(comments) {
+    const total = comments.length;
+    const shown = comments.slice(0, 2);
+    const lines = [`Comments: ${total}${total > shown.length ? ` (showing first ${shown.length})` : ''}`];
+    shown.forEach((comment, index) => {
+      lines.push(
+        `Comment ${index + 1}:`,
+        `Date: ${comment.dateRaw ?? '—'}`,
+        ...formatReviewTextFields(comment),
+      );
+    });
+    return lines;
+  }
+
+  function formatReviewPart(label, part) {
+    if (part === null) return [`${label}: none`];
+    return [
+      `${label}:`,
+      `Date: ${part.dateRaw ?? '—'}`,
+      `Rating: ${part.grade === null ? 'null' : part.grade}`,
+      ...formatReviewTextFields(part),
+      `Images: ${part.images.length}`,
+      ...formatReviewComments(part.comments),
+    ];
+  }
+
+  function formatReviewsForChatGPT(reviewPage, options = {}) {
+    const requestedSampleSize = options.sampleSize;
+    const sampleSize = Number.isInteger(requestedSampleSize)
+      ? Math.min(20, Math.max(1, requestedSampleSize))
+      : 5;
+    const context = reviewPage.context;
+    const sortLabel = context.sort === 1 ? 'Top reviews'
+      : (context.sort === 2 ? 'New reviews first' : `Sort ${context.sort}`);
+    const filterLabels = context.filters.map((code) => ({ 1: 'With photos', 2: 'Additional' }[code] || `Filter ${code}`));
+    const reviews = reviewPage.reviews.slice(0, sampleSize);
+    const lines = [
+      'ALIEXPRESS REVIEWS',
+      '',
+      `Item ID: ${reviewPage.itemId}`,
+      `Source: ${humanizeReviewsSource(reviewPage.source)}`,
+      '',
+      'Context:',
+      `Sort: ${sortLabel}`,
+      `Filters: ${filterLabels.length ? filterLabels.join(' + ') : 'All'}`,
+      `SKU filter: ${context.skuFilter.length ? `${context.skuFilter.length} IDs` : 'none'}`,
+      `Page size: ${context.pageSize}`,
+      '',
+      `Pages: ${formatReviewsPages(reviewPage.pagesLoaded)}`,
+      `Captured: ${reviewPage.loadedCount} reviews`,
+      `Capture cap: ${reviewPage.captureCap}`,
+      `Cap reached: ${reviewPage.captureCapReached ? 'yes' : 'no'}`,
+      `Diagnostic: ${reviewPage.diagnostic || '—'}`,
+      reviews.length ? `Sample: first ${reviews.length} of ${reviewPage.loadedCount}` : 'Sample: none',
+    ];
+    reviews.forEach((review, index) => {
+      lines.push(
+        '',
+        `Review ${index + 1}`,
+        `SKU: ${review.skuProperties ?? '—'}`,
+        `Likes: ${review.likesAmount}`,
+        '',
+        ...formatReviewPart('Initial', review.initial),
+        '',
+        ...formatReviewPart('Follow-up', review.additional),
+      );
+    });
+    return lines.join('\n');
   }
 
   function isPlainObject(value) {
@@ -2195,6 +2291,7 @@
     inspectReviewsPageFromSsrData,
     extractReviewsPageFromSsrData,
     exportReviewsPage,
+    formatReviewsForChatGPT,
     parseLocalizedRating,
     parseLocalizedCount,
     parseLocalizedPercentage,
@@ -2602,6 +2699,7 @@
         button { border:1px solid #d7d7d7; border-radius:8px; background:#fff; color:#222; padding:7px 9px; cursor:pointer; font:inherit; }
         button:disabled { opacity:.45; cursor:not-allowed; }
         .icon { padding:4px 8px; }
+        .actions { display:flex; flex-direction:column; gap:7px; }
         .action { width:100%; }
         .status { margin:0 0 9px; padding:7px 8px; border-radius:7px; background:#f5f5f5; overflow-wrap:anywhere; }
         .status.error { color:#8a1f11; background:#fff0ed; }
@@ -2611,14 +2709,17 @@
         <header><strong>Ali Helper</strong><button class="icon" data-action="toggle" title="Collapse/expand">—</button></header>
         <div class="body">
           <div class="status">Waiting for first-page SSR reviews…</div>
-          <button class="action" data-action="reviews" disabled>Copy reviews JSON</button>
+          <div class="actions">
+            <button class="action" data-action="reviews" disabled>Copy reviews JSON</button>
+            <button class="action" data-action="reviews-chatgpt" disabled>Copy reviews for ChatGPT</button>
+          </div>
           <div class="meta">Read/copy/navigation only · v${VERSION}</div>
         </div>
       </section>`;
     (document.body || document.documentElement).appendChild(host);
     const panel = shadow.querySelector('.panel');
     const status = shadow.querySelector('.status');
-    const copyButton = shadow.querySelector('[data-action="reviews"]');
+    const copyButtons = shadow.querySelectorAll('[data-action="reviews"], [data-action="reviews-chatgpt"]');
     panel.classList.toggle('collapsed', runtime.settings.panelCollapsed);
     shadow.querySelector('[data-action="toggle"]').textContent = runtime.settings.panelCollapsed ? '+' : '—';
     function flash(message, isError = false) {
@@ -2639,11 +2740,18 @@
         } catch (error) {
           flash(`Copy failed: ${error.message}`, true);
         }
+      } else if (action === 'reviews-chatgpt' && runtime.reviewPage) {
+        try {
+          await copyText(formatReviewsForChatGPT(runtime.reviewPage));
+          flash('Reviews for ChatGPT copied.');
+        } catch (error) {
+          flash(`Copy failed: ${error.message}`, true);
+        }
       }
     });
     return {
       setReviews(reviewPage) {
-        copyButton.disabled = false;
+        copyButtons.forEach((button) => { button.disabled = false; });
         flash(formatReviewsPageStatus(reviewPage));
       },
       setStatus: flash,

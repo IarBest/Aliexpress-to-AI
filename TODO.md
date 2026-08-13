@@ -463,12 +463,13 @@ bounded retries reviews-page UI показывает соответствующ�
 #### Reviews-page UI и export
 
 Минимальный success status —
-`Reviews ready · N first-page reviews · source: SSR`; действие —
-`Copy reviews JSON`. Export имеет форму
-`{ itemId, source: "ssr:__AER_DATA__", reviews }`. Panel использует существующий
-collapse setting. Product buttons PDP не переносятся, reviews не сохраняются в
-persistent storage. Copy for ChatGPT reviews, Load more и pagination пока не
-реализованы.
+`Reviews ready · N first-page reviews · source: SSR`; действия —
+`Copy reviews JSON` и `Copy reviews for ChatGPT`. JSON export содержит полный
+normalized active context, а ChatGPT export — его metadata и ограниченную
+privacy-minimized выборку reviews. Panel использует существующий collapse
+setting. Product buttons PDP не переносятся, reviews не сохраняются в
+persistent storage. Explicit Load more не реализован; pagination остаётся
+пассивной и происходит только после native действий страницы.
 
 #### Captured fixtures и sanitization
 
@@ -650,7 +651,7 @@ Dated smoke на активном Ali Helper v0.1.10 подтвердил:
 - [x] Покрыть follow-up text при пустом initial/root text.
 - [x] Покрыть photos только в `additional.images`.
 - [x] Не создавать единый `effective rating` или text.
-- [ ] В ChatGPT export явно разделить `Initial rating/review` и
+- [x] В ChatGPT export явно разделить `Initial rating/review` и
       `Follow-up rating/review`.
 
 Real native observations: rating transitions `5 → 4` и `5 → 2`;
@@ -666,17 +667,21 @@ texts или images.
 
 ### Structured AI export
 
-- [ ] Расширять `Copy for ChatGPT` только из normalized model, не из DOM.
-- [ ] Добавить sections Title/Clean URL/Item ID и selected SKU/variants.
-- [ ] Добавить selected price, regular price и stock.
-- [ ] Добавить SELLER, RATING и STAR DISTRIBUTION после появления данных.
-- [ ] Добавить VARIANTS summary и отдельный full combinations export.
-- [ ] Добавить SIZE GUIDE, CHARACTERISTICS, DELIVERY и ordered DESCRIPTION.
-- [ ] Добавить REVIEWS summary и ограниченную выборку reviews.
-- [ ] Не выводить автоматически сотни SKU или reviews.
+- [x] Расширять `Copy for ChatGPT` только из normalized model, не из DOM.
+- [x] Добавить sections Title/Clean URL/Item ID и selected SKU/variants.
+- [x] Добавить selected price, regular price и stock.
+- [x] Добавить SELLER, RATING и STAR DISTRIBUTION после появления данных.
+- [x] Добавить VARIANTS summary и отдельный full combinations export.
+- [x] Добавить SIZE GUIDE, CHARACTERISTICS, DELIVERY и ordered DESCRIPTION.
+- [x] Добавить REVIEWS summary и ограниченную выборку reviews.
+- [x] Не выводить автоматически сотни SKU или reviews.
 - [ ] Для больших sections показывать summary/current data и предоставлять
       отдельный explicit full export action.
-- [ ] Проверить deterministic output на regression fixtures.
+- [x] Проверить deterministic output на regression fixtures.
+
+Reviews ChatGPT export: default sample = 5; formatter clamp = 1–20;
+privacy-minimized text export. Полная fidelity normalized reviews остаётся
+доступной через `Copy reviews JSON`.
 
 Acceptance: основной export остаётся читаемым и ограниченным по объёму, а полные
 данные доступны отдельными действиями.

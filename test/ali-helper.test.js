@@ -2835,6 +2835,217 @@ test('active reviews export exposes context/cap metadata without raw network fie
   assert.doesNotMatch(text, /raw request|raw response|_bx-v|headers|analyticEvents|trackingInfo|isLiked|spm/);
 });
 
+test('reviews ChatGPT formatter has deterministic full-string layout and multiline indentation', () => {
+  const reviewPage = {
+    itemId: '123', source: 'native:product-reviews',
+    context: { sort: 2, filters: [1], skuFilter: ['10'], pageSize: 10 },
+    pagesLoaded: [1], loadedCount: 1, captureCap: 30, captureCapReached: false,
+    reviews: [{
+      id: 'private-review-id', productId: '123', skuProperties: null,
+      reviewer: { displayName: 'Private Reviewer', initials: 'PR', avatarUrl: 'https://fixtures.invalid/avatar.png', countryFlagUrl: 'https://fixtures.invalid/flag.svg' },
+      initial: {
+        dateRaw: null, grade: null, text: 'Line one\nLine two', originalText: null,
+        images: [{ id: 'private-image-id', url: 'https://fixtures.invalid/image.jpg' }],
+        comments: [
+          { id: 'comment-1', authorDisplayName: 'Author 1', authorInitials: 'A1', authorAvatarUrl: null, dateRaw: 'Day 1', text: 'Reply one', originalText: null },
+          { id: 'comment-2', authorDisplayName: 'Author 2', authorInitials: 'A2', authorAvatarUrl: null, dateRaw: 'Day 2', text: null, originalText: 'Original reply\nsecond line' },
+          { id: 'comment-3', authorDisplayName: 'Author 3', authorInitials: 'A3', authorAvatarUrl: null, dateRaw: 'Day 3', text: 'Hidden reply', originalText: null },
+        ],
+      },
+      additional: {
+        id: 'private-follow-up-id', dateRaw: 'Later', grade: 4, text: null, originalText: null,
+        images: [], comments: [],
+      },
+      likesAmount: 0,
+    }],
+  };
+  assert.equal(core.formatReviewsForChatGPT(reviewPage), [
+    'ALIEXPRESS REVIEWS',
+    '',
+    'Item ID: 123',
+    'Source: passive native',
+    '',
+    'Context:',
+    'Sort: New reviews first',
+    'Filters: With photos',
+    'SKU filter: 1 IDs',
+    'Page size: 10',
+    '',
+    'Pages: 1',
+    'Captured: 1 reviews',
+    'Capture cap: 30',
+    'Cap reached: no',
+    'Diagnostic: —',
+    'Sample: first 1 of 1',
+    '',
+    'Review 1',
+    'SKU: —',
+    'Likes: 0',
+    '',
+    'Initial:',
+    'Date: —',
+    'Rating: null',
+    'Displayed text:',
+    '  Line one',
+    '  Line two',
+    'Images: 1',
+    'Comments: 3 (showing first 2)',
+    'Comment 1:',
+    'Date: Day 1',
+    'Displayed text:',
+    '  Reply one',
+    'Comment 2:',
+    'Date: Day 2',
+    'Original text:',
+    '  Original reply',
+    '  second line',
+    '',
+    'Follow-up:',
+    'Date: Later',
+    'Rating: 4',
+    'Text: none',
+    'Images: 0',
+    'Comments: 0',
+  ].join('\n'));
+});
+
+test('Relay SSR ChatGPT export reports default context, five reviews, null text, zero likes, and no follow-ups', () => {
+  const fixture = loadFixture('reviews-ssr-1005008195850531.json');
+  const ssrPage = core.extractReviewsPageFromSsrData(fixture, fixture.itemId);
+  const active = core.getActiveReviewPage(core.seedReviewCacheFromSsr(core.createReviewCache(fixture.itemId), ssrPage));
+  const text = core.formatReviewsForChatGPT(active);
+  assert.match(text, /^ALIEXPRESS REVIEWS\n\n/);
+  assert.match(text, new RegExp(`Item ID: ${fixture.itemId}`));
+  assert.match(text, /Source: SSR/);
+  assert.match(text, /Sort: Top reviews\nFilters: All\nSKU filter: none\nPage size: 10/);
+  assert.match(text, /Captured: 5 reviews/);
+  assert.match(text, /Sample: first 5 of 5/);
+  assert.equal((text.match(/^Review \d+$/gm) || []).length, 5);
+  assert.match(text, /Likes: 0/);
+  assert.ok((text.match(/Text: none/g) || []).length >= 1);
+  assert.equal((text.match(/Follow-up: none/g) || []).length, 5);
+});
+
+test('Dress ChatGPT export samples first five of twenty in normalized merged order and honors sampleSize', () => {
+  const ssrFixture = loadFixture('reviews-ssr-1005009452926938.json');
+  const nativeFixture = loadFixture('reviews-native-page2-1005009452926938.json');
+  const ssrPage = core.extractReviewsPageFromSsrData(ssrFixture, ssrFixture.itemId);
+  let cache = core.seedReviewCacheFromSsr(core.createReviewCache(ssrFixture.itemId), ssrPage);
+  const batch = core.normalizeNativeReviewBatch(nativeFixture.request.body, nativeFixture.response, nativeFixture.itemId);
+  cache = core.applyNativeReviewBatch(cache, batch);
+  const active = core.getActiveReviewPage(cache);
+  const text = core.formatReviewsForChatGPT(active);
+  assert.equal(active.loadedCount, 20);
+  assert.match(text, /Sample: first 5 of 20/);
+  assert.equal((text.match(/^Review \d+$/gm) || []).length, 5);
+  ssrPage.reviews.slice(0, 5).forEach((review) => assert.match(text, new RegExp(review.initial.text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))));
+  assert.doesNotMatch(text, /Translated dress review D6\./);
+  const two = core.formatReviewsForChatGPT(active, { sampleSize: 2 });
+  assert.match(two, /Sample: first 2 of 20/);
+  assert.equal((two.match(/^Review \d+$/gm) || []).length, 2);
+  assert.match(core.formatReviewsForChatGPT(active, { sampleSize: 0 }), /Sample: first 1 of 20/);
+  assert.match(core.formatReviewsForChatGPT(active, { sampleSize: 99 }), /Sample: first 20 of 20/);
+  assert.match(core.formatReviewsForChatGPT(active, { sampleSize: '2' }), /Sample: first 5 of 20/);
+});
+
+test('Dress ChatGPT export keeps useful review content while excluding identity, IDs, and URL noise', () => {
+  const fixture = loadFixture('reviews-ssr-1005009452926938.json');
+  const ssrPage = core.extractReviewsPageFromSsrData(fixture, fixture.itemId);
+  const active = core.getActiveReviewPage(core.seedReviewCacheFromSsr(core.createReviewCache(fixture.itemId), ssrPage));
+  const sample = active.reviews.slice(0, 5);
+  const text = core.formatReviewsForChatGPT(active);
+  sample.forEach((review) => {
+    [review.id, review.reviewer.displayName, review.reviewer.initials, review.reviewer.avatarUrl, review.reviewer.countryFlagUrl]
+      .filter(Boolean).forEach((value) => assert.equal(text.includes(value), false));
+    review.initial.images.forEach((image) => {
+      assert.equal(text.includes(image.id), false);
+      assert.equal(text.includes(image.url), false);
+    });
+    review.initial.comments.forEach((comment) => {
+      [comment.id, comment.authorDisplayName, comment.authorInitials, comment.authorAvatarUrl]
+        .filter(Boolean).forEach((value) => assert.equal(text.includes(value), false));
+      if (comment.text !== null) assert.ok(text.includes(comment.text));
+      if (comment.originalText !== null) assert.ok(text.includes(comment.originalText));
+    });
+    assert.ok(text.includes(`SKU: ${review.skuProperties ?? '—'}`));
+    assert.ok(text.includes(`Rating: ${review.initial.grade}`));
+    assert.ok(text.includes(`Likes: ${review.likesAmount}`));
+    assert.ok(text.includes(`Images: ${review.initial.images.length}`));
+    if (review.initial.text !== null) assert.ok(text.includes(review.initial.text));
+    if (review.initial.originalText !== null) assert.ok(text.includes(review.initial.originalText));
+  });
+  assert.match(text, /Displayed text:\n  Translated dress review D1\.\nOriginal text:\n  Original dress review D1\./);
+  assert.doesNotMatch(text, /_bx-v|https?:\/\//);
+});
+
+test('real Additional context exports distinct initial and follow-up semantics without effective fields', () => {
+  const fixture = loadFixture('reviews-native-additional-32882927175.json');
+  let cache = core.createReviewCache(fixture.itemId);
+  const batch = core.normalizeNativeReviewBatch(fixture.request.body, fixture.response, fixture.itemId);
+  cache = core.applyNativeReviewBatch(cache, batch);
+  const text = core.formatReviewsForChatGPT(core.getActiveReviewPage(cache));
+  assert.match(text, /Filters: Additional/);
+  assert.match(text, /Initial:\nDate: [^\n]+\nRating: 5[\s\S]*?Follow-up:\nDate: [^\n]+\nRating: 4/);
+  assert.match(text, /Initial:\nDate: [^\n]+\nRating: 5[\s\S]*?Follow-up:\nDate: [^\n]+\nRating: 2/);
+  assert.match(text, /Follow-up:\nDate: [^\n]+\nRating: null/);
+  assert.match(text, /Initial:\nDate: [^\n]+\nRating: 5\nText: none[\s\S]*?Follow-up:[\s\S]*?Displayed text:/);
+  assert.match(text, /Initial:[\s\S]*?Images: 0[\s\S]*?Follow-up:[\s\S]*?Images: 1/);
+  assert.doesNotMatch(text, /effectiveRating|latestRating|averageRating|effectiveText/i);
+  fixture.response.data.reviews.forEach((raw) => {
+    [raw.root.id, raw.additional.id, raw.reviewer.name, raw.reviewer.avatar, raw.reviewer.countryFlag]
+      .filter(Boolean).forEach((value) => assert.equal(text.includes(String(value)), false));
+  });
+});
+
+test('empty combined context and unknown codes remain explicit and deterministic', () => {
+  const fixture = loadFixture('reviews-native-contexts-1005009452926938.json');
+  const capture = fixture.captures.photosAdditional;
+  let cache = core.createReviewCache(fixture.itemId);
+  cache = core.applyNativeReviewBatch(cache, core.normalizeNativeReviewBatch(capture.body, capture.response, fixture.itemId));
+  const emptyText = core.formatReviewsForChatGPT(core.getActiveReviewPage(cache));
+  assert.match(emptyText, /Filters: With photos \+ Additional/);
+  assert.match(emptyText, /Captured: 0 reviews/);
+  assert.match(emptyText, /Sample: none$/);
+  assert.doesNotMatch(emptyText, /^Review 1$/m);
+  const unknown = {
+    ...core.getActiveReviewPage(cache),
+    context: { sort: 7, filters: [1, 9], skuFilter: [], pageSize: 10 },
+  };
+  const unknownText = core.formatReviewsForChatGPT(unknown);
+  assert.match(unknownText, /Sort: Sort 7/);
+  assert.match(unknownText, /Filters: With photos \+ Filter 9/);
+});
+
+test('reviews ChatGPT formatter exposes non-contiguous pages and safe diagnostics without re-merging', () => {
+  const fixture = loadFixture('reviews-ssr-1005009452926938.json');
+  const review = core.normalizeReviewCandidate(fixture.widget.props.reviews.slice(0, 1), fixture.itemId)[0];
+  const text = core.formatReviewsForChatGPT({
+    itemId: fixture.itemId, source: 'ssr+native',
+    context: { sort: 1, filters: [], skuFilter: [], pageSize: 10 },
+    pagesLoaded: [1, 3], loadedCount: 1, captureCap: 30, captureCapReached: false,
+    diagnostic: 'page-gap', reviews: [review],
+  });
+  assert.match(text, /Source: SSR \+ passive native/);
+  assert.match(text, /Pages: 1, 3/);
+  assert.match(text, /Diagnostic: page-gap/);
+  assert.match(text, /Sample: first 1 of 1/);
+});
+
+test('normalized reviews JSON export remains full fidelity while ChatGPT export is privacy-minimized', () => {
+  const fixture = loadFixture('reviews-ssr-1005009452926938.json');
+  const ssrPage = core.extractReviewsPageFromSsrData(fixture, fixture.itemId);
+  const active = core.getActiveReviewPage(core.seedReviewCacheFromSsr(core.createReviewCache(fixture.itemId), ssrPage));
+  const exported = JSON.parse(core.exportReviewsPage(active));
+  assert.equal(exported.reviews[0].id, active.reviews[0].id);
+  assert.deepEqual(exported.reviews[0].reviewer, active.reviews[0].reviewer);
+  assert.deepEqual(exported.reviews[0].initial.images, active.reviews[0].initial.images);
+  assert.deepEqual(exported.reviews[0].initial.comments, active.reviews[0].initial.comments);
+  const aiText = core.formatReviewsForChatGPT(active);
+  assert.equal(aiText.includes(active.reviews[0].id), false);
+  assert.equal(aiText.includes(active.reviews[0].reviewer.displayName), false);
+  assert.equal(aiText.includes(active.reviews[0].initial.images[0].url), false);
+});
+
 test('review status humanizes only confirmed sort/filter codes and reports passive capture', () => {
   const status = core.formatReviewsPageStatus({
     source: 'native:product-reviews', loadedCount: 0, pagesLoaded: [1], captureCapReached: false,
