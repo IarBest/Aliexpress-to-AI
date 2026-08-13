@@ -2464,3 +2464,459 @@ test('SSR review inspection distinguishes safe failure diagnostics without raw d
     assert.deepEqual(Object.keys(inspection).sort(), ['diagnostic', 'reviewPage']);
   });
 });
+
+function nativeReviewBody(itemId, overrides = {}) {
+  return {
+    productKey: { id: itemId, sourceId: 0 },
+    pagination: { pageNum: 2, pageSize: 10 },
+    sort: 1,
+    filters: [],
+    skuFilter: [],
+    ...overrides,
+  };
+}
+
+function nativeReviewBatch(itemId, pageNum, reviews, context = {}) {
+  return {
+    itemId,
+    source: 'native:product-reviews',
+    context: { sort: 1, filters: [], skuFilter: [], pageSize: 10, ...context },
+    pageNum,
+    reviews,
+  };
+}
+
+test('native review endpoint matcher is same-origin, exact-path, and query-opaque', () => {
+  const base = 'https://aliexpress.ru/item/1005009452926938/reviews';
+  const endpoint = 'https://aliexpress.ru/aer-jsonapi/review/v5/desktop/product-reviews';
+  assert.equal(core.isNativeReviewEndpoint(`${endpoint}?_bx-v=opaque&anything=ignored`, base), true);
+  assert.equal(core.isNativeReviewEndpoint('/aer-jsonapi/review/v5/desktop/product-reviews?x=1', base), true);
+  assert.equal(core.isNativeReviewEndpoint(`${endpoint}/extra`, base), false);
+  assert.equal(core.isNativeReviewEndpoint('https://www.aliexpress.ru/aer-jsonapi/review/v5/desktop/product-reviews', base), false);
+  assert.equal(core.isNativeReviewEndpoint('https://example.com/aer-jsonapi/review/v5/desktop/product-reviews', base), false);
+});
+
+test('normalizes confirmed native review request contexts without mutating wire arrays', () => {
+  const itemId = '1005009452926938';
+  const filters = [2, 1, 2];
+  const skuFilter = ['12000049151727541', '12000049151727537', '12000049151727537'];
+  const normalized = core.normalizeNativeReviewRequest(nativeReviewBody(itemId, {
+    pagination: { pageNum: 3, pageSize: 10 }, sort: 2, filters, skuFilter,
+  }), itemId);
+  assert.deepEqual(normalized, {
+    itemId, sourceId: 0, pageNum: 3, pageSize: 10, sort: 2,
+    filters: [2, 1, 2], skuFilter: ['12000049151727541', '12000049151727537', '12000049151727537'],
+  });
+  const context = core.canonicalizeReviewContext(normalized);
+  assert.deepEqual(context, {
+    sort: 2, filters: [1, 2], skuFilter: ['12000049151727537', '12000049151727541'], pageSize: 10,
+  });
+  assert.deepEqual(filters, [2, 1, 2]);
+  assert.deepEqual(skuFilter, ['12000049151727541', '12000049151727537', '12000049151727537']);
+});
+
+test('native review request normalizer accepts passive schema drift but fails unsafe shapes closed', () => {
+  const itemId = '1005009452926938';
+  assert.equal(core.normalizeNativeReviewRequest(nativeReviewBody(itemId, { pagination: { pageNum: 1, pageSize: 25 }, sort: 17, filters: [0, 9] }), itemId).sort, 17);
+  const invalid = [
+    null,
+    nativeReviewBody('999'),
+    nativeReviewBody(itemId, { productKey: { id: itemId, sourceId: 0.5 } }),
+    nativeReviewBody(itemId, { pagination: { pageNum: 0, pageSize: 10 } }),
+    nativeReviewBody(itemId, { pagination: { pageNum: 1, pageSize: 101 } }),
+    nativeReviewBody(itemId, { sort: '1' }),
+    nativeReviewBody(itemId, { filters: [1, '2'] }),
+    nativeReviewBody(itemId, { skuFilter: [12000049151727537] }),
+    nativeReviewBody(itemId, { skuFilter: ['sku-blue'] }),
+  ];
+  invalid.forEach((body) => assert.equal(core.normalizeNativeReviewRequest(body, itemId), null));
+});
+
+test('normalizes native response through the existing review model and accepts a real empty envelope', () => {
+  const fixture = loadFixture('reviews-ssr-1005009452926938.json');
+  const raw = fixture.widget.props.reviews.slice(0, 2);
+  const reviews = core.normalizeNativeReviewResponse({ data: { reviews: raw } }, fixture.itemId);
+  assert.deepEqual(reviews, core.normalizeReviewCandidate(raw, fixture.itemId));
+  assert.deepEqual(core.normalizeNativeReviewResponse({ data: { reviews: [] } }, fixture.itemId), []);
+  assert.equal(core.normalizeNativeReviewResponse({}, fixture.itemId), null);
+  assert.equal(core.normalizeNativeReviewResponse({ data: { reviews: {} } }, fixture.itemId), null);
+  const malformed = clone(raw);
+  delete malformed[0].root.id;
+  assert.equal(core.normalizeNativeReviewResponse({ data: { reviews: malformed } }, fixture.itemId), null);
+  assert.equal(core.normalizeNativeReviewResponse({ data: { reviews: raw } }, '999'), null);
+});
+
+test('native request and response combine into one raw-free canonical batch', () => {
+  const fixture = loadFixture('reviews-ssr-1005009452926938.json');
+  const body = nativeReviewBody(fixture.itemId, { filters: [2, 1, 2] });
+  const batch = core.normalizeNativeReviewBatch(body, { data: { reviews: fixture.widget.props.reviews.slice(0, 1) } }, fixture.itemId);
+  assert.deepEqual(Object.keys(batch), ['itemId', 'source', 'context', 'pageNum', 'reviews']);
+  assert.equal(batch.source, 'native:product-reviews');
+  assert.deepEqual(batch.context.filters, [1, 2]);
+  assert.equal(JSON.stringify(batch).includes('_bx-v'), false);
+});
+
+test('passive review fetch wrapper is idempotent and preserves one native invocation and original arguments', async () => {
+  const fixture = loadFixture('reviews-ssr-1005009452926938.json');
+  const responseJson = { data: { reviews: fixture.widget.props.reviews.slice(0, 1) } };
+  let calls = 0;
+  let receivedThis;
+  let receivedArgs;
+  const originalResponse = { clone: () => ({ json: async () => responseJson }) };
+  const originalFetch = function (...args) {
+    calls += 1;
+    receivedThis = this;
+    receivedArgs = args;
+    return Promise.resolve(originalResponse);
+  };
+  const pageWindow = { fetch: originalFetch, location: { href: `https://aliexpress.ru/item/${fixture.itemId}/reviews` } };
+  const batches = [];
+  core.installNativeReviewInterceptor(pageWindow, fixture.itemId, (batch, sequence) => batches.push({ batch, sequence }));
+  const wrapper = pageWindow.fetch;
+  core.installNativeReviewInterceptor(pageWindow, fixture.itemId, () => assert.fail('double wrapper'));
+  assert.equal(pageWindow.fetch, wrapper);
+  const init = { method: 'POST', body: JSON.stringify(nativeReviewBody(fixture.itemId)), headers: { 'Content-Type': 'application/json' }, credentials: 'include', signal: { marker: true } };
+  const url = 'https://aliexpress.ru/aer-jsonapi/review/v5/desktop/product-reviews?_bx-v=opaque';
+  const returned = pageWindow.fetch(url, init);
+  assert.equal(await returned, originalResponse);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls, 1);
+  assert.equal(receivedThis, pageWindow);
+  assert.equal(receivedArgs[0], url);
+  assert.equal(receivedArgs[1], init);
+  assert.equal(batches.length, 1);
+  assert.equal(batches[0].batch.pageNum, 2);
+  assert.equal(batches[0].sequence, 1);
+});
+
+test('passive review interceptor assigns invocation sequences before reverse fetch completion', async () => {
+  const fixture = loadFixture('reviews-ssr-1005009452926938.json');
+  const deferred = () => {
+    let resolve;
+    const promise = new Promise((accept) => { resolve = accept; });
+    return { promise, resolve };
+  };
+  const first = deferred();
+  const second = deferred();
+  const responses = [first, second];
+  let calls = 0;
+  const pageWindow = {
+    location: { href: `https://aliexpress.ru/item/${fixture.itemId}/reviews` },
+    fetch(...args) {
+      assert.equal(args.length, 2);
+      const current = responses[calls];
+      calls += 1;
+      return current.promise;
+    },
+  };
+  const callbacks = [];
+  core.installNativeReviewInterceptor(pageWindow, fixture.itemId, (batch, sequence) => {
+    callbacks.push({ pageNum: batch.pageNum, filters: batch.context.filters, sequence });
+  });
+  const endpoint = 'https://aliexpress.ru/aer-jsonapi/review/v5/desktop/product-reviews';
+  const requestOne = pageWindow.fetch(endpoint, { body: JSON.stringify(nativeReviewBody(fixture.itemId)) });
+  const requestTwo = pageWindow.fetch(endpoint, { body: JSON.stringify(nativeReviewBody(fixture.itemId, {
+    pagination: { pageNum: 1, pageSize: 10 }, filters: [1],
+  })) });
+  const responseOne = { marker: 'one', clone: () => ({ json: async () => ({ data: { reviews: [] } }) }) };
+  const responseTwo = { marker: 'two', clone: () => ({ json: async () => ({ data: { reviews: [] } }) }) };
+  second.resolve(responseTwo);
+  assert.equal(await requestTwo, responseTwo);
+  await new Promise((resolve) => setImmediate(resolve));
+  first.resolve(responseOne);
+  assert.equal(await requestOne, responseOne);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls, 2);
+  assert.deepEqual(callbacks, [
+    { pageNum: 1, filters: [1], sequence: 2 },
+    { pageNum: 2, filters: [], sequence: 1 },
+  ]);
+});
+
+test('passive review wrapper leaves unrelated and malformed traffic harmless', async () => {
+  let calls = 0;
+  let nextJson = { malformed: true };
+  const response = { clone: () => ({ json: async () => nextJson }) };
+  const pageWindow = {
+    location: { href: 'https://aliexpress.ru/item/100/reviews' },
+    fetch: async () => { calls += 1; return response; },
+  };
+  let callbacks = 0;
+  core.installNativeReviewInterceptor(pageWindow, '100', () => { callbacks += 1; throw new Error('callback failure'); });
+  assert.equal(await pageWindow.fetch('https://aliexpress.ru/other', { body: 'not json' }), response);
+  assert.equal(await pageWindow.fetch('https://aliexpress.ru/aer-jsonapi/review/v5/desktop/product-reviews', { body: '{' }), response);
+  nextJson = { data: { reviews: [] } };
+  assert.equal(await pageWindow.fetch('https://aliexpress.ru/aer-jsonapi/review/v5/desktop/product-reviews', { body: JSON.stringify(nativeReviewBody('100')) }), response);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls, 3);
+  assert.equal(callbacks, 1);
+});
+
+test('review cache seeds SSR, merges default pages through cap, and ignores page four', () => {
+  const fixture = loadFixture('reviews-ssr-1005009452926938.json');
+  const ssrPage = core.extractReviewsPageFromSsrData(fixture, fixture.itemId);
+  const page1 = ssrPage.reviews;
+  const page2 = page1.map((review, index) => ({ ...review, id: `page-2-${index}` }));
+  const page3 = page1.map((review, index) => ({ ...review, id: `page-3-${index}` }));
+  const page4 = page1.map((review, index) => ({ ...review, id: `page-4-${index}` }));
+  let cache = core.seedReviewCacheFromSsr(core.createReviewCache(fixture.itemId), ssrPage);
+  let active = core.getActiveReviewPage(cache);
+  assert.equal(active.source, 'ssr:__AER_DATA__');
+  assert.equal(active.loadedCount, 10);
+  cache = core.applyNativeReviewBatch(cache, nativeReviewBatch(fixture.itemId, 2, page2));
+  cache = core.applyNativeReviewBatch(cache, nativeReviewBatch(fixture.itemId, 3, page3));
+  active = core.getActiveReviewPage(cache);
+  assert.equal(active.loadedCount, 30);
+  assert.deepEqual(active.pagesLoaded, [1, 2, 3]);
+  assert.equal(active.captureCapReached, true);
+  const beforePage4 = active.reviews;
+  cache = core.applyNativeReviewBatch(cache, nativeReviewBatch(fixture.itemId, 4, page4));
+  active = core.getActiveReviewPage(cache);
+  assert.deepEqual(active.pagesLoaded, [1, 2, 3]);
+  assert.deepEqual(active.reviews, beforePage4);
+  assert.equal(active.captureCapReached, true);
+});
+
+test('page-slot cap admission is independent of out-of-order response application', () => {
+  const fixture = loadFixture('reviews-ssr-1005009452926938.json');
+  const ssrPage = core.extractReviewsPageFromSsrData(fixture, fixture.itemId);
+  const makePage = (pageNum) => ssrPage.reviews.map((review, index) => ({ ...review, id: `slot-${pageNum}-${index}` }));
+  let cache = core.seedReviewCacheFromSsr(core.createReviewCache(fixture.itemId), ssrPage);
+  cache = core.applyNativeReviewBatch(cache, nativeReviewBatch(fixture.itemId, 3, makePage(3)), 1);
+  cache = core.applyNativeReviewBatch(cache, nativeReviewBatch(fixture.itemId, 4, makePage(4)), 2);
+  cache = core.applyNativeReviewBatch(cache, nativeReviewBatch(fixture.itemId, 2, makePage(2)), 3);
+  const active = core.getActiveReviewPage(cache);
+  assert.deepEqual(active.pagesLoaded, [1, 2, 3]);
+  assert.equal(active.loadedCount, 30);
+  assert.equal(active.captureCapReached, true);
+  assert.equal(Object.hasOwn(active, 'diagnostic'), false);
+  const entry = cache.contexts.get(cache.activeContextKey);
+  assert.equal(entry.pages.has(4), false);
+  assert.equal(entry.ignoredBeyondCap, true);
+
+  let pageFourFirst = core.seedReviewCacheFromSsr(core.createReviewCache(fixture.itemId), ssrPage);
+  pageFourFirst = core.applyNativeReviewBatch(pageFourFirst, nativeReviewBatch(fixture.itemId, 4, makePage(4)), 1);
+  pageFourFirst = core.applyNativeReviewBatch(pageFourFirst, nativeReviewBatch(fixture.itemId, 2, makePage(2)), 2);
+  pageFourFirst = core.applyNativeReviewBatch(pageFourFirst, nativeReviewBatch(fixture.itemId, 3, makePage(3)), 3);
+  assert.deepEqual(core.getActiveReviewPage(pageFourFirst).pagesLoaded, [1, 2, 3]);
+  assert.equal(core.getActiveReviewPage(pageFourFirst).loadedCount, 30);
+});
+
+test('page-slot policy admits only complete nominal pages inside the capture window', () => {
+  assert.equal(core.isReviewPageWithinCaptureCap(1, 100, 30), true);
+  assert.equal(core.isReviewPageWithinCaptureCap(2, 100, 30), false);
+  assert.equal(core.isReviewPageWithinCaptureCap(4, 7, 30), true);
+  assert.equal(core.isReviewPageWithinCaptureCap(5, 7, 30), false);
+  assert.equal(core.isReviewPageWithinCaptureCap(3, 10, 30), true);
+  assert.equal(core.isReviewPageWithinCaptureCap(4, 10, 30), false);
+});
+
+test('late older-context response is cached without stealing active context', () => {
+  const fixture = loadFixture('reviews-ssr-1005009452926938.json');
+  const ssrPage = core.extractReviewsPageFromSsrData(fixture, fixture.itemId);
+  const defaultPage2 = ssrPage.reviews.slice(0, 2).map((review, index) => ({ ...review, id: `late-default-${index}` }));
+  const photosPage1 = ssrPage.reviews.slice(0, 1);
+  let cache = core.seedReviewCacheFromSsr(core.createReviewCache(fixture.itemId), ssrPage);
+  cache = core.applyNativeReviewBatch(cache, nativeReviewBatch(fixture.itemId, 1, photosPage1, { filters: [1] }), 2);
+  cache = core.applyNativeReviewBatch(cache, nativeReviewBatch(fixture.itemId, 2, defaultPage2), 1);
+  const active = core.getActiveReviewPage(cache);
+  assert.deepEqual(active.context.filters, [1]);
+  assert.equal(active.loadedCount, 1);
+  assert.equal(cache.activeSequence, 2);
+  const defaultKey = core.createReviewContextKey(fixture.itemId, { sort: 1, filters: [], skuFilter: [], pageSize: 10 });
+  assert.deepEqual([...cache.contexts.get(defaultKey).pages.keys()].sort(), [1, 2]);
+
+  let ordinary = core.seedReviewCacheFromSsr(core.createReviewCache(fixture.itemId), ssrPage);
+  ordinary = core.applyNativeReviewBatch(ordinary, nativeReviewBatch(fixture.itemId, 2, defaultPage2), 1);
+  ordinary = core.applyNativeReviewBatch(ordinary, nativeReviewBatch(fixture.itemId, 1, photosPage1, { filters: [1] }), 2);
+  assert.deepEqual(core.getActiveReviewPage(ordinary).context.filters, [1]);
+});
+
+test('empty newer context remains active after a late older response', () => {
+  const fixture = loadFixture('reviews-ssr-1005009452926938.json');
+  const ssrPage = core.extractReviewsPageFromSsrData(fixture, fixture.itemId);
+  const defaultPage2 = ssrPage.reviews.slice(0, 1).map((review) => ({ ...review, id: 'late-after-empty' }));
+  let cache = core.seedReviewCacheFromSsr(core.createReviewCache(fixture.itemId), ssrPage);
+  cache = core.applyNativeReviewBatch(cache, nativeReviewBatch(fixture.itemId, 1, [], { filters: [1, 2] }), 2);
+  cache = core.applyNativeReviewBatch(cache, nativeReviewBatch(fixture.itemId, 2, defaultPage2), 1);
+  const active = core.getActiveReviewPage(cache);
+  assert.deepEqual(active.context.filters, [1, 2]);
+  assert.deepEqual(active.reviews, []);
+  assert.equal(active.loadedCount, 0);
+});
+
+test('review cache is page-stable, rejects conflicts, and restores preserved contexts', () => {
+  const fixture = loadFixture('reviews-ssr-1005009452926938.json');
+  const ssrPage = core.extractReviewsPageFromSsrData(fixture, fixture.itemId);
+  let cache = core.seedReviewCacheFromSsr(core.createReviewCache(fixture.itemId), ssrPage);
+  const defaultPage2 = ssrPage.reviews.slice(0, 2).map((review, index) => ({ ...review, id: `default-2-${index}` }));
+  cache = core.applyNativeReviewBatch(cache, nativeReviewBatch(fixture.itemId, 2, defaultPage2));
+  const stable = core.applyNativeReviewBatch(cache, nativeReviewBatch(fixture.itemId, 2, defaultPage2));
+  assert.equal(stable, cache);
+  const conflicting = clone(defaultPage2);
+  conflicting[0].initial.text = 'Conflict';
+  cache = core.applyNativeReviewBatch(cache, nativeReviewBatch(fixture.itemId, 2, conflicting));
+  assert.equal(core.getActiveReviewPage(cache).diagnostic, 'page-conflict');
+  const photos = nativeReviewBatch(fixture.itemId, 1, ssrPage.reviews.slice(0, 1), { filters: [1] });
+  cache = core.applyNativeReviewBatch(cache, photos);
+  assert.deepEqual(core.getActiveReviewPage(cache).context.filters, [1]);
+  cache = core.applyNativeReviewBatch(cache, nativeReviewBatch(fixture.itemId, 2, defaultPage2));
+  assert.deepEqual(core.getActiveReviewPage(cache).pagesLoaded, [1, 2]);
+});
+
+test('review cache keeps sort, SKU, Additional, and empty combined contexts independent', () => {
+  const fixture = loadFixture('reviews-ssr-1005009452926938.json');
+  const reviews = core.normalizeReviewCandidate(fixture.widget.props.reviews.slice(0, 1), fixture.itemId);
+  let cache = core.createReviewCache(fixture.itemId);
+  cache = core.applyNativeReviewBatch(cache, nativeReviewBatch(fixture.itemId, 1, reviews, { sort: 2 }));
+  const sortKey = cache.activeContextKey;
+  cache = core.applyNativeReviewBatch(cache, nativeReviewBatch(fixture.itemId, 1, reviews, { skuFilter: ['12000049151727541', '12000049151727537'] }));
+  const skuKey = cache.activeContextKey;
+  cache = core.applyNativeReviewBatch(cache, nativeReviewBatch(fixture.itemId, 1, reviews, { filters: [2] }));
+  const additionalKey = cache.activeContextKey;
+  cache = core.applyNativeReviewBatch(cache, nativeReviewBatch(fixture.itemId, 1, [], { filters: [2, 1] }));
+  const active = core.getActiveReviewPage(cache);
+  assert.equal(cache.contexts.size, 4);
+  assert.notEqual(sortKey, skuKey);
+  assert.notEqual(skuKey, additionalKey);
+  assert.deepEqual(active.context.filters, [1, 2]);
+  assert.equal(active.loadedCount, 0);
+  assert.deepEqual(active.reviews, []);
+  const stableEmpty = core.applyNativeReviewBatch(cache, nativeReviewBatch(fixture.itemId, 1, [], { filters: [2, 1] }));
+  assert.equal(stableEmpty, cache);
+  const emptyConflict = core.applyNativeReviewBatch(cache, nativeReviewBatch(fixture.itemId, 1, reviews, { filters: [1, 2] }));
+  assert.equal(core.getActiveReviewPage(emptyConflict).diagnostic, 'page-conflict');
+  assert.deepEqual(core.getActiveReviewPage(emptyConflict).reviews, []);
+});
+
+test('cross-page review dedupe keeps identical records, fails conflicts, and keeps equal text with distinct IDs', () => {
+  const fixture = loadFixture('reviews-ssr-1005009452926938.json');
+  const records = core.normalizeReviewCandidate(fixture.widget.props.reviews.slice(0, 2), fixture.itemId);
+  let cache = core.createReviewCache(fixture.itemId);
+  cache = core.applyNativeReviewBatch(cache, nativeReviewBatch(fixture.itemId, 1, records));
+  cache = core.applyNativeReviewBatch(cache, nativeReviewBatch(fixture.itemId, 2, [records[0], { ...records[0], id: 'same-content-different-id' }]));
+  assert.equal(core.getActiveReviewPage(cache).loadedCount, 3);
+  const conflict = clone(records[0]);
+  conflict.initial.text = 'Cross-page conflict';
+  let conflictCache = core.createReviewCache(fixture.itemId);
+  conflictCache = core.applyNativeReviewBatch(conflictCache, nativeReviewBatch(fixture.itemId, 1, records));
+  conflictCache = core.applyNativeReviewBatch(conflictCache, nativeReviewBatch(fixture.itemId, 2, [conflict]));
+  const conflicted = core.getActiveReviewPage(conflictCache);
+  assert.equal(conflicted.diagnostic, 'review-conflict');
+  assert.deepEqual(conflicted.reviews, []);
+});
+
+test('review merge with a page gap exports only the contiguous prefix until the gap is filled', () => {
+  const fixture = loadFixture('reviews-ssr-1005009452926938.json');
+  const records = core.normalizeReviewCandidate(fixture.widget.props.reviews.slice(0, 1), fixture.itemId);
+  let cache = core.createReviewCache(fixture.itemId);
+  cache = core.applyNativeReviewBatch(cache, nativeReviewBatch(fixture.itemId, 1, records));
+  cache = core.applyNativeReviewBatch(cache, nativeReviewBatch(fixture.itemId, 3, [{ ...records[0], id: 'page-3' }]));
+  let active = core.getActiveReviewPage(cache);
+  assert.deepEqual(active.pagesLoaded, [1, 3]);
+  assert.equal(active.loadedCount, 1);
+  assert.equal(active.diagnostic, 'page-gap');
+  cache = core.applyNativeReviewBatch(cache, nativeReviewBatch(fixture.itemId, 2, [{ ...records[0], id: 'page-2' }]));
+  active = core.getActiveReviewPage(cache);
+  assert.deepEqual(active.pagesLoaded, [1, 2, 3]);
+  assert.equal(active.loadedCount, 3);
+  assert.equal(Object.hasOwn(active, 'diagnostic'), false);
+});
+
+test('active reviews export exposes context/cap metadata without raw network fields', () => {
+  const fixture = loadFixture('reviews-ssr-1005009452926938.json');
+  const ssrPage = core.extractReviewsPageFromSsrData(fixture, fixture.itemId);
+  let cache = core.seedReviewCacheFromSsr(core.createReviewCache(fixture.itemId), ssrPage);
+  cache = core.applyNativeReviewBatch(cache, nativeReviewBatch(fixture.itemId, 2, ssrPage.reviews.slice(0, 1)));
+  const text = core.exportReviewsPage(core.getActiveReviewPage(cache));
+  const exported = JSON.parse(text);
+  assert.deepEqual(Object.keys(exported), ['itemId', 'source', 'context', 'pagesLoaded', 'loadedCount', 'captureCap', 'captureCapReached', 'reviews']);
+  assert.equal(exported.source, 'ssr+native');
+  assert.doesNotMatch(text, /raw request|raw response|_bx-v|headers|analyticEvents|trackingInfo|isLiked|spm/);
+});
+
+test('review status humanizes only confirmed sort/filter codes and reports passive capture', () => {
+  const status = core.formatReviewsPageStatus({
+    source: 'native:product-reviews', loadedCount: 0, pagesLoaded: [1], captureCapReached: false,
+    context: { sort: 7, filters: [1, 2, 9], skuFilter: ['1', '2'], pageSize: 10 },
+  });
+  assert.match(status, /Sort 7/);
+  assert.match(status, /With photos/);
+  assert.match(status, /Additional/);
+  assert.match(status, /Filter 9/);
+  assert.match(status, /SKU filter · 2 IDs/);
+  assert.match(status, /passive native/);
+  assert.doesNotMatch(status, /loaded by Ali Helper/i);
+});
+
+test('real native Dress page-2 fixture preserves the confirmed request and ten compatible records', () => {
+  const fixture = loadFixture('reviews-native-page2-1005009452926938.json');
+  assert.equal(fixture.sourceKind, 'minimized sanitized derivative of live native fetch capture');
+  assert.equal(fixture.capturedAt, '2026-08-13');
+  assert.equal(fixture.sanitized, true);
+  assert.equal(fixture.request.method, 'POST');
+  assert.equal(fixture.request.pathname, '/aer-jsonapi/review/v5/desktop/product-reviews');
+  assert.deepEqual(core.normalizeNativeReviewRequest(fixture.request.body, fixture.itemId), {
+    itemId: fixture.itemId, sourceId: 0, pageNum: 2, pageSize: 10, sort: 1, filters: [], skuFilter: [],
+  });
+  const reviews = core.normalizeNativeReviewResponse(fixture.response, fixture.itemId);
+  assert.equal(reviews.length, 10);
+  assert.deepEqual(reviews.map((review) => review.id), fixture.response.data.reviews.map((review) => review.root.id));
+  assert.equal(reviews[5].initial.text, null);
+  assert.doesNotMatch(JSON.stringify(fixture), /_bx-v|analyticEvents|trackingInfo|isLiked|spm/);
+});
+
+test('real native context fixture covers page3, Photos, combined empty, SKU, sort2, and independent Needles', () => {
+  const fixture = loadFixture('reviews-native-contexts-1005009452926938.json');
+  const { captures } = fixture;
+  assert.equal(core.normalizeNativeReviewRequest(captures.page3.body, fixture.itemId).pageNum, 3);
+  assert.equal(captures.page3.responseReviewCount, 10);
+  assert.deepEqual(core.normalizeNativeReviewRequest(captures.photos.body, fixture.itemId).filters, [1]);
+  assert.equal(captures.photos.responseReviewCount, 10);
+  assert.equal(captures.photos.observedRootImageCounts.every((count) => count > 0), true);
+  assert.deepEqual(core.normalizeNativeReviewRequest(captures.photosAdditional.body, fixture.itemId).filters, [1, 2]);
+  assert.deepEqual(core.normalizeNativeReviewResponse(captures.photosAdditional.response, fixture.itemId), []);
+  assert.deepEqual(core.normalizeNativeReviewRequest(captures.navyBlueSku.body, fixture.itemId).skuFilter, [
+    '12000049151727537', '12000049151727538', '12000049151727539', '12000049151727540', '12000049151727541',
+  ]);
+  assert.equal(core.normalizeNativeReviewRequest(captures.newReviews.body, fixture.itemId).sort, 2);
+  const needles = core.normalizeNativeReviewRequest(nativeReviewBody('1005005933779962'), '1005005933779962');
+  assert.equal(needles.itemId, '1005005933779962');
+  assert.equal(needles.pageNum, 2);
+});
+
+test('real native Additional fixture preserves independent lower/null grades and follow-up-only content', () => {
+  const fixture = loadFixture('reviews-native-additional-32882927175.json');
+  assert.equal(fixture.originalReviewCount, 10);
+  assert.equal(fixture.retainedReviewCount, 4);
+  assert.deepEqual(core.normalizeNativeReviewRequest(fixture.request.body, fixture.itemId).filters, [2]);
+  const reviews = core.normalizeNativeReviewResponse(fixture.response, fixture.itemId);
+  assert.equal(reviews.length, 4);
+  assert.equal(reviews[0].initial.grade, 5);
+  assert.equal(reviews[0].additional.grade, 4);
+  assert.equal(reviews[1].initial.grade, 5);
+  assert.equal(reviews[1].additional.grade, 2);
+  assert.equal(reviews[2].additional.grade, null);
+  assert.equal(reviews[3].initial.text, null);
+  assert.notEqual(reviews[3].additional.text, null);
+  assert.equal(reviews[1].initial.images.length, 0);
+  assert.equal(reviews[1].additional.images.length, 1);
+  assert.equal(reviews.every((review) => review.additional.comments.length === 0), true);
+  assert.equal(reviews.every((review) => !Object.hasOwn(review, 'effectiveRating') && !Object.hasOwn(review, 'effectiveText')), true);
+});
+
+test('Photos request context never becomes a response-content validator', () => {
+  const fixture = loadFixture('reviews-native-additional-32882927175.json');
+  const additionalOnlyPhoto = clone(fixture.response.data.reviews[1]);
+  assert.equal(additionalOnlyPhoto.root.images.length, 0);
+  assert.equal(additionalOnlyPhoto.additional.images.length, 1);
+  const batch = core.normalizeNativeReviewBatch(
+    nativeReviewBody(fixture.itemId, { pagination: { pageNum: 1, pageSize: 10 }, filters: [1] }),
+    { data: { reviews: [additionalOnlyPhoto] } },
+    fixture.itemId,
+  );
+  assert.ok(batch);
+  assert.deepEqual(batch.context.filters, [1]);
+  assert.equal(batch.reviews[0].initial.images.length, 0);
+  assert.equal(batch.reviews[0].additional.images.length, 1);
+});

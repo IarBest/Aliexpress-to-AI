@@ -1,0 +1,32 @@
+{
+  "sourceKind": "minimized sanitized native request-context capture set",
+  "capturedAt": "2026-08-13",
+  "itemId": "1005009452926938",
+  "sanitized": true,
+  "sanitizationNotes": [
+    "Only semantic request context and response review counts are retained.",
+    "Sensitive transport, credential, and analytics fields were not retained."
+  ],
+  "pathname": "/aer-jsonapi/review/v5/desktop/product-reviews",
+  "captures": {
+    "page3": {
+      "body": { "productKey": { "id": "1005009452926938", "sourceId": 0 }, "pagination": { "pageNum": 3, "pageSize": 10 }, "sort": 1, "filters": [], "skuFilter": [] },
+      "responseReviewCount": 10
+    },
+    "photos": {
+      "body": { "productKey": { "id": "1005009452926938", "sourceId": 0 }, "pagination": { "pageNum": 1, "pageSize": 10 }, "sort": 1, "filters": [1], "skuFilter": [] },
+      "responseReviewCount": 10,
+      "observedRootImageCounts": [4, 4, 2, 3, 1, 2, 2, 2, 2, 2]
+    },
+    "photosAdditional": {
+      "body": { "productKey": { "id": "1005009452926938", "sourceId": 0 }, "pagination": { "pageNum": 1, "pageSize": 10 }, "sort": 1, "filters": [1, 2], "skuFilter": [] },
+      "response": { "data": { "reviews": [] } }
+    },
+    "navyBlueSku": {
+      "body": { "productKey": { "id": "1005009452926938", "sourceId": 0 }, "pagination": { "pageNum": 1, "pageSize": 10 }, "sort": 1, "filters": [], "skuFilter": ["12000049151727537", "12000049151727538", "12000049151727539", "12000049151727540", "12000049151727541"] }
+    },
+    "newReviews": {
+      "body": { "productKey": { "id": "1005009452926938", "sourceId": 0 }, "pagination": { "pageNum": 1, "pageSize": 10 }, "sort": 2, "filters": [], "skuFilter": [] }
+    }
+  }
+}

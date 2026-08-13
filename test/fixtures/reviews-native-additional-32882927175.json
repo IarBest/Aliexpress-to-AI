@@ -1,0 +1,59 @@
+{
+  "sourceKind": "minimized sanitized derivative of live native Additional-filter fetch capture",
+  "capturedAt": "2026-08-13",
+  "itemId": "32882927175",
+  "sanitized": true,
+  "originalReviewCount": 10,
+  "retainedReviewCount": 4,
+  "sanitizationNotes": [
+    "Four of ten records are retained because together they cover every observed follow-up regression used here without combining facts from separate records.",
+    "Names, text, dates, media URLs, SKU text, and all identifiers were deterministically pseudonymized.",
+    "Grades, nullability, image lengths, empty additional comments, and initial/additional independence were preserved.",
+    "Sensitive transport, analytics, and personalized response fields were not retained."
+  ],
+  "request": {
+    "method": "POST",
+    "pathname": "/aer-jsonapi/review/v5/desktop/product-reviews",
+    "body": {
+      "productKey": { "id": "32882927175", "sourceId": 0 },
+      "pagination": { "pageNum": 1, "pageSize": 10 },
+      "sort": 1,
+      "filters": [2],
+      "skuFilter": []
+    }
+  },
+  "response": {
+    "data": {
+      "reviews": [
+        {
+          "product": { "id": "32882927175", "sourceId": 0, "skuProperties": "Sanitized Additional SKU A1" },
+          "reviewer": { "name": "Reviewer A1", "initials": null, "avatar": null, "countryFlag": null },
+          "root": { "id": "native-additional-root-1", "date": "Sanitized initial date A1", "grade": 5, "text": "Sanitized initial review A1.", "originalText": null, "images": [{ "id": "native-initial-a1-1", "url": "https://fixtures.invalid/initial-a1-1.jpg" }, { "id": "native-initial-a1-2", "url": "https://fixtures.invalid/initial-a1-2.jpg" }, { "id": "native-initial-a1-3", "url": "https://fixtures.invalid/initial-a1-3.jpg" }, { "id": "native-initial-a1-4", "url": "https://fixtures.invalid/initial-a1-4.jpg" }, { "id": "native-initial-a1-5", "url": "https://fixtures.invalid/initial-a1-5.jpg" }, { "id": "native-initial-a1-6", "url": "https://fixtures.invalid/initial-a1-6.jpg" }, { "id": "native-initial-a1-7", "url": "https://fixtures.invalid/initial-a1-7.jpg" }], "comments": [] },
+          "additional": { "id": "native-additional-followup-1", "date": "Sanitized follow-up date A1", "grade": 4, "text": "Sanitized follow-up A1.", "originalText": null, "images": [{ "id": "native-additional-a1-1", "url": "https://fixtures.invalid/additional-a1-1.jpg" }, { "id": "native-additional-a1-2", "url": "https://fixtures.invalid/additional-a1-2.jpg" }, { "id": "native-additional-a1-3", "url": "https://fixtures.invalid/additional-a1-3.jpg" }], "comments": [] },
+          "interaction": { "likesAmount": 0 }
+        },
+        {
+          "product": { "id": "32882927175", "sourceId": 0, "skuProperties": "Sanitized Additional SKU A2" },
+          "reviewer": { "name": "Reviewer A2", "initials": null, "avatar": null, "countryFlag": null },
+          "root": { "id": "native-additional-root-2", "date": "Sanitized initial date A2", "grade": 5, "text": "Sanitized initial review A2.", "originalText": null, "images": [], "comments": [] },
+          "additional": { "id": "native-additional-followup-2", "date": "Sanitized follow-up date A2", "grade": 2, "text": "Sanitized follow-up A2.", "originalText": null, "images": [{ "id": "native-additional-image-2", "url": "https://fixtures.invalid/additional-a2.jpg" }], "comments": [] },
+          "interaction": { "likesAmount": 0 }
+        },
+        {
+          "product": { "id": "32882927175", "sourceId": 0, "skuProperties": "Sanitized Additional SKU A3" },
+          "reviewer": { "name": "Reviewer A3", "initials": null, "avatar": null, "countryFlag": null },
+          "root": { "id": "native-additional-root-3", "date": "Sanitized initial date A3", "grade": 5, "text": "Sanitized initial review A3.", "originalText": null, "images": [], "comments": [] },
+          "additional": { "id": "native-additional-followup-3", "date": "Sanitized follow-up date A3", "grade": null, "text": "Sanitized follow-up A3.", "originalText": null, "images": [], "comments": [] },
+          "interaction": { "likesAmount": 0 }
+        },
+        {
+          "product": { "id": "32882927175", "sourceId": 0, "skuProperties": "Sanitized Additional SKU A4" },
+          "reviewer": { "name": "Reviewer A4", "initials": null, "avatar": null, "countryFlag": null },
+          "root": { "id": "native-additional-root-4", "date": "Sanitized initial date A4", "grade": 5, "text": null, "originalText": null, "images": [], "comments": [] },
+          "additional": { "id": "native-additional-followup-4", "date": "Sanitized follow-up date A4", "grade": 5, "text": "Sanitized follow-up-only text A4.", "originalText": null, "images": [], "comments": [] },
+          "interaction": { "likesAmount": 0 }
+        }
+      ]
+    }
+  }
+}

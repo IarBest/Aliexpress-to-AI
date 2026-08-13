@@ -123,3 +123,21 @@ were deterministically pseudonymized while field presence, types, nullability,
 ordering, counts, SKU strings, dates, grades, likes, and initial/additional
 relationships were preserved. Analytics, tracking, personalized `isLiked`
 state, authentication/session data, and unrelated widgets were not retained.
+
+The `reviews-native-*.json` files are explicit sanitized derivatives of native
+AliExpress `fetch` traffic recaptured on 2026-08-13. The Dress page-2 fixture
+retains all ten schema-compatible records; the Additional fixture declares
+that it retains four of ten records selected to preserve the observed
+follow-up regressions. The contexts fixture retains only semantic bodies and
+safe response counts for page 3, Photos, Photos+Additional, Navy Blue SKU, and
+New reviews. No fixture retains endpoint query data (including `_bx-v`),
+headers, cookies, credentials, analytics, tracking, or personalized `isLiked`
+state. Public identity/text/media values and identifiers are deterministic
+pseudonyms; field presence, nullability, ordering, grades, and relevant array
+lengths are preserved.
+
+Current-site smoke on 2026-08-13 differed from the earlier Relay expectation:
+scrolling item `1005008195850531` caused AliExpress itself to request native
+page 2 and return a valid empty review array. Passive merge therefore reported
+pages `[1, 2]` while retaining the five SSR reviews. This is recorded as live
+site drift; the helper did not initiate or suppress that request.

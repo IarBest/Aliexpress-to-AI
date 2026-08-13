@@ -500,9 +500,9 @@ Smoke выполнялся на реально активном Ali Helper v0.1.
 
 #### Оставшиеся ограничения
 
-Будущими остаются page 2+, review API requests, pagination, filters/sort
-requests, SSR + API merge, Load reviews, configurable cap и progress across
-multiple pages. Live regression для `additional.grade = null`, несколько
+Production passive native capture page 2+, filter/sort/SKU contexts и SSR +
+native merge реализованы в P4. Будущими остаются explicit helper-controlled
+loading, configurable cap и progress/stop logic для такой загрузки. Несколько
 additional objects и review videos пока не наблюдались. `product.reviews` на PDP
 не сохраняется и не объединяется с reviews-page model.
 
@@ -510,33 +510,154 @@ additional objects и review videos пока не наблюдались. `produ
 
 ### Explicit pagination
 
-- [ ] Добавить явное UI action для загрузки следующих страниц
-      `product-reviews`; не загружать их при обычном открытии страницы.
-- [ ] Формировать payload с `productKey`, `pagination.pageNum`, page size 10,
-      `sort: 1`, `filters` и `skuFilter`.
-- [ ] Поддержать известные filters: `[]` all, `[1]` photos, `[2]` additional,
-      `[1,2]` photos + additional.
-- [ ] Кэшировать уже загруженные pages по product/filter/sort context.
-- [ ] Добавить разумный configurable cap, первоначально 30–50 reviews.
-- [ ] Показывать progress: loaded count, known total и текущую page.
-- [ ] Останавливать загрузку по known total или short/empty page.
-- [ ] Не угадывать неизвестные sort values до отдельного исследования.
-- [ ] Объединять SSR page 1 и API pages без duplicate reviews.
+Production passive native capture реализован: Ali Helper наблюдает responses
+только после действий самой страницы и не создаёт review requests. Explicit
+sender и `Load reviews` action не реализованы; обязательность и семантика opaque
+`_bx-v` для собственного request остаются недоказанными. Поэтому весь P4 не
+считается завершённым.
 
-Acceptance: сеть используется только после явного действия; повторный запрос
-той же page не выполняется, cap соблюдается.
+- [x] Пассивно перехватывать native AliExpress review pagination/filter/sort/SKU
+      responses только после действий самой страницы; Ali Helper не создаёт
+      review requests.
+- [x] Подтвердить native endpoint:
+      `POST /aer-jsonapi/review/v5/desktop/product-reviews`.
+- [x] Нормализовать wire request context: `productKey.id/sourceId`,
+      `pagination.pageNum/pageSize`, `sort`, `filters`, `skuFilter`.
+- [x] Кэшировать captured pages по item + canonical query context:
+      `pageSize / sort / filters / skuFilter`.
+- [x] Seed default context из SSR page 1 и объединять с native page 2+.
+- [x] Дедуплицировать по `${productId}:${reviewId}` и fail-safe обрабатывать
+      conflicts/page gaps.
+- [x] Разделять All / Photos / Additional / SKU / sort contexts и сохранять
+      inactive cache в page-session memory.
+- [x] Ограничить retained passive capture до 30 reviews на context без
+      блокировки native AliExpress requests.
+- [x] Показывать loaded count/pages/context/cap в reviews-page status/export.
+- [x] Не угадывать неизвестные sort/filter codes: human labels только для
+      wire-confirmed values, остальные generic.
+- [ ] Добавить explicit `Load reviews` / next-page action только если отдельно
+      будет доказано, что userscript может безопасно формировать собственный
+      request.
+- [ ] Доказать обязательность/семантику opaque `_bx-v` и auth/runtime boundary
+      перед любым helper-generated review request.
+- [ ] Если sender когда-либо будет разрешён — строить request только из
+      доказанного semantic body, без копирования opaque native state.
+- [ ] Сделать capture/load cap configurable; текущий production passive cap
+      фиксирован на 30.
+- [ ] Добавить known-total/progress/stop logic для helper-controlled loading,
+      если такой loading вообще будет реализован.
+- [ ] Проверить native repeat-request/cache behavior, если это станет нужно.
+
+#### Confirmed native wire protocol
+
+Transport — native `fetch`; endpoint —
+`POST /aer-jsonapi/review/v5/desktop/product-reviews`. Подтверждённый semantic
+request:
+
+```json
+{
+  "productKey": { "id": "<itemId>", "sourceId": 0 },
+  "pagination": { "pageNum": 1, "pageSize": 10 },
+  "sort": 1,
+  "filters": [],
+  "skuFilter": []
+}
+```
+
+SSR default — page 1; lazy native loads — page 2 и page 3; page size — 10.
+Default context: `sort: 1`, `filters: []`, `skuFilter: []`. Смена context
+сбрасывает `pageNum` в 1. Response имеет shape
+`{ data: { reviews: [...] } }`; total, hasNext, cursor, page/pageSize echo и
+filter/sort echo отсутствуют. API records имеют ту же review shape, что SSR,
+поэтому используются existing `normalizeReviewRecord` /
+`normalizeReviewCandidate` без adapter.
+
+Wire-confirmed contexts:
+
+- All — `filters: []`;
+- With photos — `filters: [1]`;
+- Additional — `filters: [2]`;
+- With photos + Additional — `filters: [1,2]`;
+- Top reviews — `sort: 1`;
+- New reviews first — `sort: 2`.
+
+Sort 3/4 наблюдались только в SSR UI config и не считаются wire-confirmed.
+Navy Blue Dress SKU context передаёт пять machine IDs:
+`12000049151727537`, `12000049151727538`, `12000049151727539`,
+`12000049151727540`, `12000049151727541`.
+
+#### Passive-only architecture и cache
+
+Endpoint matcher требует same-origin и exact pathname; query, включая `_bx-v`,
+не входит в semantic context. `_bx-v` не читается, не хранится и не
+экспортируется. Interceptor устанавливается только в reviews-page runtime.
+Wrapper вызывает original fetch ровно один раз с исходными arguments, а
+request/response пассивно читает через clone. Helper-generated review requests
+и XHR capture отсутствуют: подтверждённый live transport — `fetch`.
+
+Cache существует только в page-session memory, без GM persistence. Canonical
+context состоит из `itemId`, `pageSize`, `sort`, sorted/unique `filters` и
+sorted/unique `skuFilter`; pages хранятся отдельно по `pageNum`. Default page 1
+seeded из SSR, page 2+ приходят из native responses. Filter/sort/SKU contexts не
+смешиваются, inactive contexts сохраняются.
+
+Passive capture cap — 30 reviews на context; native requests beyond cap не
+блокируются. Admission зависит от page slot (`pageNum/pageSize/cap`), а не от
+response completion order: при cap 30 / pageSize 10 сохраняются pages 1–3, а
+page 4+ не занимает cache даже при завершении раньше page 2. Request sequence
+назначается при invocation native fetch. Late response старого context может
+пополнить свой cache, но не может переключить active context после более нового
+request.
+
+Merge использует только contiguous pages от page 1: `pageNum` ascending и
+source order внутри page. Dedupe key — `${productId}:${id}`; identical duplicate
+оставляет первое вхождение. Conflicting content по одному key даёт
+`review-conflict`, разные данные одной page — `page-conflict`. При gap export
+содержит только contiguous prefix и diagnostic до прихода missing page. Silent
+overwrite отсутствует.
+
+#### Native fixtures и live smoke — 2026-08-13
+
+Sanitized native derivatives:
+
+- `reviews-native-page2-1005009452926938.json`;
+- `reviews-native-additional-32882927175.json`;
+- `reviews-native-contexts-1005009452926938.json`.
+
+В fixtures отсутствуют `_bx-v`, analytics, tracking и `isLiked`; PII, media и
+text pseudonymized согласно notes. Semantic request body и response schema
+сохранены.
+
+Dated smoke на активном Ali Helper v0.1.10 подтвердил:
+
+- Dress: 10 SSR → native page 2 = 20 → native page 3 = 30/cap; Photos
+  (`filters: [1]`) — отдельный active context, возврат All восстановил cached
+  30; Photos+Additional (`filters: [1,2]`) page 1 с пустым reviews валиден;
+  Navy Blue SKU передал пять machine IDs; `sort: 2` сохранился отдельно.
+- Needles: 10 → 30 через cascaded native scroll capture.
+- Additional item: реальные lower/null grades, follow-up-only text и
+  additional-only photo.
+- Relay: site drift дал native empty page 2; merge сохранил 5 reviews и
+  pages `[1,2]`, empty page валиден.
+- Copy JSON содержит только normalized model, без raw network/tracking/`_bx-v`.
 
 ### Additional/follow-up review semantics
 
-- [ ] Хранить `additional` с собственными id, date, grade, text/originalText,
+- [x] Хранить `additional` с собственными id, date, grade, text/originalText,
       images и comments.
-- [ ] Покрыть follow-up с рейтингом ниже initial.
-- [ ] Покрыть `additional.grade = null`.
-- [ ] Покрыть follow-up text при пустом initial/root text.
-- [ ] Покрыть photos только в `additional.images`.
-- [ ] Не создавать единый `effective rating` без доказанной семантики aggregate.
+- [x] Покрыть follow-up с рейтингом ниже initial.
+- [x] Покрыть `additional.grade = null`.
+- [x] Покрыть follow-up text при пустом initial/root text.
+- [x] Покрыть photos только в `additional.images`.
+- [x] Не создавать единый `effective rating` или text.
 - [ ] В ChatGPT export явно разделить `Initial rating/review` и
       `Follow-up rating/review`.
+
+Real native observations: rating transitions `5 → 4` и `5 → 2`;
+`additional.grade = null`; `initial.text = null` при non-null
+`additional.text`; `initial.images = 0` при `additional.images = 1`.
+`additional.comments` были `[]` во всех retained observed cases; non-empty
+additional comments не предполагаются.
 
 Acceptance: initial и follow-up полностью независимы и не теряют свои ratings,
 texts или images.

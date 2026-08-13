@@ -1,0 +1,99 @@
+{
+  "sourceKind": "minimized sanitized derivative of live native fetch capture",
+  "capturedAt": "2026-08-13",
+  "itemId": "1005009452926938",
+  "sanitized": true,
+  "sanitizationNotes": [
+    "The live capture contained 10 reviews and all 10 schema-compatible records are retained.",
+    "Reviewer, review, comment, media, and record identifiers/values were deterministically pseudonymized.",
+    "Observed record order, grades, text nullability, and image/comment array lengths were preserved.",
+    "Sensitive transport, analytics, and personalized response fields were not retained."
+  ],
+  "request": {
+    "method": "POST",
+    "pathname": "/aer-jsonapi/review/v5/desktop/product-reviews",
+    "body": {
+      "productKey": { "id": "1005009452926938", "sourceId": 0 },
+      "pagination": { "pageNum": 2, "pageSize": 10 },
+      "sort": 1,
+      "filters": [],
+      "skuFilter": []
+    }
+  },
+  "response": {
+    "data": {
+      "reviews": [
+        {
+          "product": { "id": "1005009452926938", "sourceId": 0, "skuProperties": "Sanitized SKU R11" },
+          "reviewer": { "name": "Reviewer R11", "initials": null, "avatar": null, "countryFlag": null },
+          "root": { "id": "native-dress-r11", "date": "Sanitized date R11", "grade": 5, "text": "Sanitized review R11.", "originalText": null, "images": [{ "id": "r11-image-1", "url": "https://fixtures.invalid/r11-1.jpg" }, { "id": "r11-image-2", "url": "https://fixtures.invalid/r11-2.jpg" }], "comments": [] },
+          "additional": null,
+          "interaction": { "likesAmount": 0 }
+        },
+        {
+          "product": { "id": "1005009452926938", "sourceId": 0, "skuProperties": "Sanitized SKU R12" },
+          "reviewer": { "name": "Reviewer R12", "initials": null, "avatar": null, "countryFlag": null },
+          "root": { "id": "native-dress-r12", "date": "Sanitized date R12", "grade": 5, "text": "Sanitized review R12.", "originalText": null, "images": [{ "id": "r12-image-1", "url": "https://fixtures.invalid/r12-1.jpg" }, { "id": "r12-image-2", "url": "https://fixtures.invalid/r12-2.jpg" }], "comments": [{ "id": "r12-comment-1", "commenterAvatar": null, "commenterInitials": null, "commenterName": "Store", "date": "Sanitized comment date", "text": "Sanitized reply.", "originalText": null }] },
+          "additional": null,
+          "interaction": { "likesAmount": 0 }
+        },
+        {
+          "product": { "id": "1005009452926938", "sourceId": 0, "skuProperties": "Sanitized SKU R13" },
+          "reviewer": { "name": "Reviewer R13", "initials": null, "avatar": null, "countryFlag": null },
+          "root": { "id": "native-dress-r13", "date": "Sanitized date R13", "grade": 5, "text": "Sanitized review R13.", "originalText": null, "images": [{ "id": "r13-image-1", "url": "https://fixtures.invalid/r13-1.jpg" }], "comments": [{ "id": "r13-comment-1", "commenterAvatar": null, "commenterInitials": null, "commenterName": "Store", "date": "Sanitized comment date", "text": "Sanitized reply.", "originalText": null }] },
+          "additional": null,
+          "interaction": { "likesAmount": 0 }
+        },
+        {
+          "product": { "id": "1005009452926938", "sourceId": 0, "skuProperties": "Sanitized SKU R14" },
+          "reviewer": { "name": "Reviewer R14", "initials": null, "avatar": null, "countryFlag": null },
+          "root": { "id": "native-dress-r14", "date": "Sanitized date R14", "grade": 5, "text": "Sanitized review R14.", "originalText": null, "images": [], "comments": [{ "id": "r14-comment-1", "commenterAvatar": null, "commenterInitials": null, "commenterName": "Store", "date": "Sanitized comment date", "text": "Sanitized reply.", "originalText": null }] },
+          "additional": null,
+          "interaction": { "likesAmount": 0 }
+        },
+        {
+          "product": { "id": "1005009452926938", "sourceId": 0, "skuProperties": "Sanitized SKU R15" },
+          "reviewer": { "name": "Reviewer R15", "initials": null, "avatar": null, "countryFlag": null },
+          "root": { "id": "native-dress-r15", "date": "Sanitized date R15", "grade": 4, "text": "Sanitized review R15.", "originalText": null, "images": [], "comments": [] },
+          "additional": null,
+          "interaction": { "likesAmount": 0 }
+        },
+        {
+          "product": { "id": "1005009452926938", "sourceId": 0, "skuProperties": "Sanitized SKU R16" },
+          "reviewer": { "name": "Reviewer R16", "initials": null, "avatar": null, "countryFlag": null },
+          "root": { "id": "native-dress-r16", "date": "Sanitized date R16", "grade": 5, "text": null, "originalText": null, "images": [], "comments": [{ "id": "r16-comment-1", "commenterAvatar": null, "commenterInitials": null, "commenterName": "Store", "date": "Sanitized comment date", "text": "Sanitized reply.", "originalText": null }] },
+          "additional": null,
+          "interaction": { "likesAmount": 0 }
+        },
+        {
+          "product": { "id": "1005009452926938", "sourceId": 0, "skuProperties": "Sanitized SKU R17" },
+          "reviewer": { "name": "Reviewer R17", "initials": null, "avatar": null, "countryFlag": null },
+          "root": { "id": "native-dress-r17", "date": "Sanitized date R17", "grade": 5, "text": "Sanitized review R17.", "originalText": null, "images": [{ "id": "r17-image-1", "url": "https://fixtures.invalid/r17-1.jpg" }], "comments": [{ "id": "r17-comment-1", "commenterAvatar": null, "commenterInitials": null, "commenterName": "Store", "date": "Sanitized comment date", "text": "Sanitized reply.", "originalText": null }] },
+          "additional": null,
+          "interaction": { "likesAmount": 0 }
+        },
+        {
+          "product": { "id": "1005009452926938", "sourceId": 0, "skuProperties": "Sanitized SKU R18" },
+          "reviewer": { "name": "Reviewer R18", "initials": null, "avatar": null, "countryFlag": null },
+          "root": { "id": "native-dress-r18", "date": "Sanitized date R18", "grade": 5, "text": "Sanitized review R18.", "originalText": null, "images": [{ "id": "r18-image-1", "url": "https://fixtures.invalid/r18-1.jpg" }], "comments": [] },
+          "additional": null,
+          "interaction": { "likesAmount": 0 }
+        },
+        {
+          "product": { "id": "1005009452926938", "sourceId": 0, "skuProperties": "Sanitized SKU R19" },
+          "reviewer": { "name": "Reviewer R19", "initials": null, "avatar": null, "countryFlag": null },
+          "root": { "id": "native-dress-r19", "date": "Sanitized date R19", "grade": 5, "text": "Sanitized review R19.", "originalText": null, "images": [{ "id": "r19-image-1", "url": "https://fixtures.invalid/r19-1.jpg" }], "comments": [{ "id": "r19-comment-1", "commenterAvatar": null, "commenterInitials": null, "commenterName": "Store", "date": "Sanitized comment date", "text": "Sanitized reply.", "originalText": null }] },
+          "additional": null,
+          "interaction": { "likesAmount": 0 }
+        },
+        {
+          "product": { "id": "1005009452926938", "sourceId": 0, "skuProperties": "Sanitized SKU R20" },
+          "reviewer": { "name": "Reviewer R20", "initials": null, "avatar": null, "countryFlag": null },
+          "root": { "id": "native-dress-r20", "date": "Sanitized date R20", "grade": 5, "text": "Sanitized review R20.", "originalText": null, "images": [{ "id": "r20-image-1", "url": "https://fixtures.invalid/r20-1.jpg" }], "comments": [] },
+          "additional": null,
+          "interaction": { "likesAmount": 0 }
+        }
+      ]
+    }
+  }
+}

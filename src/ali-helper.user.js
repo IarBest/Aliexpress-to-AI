@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ali Helper
 // @namespace    https://github.com/local/ali-helper
-// @version      0.1.10
+// @version      0.1.11
 // @description  Read-only AliExpress URL cleaner and product/variant exporter
 // @match        https://aliexpress.ru/item/*
 // @match        https://www.aliexpress.com/item/*
@@ -18,8 +18,11 @@
 (function factory(root) {
   'use strict';
 
-  const VERSION = '0.1.10';
+  const VERSION = '0.1.11';
   const SETTINGS_KEY = 'ali-helper:settings:v1';
+  const NATIVE_REVIEW_PATHNAME = '/aer-jsonapi/review/v5/desktop/product-reviews';
+  const REVIEW_CAPTURE_CAP = 30;
+  const INITIAL_REVIEW_CONTEXT = Object.freeze({ sort: 1, filters: [], skuFilter: [], pageSize: 10 });
   const CHARACTERISTICS_BOUNDARY_SELECTOR = '[class*="HazeProductCharacteristics__groupsContainerForSku"]';
   const CHARACTERISTICS_ITEM_SELECTOR = '[class*="HazeProductCharacteristics__itemForSku"]';
   const CHARACTERISTICS_NAME_SELECTOR = '[class*="ProductCharacteristicsItem__name__"]';
@@ -772,11 +775,267 @@
   }
 
   function exportReviewsPage(reviewPage) {
-    return JSON.stringify({
+    const exported = reviewPage.context ? {
+      itemId: reviewPage.itemId,
+      source: reviewPage.source,
+      context: reviewPage.context,
+      pagesLoaded: reviewPage.pagesLoaded,
+      loadedCount: reviewPage.loadedCount,
+      captureCap: reviewPage.captureCap,
+      captureCapReached: reviewPage.captureCapReached,
+      ...(reviewPage.diagnostic ? { diagnostic: reviewPage.diagnostic } : {}),
+      reviews: reviewPage.reviews,
+    } : {
       itemId: reviewPage.itemId,
       source: reviewPage.source,
       reviews: reviewPage.reviews,
-    }, null, 2);
+    };
+    return JSON.stringify(exported, null, 2);
+  }
+
+  function isPlainObject(value) {
+    return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+  }
+
+  function isNativeReviewEndpoint(input, baseUrl) {
+    try {
+      const base = new URL(baseUrl);
+      const value = typeof input === 'string' || input instanceof URL ? input : input?.url;
+      const url = new URL(value, base);
+      return /(^|\.)aliexpress\.(ru|com)$/i.test(base.hostname)
+        && url.origin === base.origin
+        && url.pathname === NATIVE_REVIEW_PATHNAME;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function normalizeNativeReviewRequest(raw, expectedItemId) {
+    const itemId = asString(expectedItemId);
+    if (!isPlainObject(raw) || !/^\d+$/.test(itemId || '')
+      || !isPlainObject(raw.productKey) || !isPlainObject(raw.pagination)) return null;
+    const requestItemId = asString(raw.productKey.id);
+    const { sourceId } = raw.productKey;
+    const { pageNum, pageSize } = raw.pagination;
+    const { sort, filters, skuFilter } = raw;
+    if (requestItemId !== itemId
+      || !Number.isSafeInteger(sourceId) || sourceId < 0
+      || !Number.isSafeInteger(pageNum) || pageNum < 1
+      || !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 100
+      || !Number.isSafeInteger(sort) || sort < 1
+      || !Array.isArray(filters) || !filters.every((code) => Number.isSafeInteger(code) && code >= 0)
+      || !Array.isArray(skuFilter) || !skuFilter.every((skuId) => typeof skuId === 'string' && /^\d+$/.test(skuId))) return null;
+    return {
+      itemId,
+      sourceId,
+      pageNum,
+      pageSize,
+      sort,
+      filters: filters.slice(),
+      skuFilter: skuFilter.slice(),
+    };
+  }
+
+  function canonicalizeReviewContext(value) {
+    if (!isPlainObject(value)
+      || !Number.isSafeInteger(value.sort) || value.sort < 1
+      || !Number.isSafeInteger(value.pageSize) || value.pageSize < 1 || value.pageSize > 100
+      || !Array.isArray(value.filters) || !value.filters.every((code) => Number.isSafeInteger(code) && code >= 0)
+      || !Array.isArray(value.skuFilter) || !value.skuFilter.every((skuId) => typeof skuId === 'string' && /^\d+$/.test(skuId))) return null;
+    return {
+      sort: value.sort,
+      filters: [...new Set(value.filters)].sort((left, right) => left - right),
+      skuFilter: [...new Set(value.skuFilter)].sort((left, right) => left.localeCompare(right)),
+      pageSize: value.pageSize,
+    };
+  }
+
+  function createReviewContextKey(itemId, context) {
+    const normalized = canonicalizeReviewContext(context);
+    const normalizedItemId = asString(itemId);
+    if (!normalized || !/^\d+$/.test(normalizedItemId || '')) return null;
+    return JSON.stringify([
+      normalizedItemId,
+      normalized.pageSize,
+      normalized.sort,
+      normalized.filters,
+      normalized.skuFilter,
+    ]);
+  }
+
+  function normalizeNativeReviewResponse(response, expectedItemId) {
+    if (!isPlainObject(response) || !isPlainObject(response.data) || !Array.isArray(response.data.reviews)) return null;
+    if (!response.data.reviews.length) return [];
+    return normalizeReviewCandidate(response.data.reviews, expectedItemId);
+  }
+
+  function normalizeNativeReviewBatch(rawRequest, rawResponse, expectedItemId) {
+    const request = normalizeNativeReviewRequest(rawRequest, expectedItemId);
+    if (!request) return null;
+    const reviews = normalizeNativeReviewResponse(rawResponse, request.itemId);
+    if (!reviews) return null;
+    const context = canonicalizeReviewContext(request);
+    return {
+      itemId: request.itemId,
+      source: 'native:product-reviews',
+      context,
+      pageNum: request.pageNum,
+      reviews,
+    };
+  }
+
+  function createReviewCache(itemId, cap = REVIEW_CAPTURE_CAP) {
+    const normalizedItemId = asString(itemId);
+    if (!/^\d+$/.test(normalizedItemId || '') || !Number.isSafeInteger(cap) || cap < 1) return null;
+    return {
+      itemId: normalizedItemId,
+      cap,
+      activeContextKey: null,
+      activeSequence: 0,
+      nextSequence: 0,
+      contexts: new Map(),
+    };
+  }
+
+  function reviewEntry(context) {
+    return {
+      context,
+      pages: new Map(),
+      diagnostic: null,
+      ignoredBeyondCap: false,
+      hasSsr: false,
+      hasNative: false,
+    };
+  }
+
+  function isReviewPageWithinCaptureCap(pageNum, pageSize, cap) {
+    if (!Number.isSafeInteger(pageNum) || pageNum < 1
+      || !Number.isSafeInteger(pageSize) || pageSize < 1
+      || !Number.isSafeInteger(cap) || cap < 1) return false;
+    return pageNum === 1 || pageNum <= Math.floor(cap / pageSize);
+  }
+
+  function updateReviewCachePage(cache, itemId, context, pageNum, reviews, source, sequence) {
+    if (!cache || cache.itemId !== itemId || !Number.isSafeInteger(pageNum) || pageNum < 1 || !Array.isArray(reviews)) return cache;
+    const canonical = canonicalizeReviewContext(context);
+    const contextKey = createReviewContextKey(itemId, canonical);
+    if (!canonical || !contextKey) return cache;
+    const makeActive = source === 'native';
+    const hasExplicitSequence = makeActive && Number.isSafeInteger(sequence) && sequence >= 1;
+    const resolvedSequence = makeActive
+      ? (hasExplicitSequence ? sequence : cache.nextSequence + 1)
+      : cache.activeSequence;
+    const nextSequence = makeActive ? Math.max(cache.nextSequence, resolvedSequence) : cache.nextSequence;
+    const shouldActivate = makeActive && resolvedSequence >= cache.activeSequence;
+    const activeContextKey = shouldActivate ? contextKey : (cache.activeContextKey || contextKey);
+    const activeSequence = shouldActivate ? resolvedSequence : cache.activeSequence;
+    const currentEntry = cache.contexts.get(contextKey);
+    const hasExisting = Boolean(currentEntry?.pages.has(pageNum));
+    const existing = currentEntry?.pages.get(pageNum);
+    if (hasExisting && normalizedReviewsEqual(existing, reviews)) {
+      const sourceAlreadyRecorded = source === 'ssr' ? currentEntry.hasSsr : currentEntry.hasNative;
+      if (!hasExplicitSequence && sourceAlreadyRecorded && cache.activeContextKey === contextKey) return cache;
+      if (cache.activeContextKey === activeContextKey && cache.activeSequence === activeSequence
+        && cache.nextSequence === nextSequence && sourceAlreadyRecorded) return cache;
+      if (sourceAlreadyRecorded) return { ...cache, activeContextKey, activeSequence, nextSequence };
+      const contexts = new Map(cache.contexts);
+      contexts.set(contextKey, {
+        ...currentEntry,
+        hasSsr: currentEntry.hasSsr || source === 'ssr',
+        hasNative: currentEntry.hasNative || source === 'native',
+      });
+      return { ...cache, activeContextKey, activeSequence, nextSequence, contexts };
+    }
+    const contexts = new Map(cache.contexts);
+    const entry = currentEntry ? { ...currentEntry, pages: new Map(currentEntry.pages) } : reviewEntry(canonical);
+    if (hasExisting) {
+      entry.diagnostic = 'page-conflict';
+    } else if (isReviewPageWithinCaptureCap(pageNum, canonical.pageSize, cache.cap)) entry.pages.set(pageNum, reviews);
+    else entry.ignoredBeyondCap = true;
+    if (source === 'ssr') entry.hasSsr = true;
+    if (source === 'native') entry.hasNative = true;
+    contexts.set(contextKey, entry);
+    return { ...cache, activeContextKey, activeSequence, nextSequence, contexts };
+  }
+
+  function seedReviewCacheFromSsr(cache, reviewPage) {
+    if (!cache || !reviewPage || reviewPage.itemId !== cache.itemId || !Array.isArray(reviewPage.reviews)) return cache;
+    return updateReviewCachePage(cache, cache.itemId, INITIAL_REVIEW_CONTEXT, 1, reviewPage.reviews, 'ssr');
+  }
+
+  function applyNativeReviewBatch(cache, batch, sequence) {
+    if (!cache || !batch || batch.itemId !== cache.itemId || batch.source !== 'native:product-reviews') return cache;
+    return updateReviewCachePage(cache, batch.itemId, batch.context, batch.pageNum, batch.reviews, 'native', sequence);
+  }
+
+  function mergeReviewContext(entry) {
+    if (!entry) return null;
+    const pagesLoaded = [...entry.pages.keys()].sort((left, right) => left - right);
+    const merged = [];
+    const byKey = new Map();
+    let expectedPage = 1;
+    let diagnostic = entry.diagnostic;
+    for (const pageNum of pagesLoaded) {
+      if (pageNum !== expectedPage) {
+        diagnostic ||= 'page-gap';
+        break;
+      }
+      for (const review of entry.pages.get(pageNum)) {
+        const key = `${review.productId}:${review.id}`;
+        const previous = byKey.get(key);
+        if (previous && !normalizedReviewsEqual(previous, review)) {
+          return { pagesLoaded, reviews: [], diagnostic: 'review-conflict' };
+        }
+        if (!previous) {
+          byKey.set(key, review);
+          merged.push(review);
+        }
+      }
+      expectedPage += 1;
+    }
+    return { pagesLoaded, reviews: merged, diagnostic };
+  }
+
+  function getActiveReviewPage(cache) {
+    if (!cache?.activeContextKey) return null;
+    const entry = cache.contexts.get(cache.activeContextKey);
+    const merged = mergeReviewContext(entry);
+    if (!entry || !merged) return null;
+    const loadedCount = merged.reviews.length;
+    const retainedCount = [...entry.pages.values()].reduce((total, page) => total + page.length, 0);
+    return {
+      itemId: cache.itemId,
+      source: entry.hasSsr && entry.hasNative ? 'ssr+native' : (entry.hasNative ? 'native:product-reviews' : 'ssr:__AER_DATA__'),
+      context: entry.context,
+      pagesLoaded: merged.pagesLoaded,
+      loadedCount,
+      captureCap: cache.cap,
+      captureCapReached: entry.ignoredBeyondCap || retainedCount >= cache.cap,
+      ...(merged.diagnostic ? { diagnostic: merged.diagnostic } : {}),
+      reviews: merged.reviews,
+    };
+  }
+
+  function formatReviewContext(context) {
+    const labels = [];
+    if (context.sort !== 1) labels.push(context.sort === 2 ? 'New reviews first' : `Sort ${context.sort}`);
+    labels.push(...context.filters.map((code) => ({ 1: 'With photos', 2: 'Additional' }[code] || `Filter ${code}`)));
+    if (context.skuFilter.length) labels.push(`SKU filter · ${context.skuFilter.length} IDs`);
+    return labels;
+  }
+
+  function formatReviewsPageStatus(reviewPage) {
+    if (reviewPage.source === 'ssr:__AER_DATA__') {
+      return `Reviews ready · ${reviewPage.loadedCount} first-page reviews · source: SSR`;
+    }
+    const labels = formatReviewContext(reviewPage.context);
+    const pages = reviewPage.pagesLoaded;
+    const contiguous = pages.length > 1 && pages.every((page, index) => page === index + 1);
+    if (contiguous) labels.unshift(`pages 1–${pages.at(-1)}`);
+    else if (pages.length) labels.unshift(`pages ${pages.join(', ')}`);
+    if (reviewPage.captureCapReached) labels.push('capture cap reached');
+    if (reviewPage.diagnostic) labels.push(reviewPage.diagnostic);
+    return `Reviews captured · ${reviewPage.loadedCount} reviews${labels.length ? ` · ${labels.join(' · ')}` : ''} · passive native`;
   }
 
   function parseLocalizedRating(value) {
@@ -1919,6 +2178,20 @@
     updateGallery,
     normalizeReviewRecord,
     normalizeReviewCandidate,
+    isNativeReviewEndpoint,
+    normalizeNativeReviewRequest,
+    canonicalizeReviewContext,
+    createReviewContextKey,
+    normalizeNativeReviewResponse,
+    normalizeNativeReviewBatch,
+    createReviewCache,
+    isReviewPageWithinCaptureCap,
+    seedReviewCacheFromSsr,
+    applyNativeReviewBatch,
+    mergeReviewContext,
+    getActiveReviewPage,
+    formatReviewContext,
+    formatReviewsPageStatus,
     inspectReviewsPageFromSsrData,
     extractReviewsPageFromSsrData,
     exportReviewsPage,
@@ -1977,6 +2250,7 @@
     isShippingCalculateUrl,
     redactSensitiveJson,
     createShippingDebugCapture,
+    installNativeReviewInterceptor,
   };
 
   if (typeof module === 'object' && module.exports) module.exports = AliHelperCore;
@@ -2065,6 +2339,29 @@
       try { return parseJsonBody(await input.clone().text()); } catch (_) { return null; }
     }
     return null;
+  }
+
+  function installNativeReviewInterceptor(pageWindow, expectedItemId, onBatch) {
+    const flag = '__aliHelperNativeReviewInterceptorV1__';
+    if (!pageWindow || pageWindow[flag]) return;
+    pageWindow[flag] = true;
+    if (typeof pageWindow.fetch !== 'function') return;
+    const originalFetch = pageWindow.fetch;
+    const baseUrl = pageWindow.location?.href || location.href;
+    let requestSequence = 0;
+    pageWindow.fetch = function aliHelperNativeReviewFetch(...args) {
+      const matched = isNativeReviewEndpoint(args[0], baseUrl);
+      const sequence = matched ? ++requestSequence : null;
+      const requestJson = matched ? readFetchRequestJson(args[0], args[1]) : null;
+      const result = originalFetch.apply(this, args);
+      if (matched) {
+        Promise.all([requestJson, result.then((response) => response.clone().json())])
+          .then(([request, response]) => normalizeNativeReviewBatch(request, response, expectedItemId))
+          .then((batch) => { if (batch) onBatch(batch, sequence); })
+          .catch(() => {});
+      }
+      return result;
+    };
   }
 
   function installShippingCalculateInterceptor(pageWindow, onCapture) {
@@ -2347,7 +2644,7 @@
     return {
       setReviews(reviewPage) {
         copyButton.disabled = false;
-        flash(`Reviews ready · ${reviewPage.reviews.length} first-page reviews · source: SSR`);
+        flash(formatReviewsPageStatus(reviewPage));
       },
       setStatus: flash,
     };
@@ -2357,9 +2654,20 @@
     const runtime = {
       settings: loadSettings(),
       itemId: getReviewsItemId(location.href),
+      reviewCache: null,
       reviewPage: null,
+      ssrSeeded: false,
       ui: null,
     };
+    runtime.reviewCache = createReviewCache(runtime.itemId);
+    const pageWindow = typeof unsafeWindow === 'object' && unsafeWindow ? unsafeWindow : window;
+    installNativeReviewInterceptor(pageWindow, runtime.itemId, (batch, sequence) => {
+      const nextCache = applyNativeReviewBatch(runtime.reviewCache, batch, sequence);
+      if (nextCache === runtime.reviewCache) return;
+      runtime.reviewCache = nextCache;
+      runtime.reviewPage = getActiveReviewPage(nextCache);
+      if (runtime.reviewPage) runtime.ui?.setReviews(runtime.reviewPage);
+    });
     const mount = () => {
       if (!document.body || document.getElementById('ali-helper-host')) return;
       runtime.ui = createReviewsPanel(runtime);
@@ -2370,10 +2678,12 @@
 
     let attempts = 0;
     const readSsr = () => {
-      if (runtime.reviewPage) return;
+      if (runtime.ssrSeeded) return;
       const inspection = findReviewsPageInSsr(runtime.itemId);
-      runtime.reviewPage = inspection.reviewPage;
-      if (runtime.reviewPage) {
+      if (inspection.reviewPage) {
+        runtime.reviewCache = seedReviewCacheFromSsr(runtime.reviewCache, inspection.reviewPage);
+        runtime.ssrSeeded = true;
+        runtime.reviewPage = getActiveReviewPage(runtime.reviewCache);
         runtime.ui?.setReviews(runtime.reviewPage);
         return;
       }
