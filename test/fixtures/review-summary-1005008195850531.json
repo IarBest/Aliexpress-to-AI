@@ -1,0 +1,69 @@
+{
+  "capturedAt": "2026-08-13",
+  "sourceKind": "minimized live #__AER_DATA__ and scoped DOM observation",
+  "itemId": "1005008195850531",
+  "sourceUrl": "https://aliexpress.ru/item/1005008195850531.html?sku_id=12000056550848689",
+  "ssr": {
+    "widgetId": "bx/RedReviewsContextWidget/0.15.0",
+    "props": {
+      "callMltags": true,
+      "resolveParams": { "platform": "pc" }
+    },
+    "children": [
+      {
+        "widgetId": "bx/RedReviewsTabs/0.28.0",
+        "props": {
+          "placement": "PDP",
+          "analyticEvents": {
+            "clickAllReviews": {
+              "trackingInfo": { "itemId": 1005008195850531, "overallRating": "5,0" }
+            },
+            "viewWidgetReview": {
+              "trackingInfo": { "itemId": 1005008195850531, "overallRating": "5,0" }
+            }
+          }
+        },
+        "children": [
+          {
+            "widgetId": "bx/RedReviewsProductFeedbackList/0.35.0",
+            "props": {
+              "placement": "PDP",
+              "resolveParams": {
+                "abtest:PDPSplitReviewsPC": "",
+                "review.productFeedbacksCount": 2,
+                "review.productReviewsCount": 5
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "dom": {
+    "anchorId": "reviews_anchor",
+    "boundaryClassName": "HazeRoundedBox_HazeRoundedBox__box__vi2nz HazeRoundedBox_HazeRoundedBox__hideEmpty__vi2nz",
+    "requiredClassFragments": [
+      "RedReviewsTabs__desktop__",
+      "GlowReviewsProductRating_MainSection__mainSection__"
+    ],
+    "rating": "5,0",
+    "reviewDisplay": "All 5 reviews",
+    "boughtDisplay": "13 purchased",
+    "gradeRows": [
+      { "className": "GlowReviewsProductRating_Grades__gradeWrapper__a6bvu", "totalStars": 5, "activeStars": 5 },
+      { "className": "GlowReviewsProductRating_Grades__gradeWrapper__a6bvu", "totalStars": 5, "activeStars": 4 },
+      { "className": "GlowReviewsProductRating_Grades__gradeWrapper__a6bvu", "totalStars": 5, "activeStars": 3 },
+      { "className": "GlowReviewsProductRating_Grades__gradeWrapper__a6bvu", "totalStars": 5, "activeStars": 2 },
+      { "className": "GlowReviewsProductRating_Grades__gradeWrapper__a6bvu", "totalStars": 5, "activeStars": 1 }
+    ],
+    "countRows": [
+      { "text": "5" },
+      { "text": "0" },
+      { "text": "0" },
+      { "text": "0" },
+      { "text": "0" }
+    ],
+    "buyerPhotos": null,
+    "topics": null
+  }
+}

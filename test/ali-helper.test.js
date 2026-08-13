@@ -146,6 +146,87 @@ function syntheticRatingDom(values, options = {}) {
   return { root, productRoot, extraInfo, recommendationRoot };
 }
 
+function syntheticReviewSummaryDom(fixture, options = {}) {
+  const observation = fixture.dom || fixture;
+  const textNode = (text) => ({
+    innerText: text,
+    textContent: text,
+    children: [],
+  });
+  const gradeRowsData = options.gradeRows || observation.gradeRows || [];
+  const countRowsData = options.countRows || observation.countRows || [];
+  const gradeRows = gradeRowsData.map((row) => ({
+    querySelectorAll(selector) {
+      if (selector.includes('StarGroup__starActive__')) return Array.from({ length: row.activeStars });
+      if (selector.includes('StarGroup__star__')) return Array.from({ length: row.totalStars });
+      return [];
+    },
+  }));
+  const countRows = countRowsData.map((row) => textNode(row.text));
+  const gradeGroup = {
+    querySelectorAll(selector) {
+      return selector.includes('Grades__gradeWrapper__') ? gradeRows : [];
+    },
+  };
+  const countGroup = { children: countRows };
+  const ratingRoot = {
+    querySelector(selector) {
+      if (selector.includes('AdditionalSection__gradeCount__')) return countGroup;
+      if (selector.includes('AdditionalSection__grade__')) return gradeGroup;
+      return null;
+    },
+  };
+
+  const buyerPhotos = options.buyerPhotos === undefined ? observation.buyerPhotos : options.buyerPhotos;
+  const photoWrapper = buyerPhotos && {
+    querySelectorAll(selector) {
+      if (selector !== '*') return [];
+      return [
+        textNode(buyerPhotos.heading),
+        textNode(options.photoDisplay ?? buyerPhotos.display),
+        ...Array.from({ length: buyerPhotos.renderedThumbnailCount || 0 }, () => textNode('thumbnail')),
+      ];
+    },
+  };
+
+  const topicsObservation = options.topics === undefined ? observation.topics : options.topics;
+  const topicNodes = (topicsObservation?.topics || []).map((topic) => ({
+    className: options.conflictingMood
+      ? `${topic.className} RedReviewsTags_Tag__positiveTagMood__x RedReviewsTags_Tag__negativeTagMood__x`
+      : topic.className,
+    querySelector(selector) {
+      if (selector.includes('Tag__tagText__')) return textNode(topic.text);
+      if (selector.includes('Tag__counter__')) return textNode(topic.count);
+      return null;
+    },
+  }));
+  const topicWrapper = topicsObservation && {
+    querySelectorAll(selector) {
+      if (selector === '*') return [textNode(options.topicHeading ?? topicsObservation.heading)];
+      return selector.includes('Tag__tag__') ? topicNodes : [];
+    },
+  };
+
+  const boundary = {
+    querySelector(selector) {
+      if (selector.includes('RedReviewsTabs__desktop__')) return options.missingTabs ? null : {};
+      if (selector.includes('MainSection__mainSection__')) return options.missingRatingRoot ? null : ratingRoot;
+      if (selector.includes('RedReviewsGallery__defaultWrapper__')) return photoWrapper;
+      return null;
+    },
+    querySelectorAll(selector) {
+      return selector.includes('RedReviewsTags__tagsWrapper__') && topicWrapper ? [topicWrapper] : [];
+    },
+  };
+  const anchor = { parentElement: boundary };
+  const root = {
+    querySelector(selector) {
+      return selector === '#reviews_anchor' && !options.missingAnchor ? anchor : null;
+    },
+  };
+  return { root, boundary, ratingRoot, gradeRows, countRows, photoWrapper, topicWrapper };
+}
+
 function ratingSsrCandidate({ itemId, ratingRaw, reviewCount, feedbackCount }) {
   const props = {
     resolveParams: {},
@@ -816,6 +897,7 @@ test('captured live rating/trade observations normalize relay and dress values',
       rating: fixture.dom.ratingText,
       reviewCount: fixture.dom.reviewText,
       boughtCount: fixture.dom.boughtText,
+      buyerPhotosCount: null,
     });
   }
 });
@@ -867,8 +949,13 @@ test('DOM rating/trade extraction is limited to the actual H1 product boundary',
   assert.deepEqual(core.extractBasicRatingFromDom(dom.root), {
     rating: 4.6,
     reviewCount: 36,
+    contentFeedbackCount: null,
     boughtCount: 413,
-    display: { rating: '4.6', reviewCount: '36 reviews', boughtCount: '413 bought' },
+    starDistribution: null,
+    buyerPhotosCount: null,
+    reviewTopics: null,
+    diagnostics: { starDistributionTotal: null, starDistributionMatchesReviewCount: null },
+    display: { rating: '4.6', reviewCount: '36 reviews', boughtCount: '413 bought', buyerPhotosCount: null },
   });
 });
 
@@ -883,8 +970,10 @@ test('rating summary merge prioritizes SSR numerics, DOM bought/display, and lat
   };
   const merged = core.mergeRatingSummary(structured, dom);
   assert.deepEqual(merged, {
-    rating: 5, reviewCount: 5, boughtCount: 13,
-    display: { rating: '5.0', reviewCount: '5 reviews', boughtCount: '13 bought' },
+    rating: 5, reviewCount: 5, contentFeedbackCount: null, boughtCount: 13,
+    starDistribution: null, buyerPhotosCount: null, reviewTopics: null,
+    diagnostics: { starDistributionTotal: null, starDistributionMatchesReviewCount: null },
+    display: { rating: '5.0', reviewCount: '5 reviews', boughtCount: '13 bought', buyerPhotosCount: null },
   });
   const fixture = loadFixture('product-1005008195850531.json');
   const product = core.normalizeProduct(fixture.data, 'https://aliexpress.ru/item/1005008195850531.html');
@@ -903,7 +992,15 @@ test('rating summary distinguishes real zero from unknown and remains reference-
     display: { rating: '0', reviewCount: '0 reviews', boughtCount: '0 bought' },
   };
   const updated = core.updateRatingSummary(product, zero);
-  assert.deepEqual(updated.ratingSummary, zero);
+  assert.deepEqual(updated.ratingSummary, {
+    ...zero,
+    contentFeedbackCount: null,
+    starDistribution: null,
+    buyerPhotosCount: null,
+    reviewTopics: null,
+    diagnostics: { starDistributionTotal: null, starDistributionMatchesReviewCount: null },
+    display: { ...zero.display, buyerPhotosCount: null },
+  });
   assert.equal(core.updateRatingSummary(updated, { rating: null, reviewCount: null, boughtCount: null, display: {} }), updated);
 });
 
@@ -960,7 +1057,15 @@ test('one pre-export fallback enrichment fills available DOM data and is referen
 
   assert.deepEqual(updatedProduct.characteristics, [{ name: 'Material', value: 'Stainless steel' }]);
   assert.equal(updatedProduct.description, description);
-  assert.deepEqual(updatedProduct.ratingSummary, ratingSummary);
+  assert.deepEqual(updatedProduct.ratingSummary, {
+    ...ratingSummary,
+    contentFeedbackCount: null,
+    starDistribution: null,
+    buyerPhotosCount: null,
+    reviewTopics: null,
+    diagnostics: { starDistributionTotal: null, starDistributionMatchesReviewCount: null },
+    display: { ...ratingSummary.display, buyerPhotosCount: null },
+  });
   assert.equal(updatedProduct.delivery, delivery);
   assert.equal(updatedProduct.selectedSku, selectedSku);
   assert.equal(updatedProduct.price, selectedPrice);
@@ -978,7 +1083,7 @@ test('stale old product-header values cannot enrich a changed item', () => {
   assert.equal(core.isStaleRatingSummary(newDom.productRoot, oldSummary, oldDom.productRoot, oldSummary), false);
 });
 
-test('ChatGPT rating/trade export uses display text, preserves zero, and excludes P3/seller values', () => {
+test('ChatGPT rating/trade export includes the extended summary and preserves zero', () => {
   const fixture = loadFixture('product-1005008195850531.json');
   const product = core.normalizeProduct(fixture.data, 'https://aliexpress.ru/item/1005008195850531.html');
   product.ratingSummary = {
@@ -986,14 +1091,360 @@ test('ChatGPT rating/trade export uses display text, preserves zero, and exclude
     display: { rating: '5.0', reviewCount: '5 reviews', boughtCount: '13 bought' },
   };
   product.store = { rating: '91,63%' };
-  product.ratingSummary.feedbackCount = 2;
+  product.ratingSummary.contentFeedbackCount = 2;
   const output = core.exportForChatGPT(product);
-  assert.match(output, /RATING & TRADE:\nRating: 5\.0\nReviews: 5 reviews\nBought: 13 bought\n\nSTORE \/ SELLER:[\s\S]*\n\nDELIVERY:/);
-  assert.doesNotMatch(output, /91,63|feedback|photos|distribution/i);
+  assert.match(output, /RATING & TRADE:\nRating: 5\.0\nReviews: 5 reviews\nContent feedbacks: 2\nBought: 13 bought\nStars: —\nStar total: —\nStar total matches reviews: —\nBuyer photos: —\nReview topics:\n—\n\nSTORE \/ SELLER:[\s\S]*\n\nDELIVERY:/);
+  assert.doesNotMatch(output, /91,63/);
   product.ratingSummary = { rating: 0, reviewCount: 0, boughtCount: 0, display: {} };
-  assert.match(core.exportForChatGPT(product), /Rating: 0\nReviews: 0\nBought: 0/);
+  assert.match(core.exportForChatGPT(product), /Rating: 0\nReviews: 0\nContent feedbacks: —\nBought: 0/);
   product.ratingSummary = null;
-  assert.match(core.exportForChatGPT(product), /Rating: —\nReviews: —\nBought: —/);
+  assert.match(core.exportForChatGPT(product), /Rating: —\nReviews: —\nContent feedbacks: —\nBought: —/);
+});
+
+test('captured Review Context SSR is structurally bound to the exact current item', () => {
+  const expectations = [
+    ['review-summary-1005008195850531.json', 5, 5, 2],
+    ['review-summary-1005009452926938.json', 4.6, 36, 30],
+  ];
+  for (const [name, rating, reviewCount, contentFeedbackCount] of expectations) {
+    const fixture = loadFixture(name);
+    const root = { unrelatedDepth: { widgets: [fixture.ssr] } };
+    const summary = core.extractReviewSummaryFromSsrData(root, fixture.itemId);
+    assert.equal(summary.rating, rating);
+    assert.equal(summary.reviewCount, reviewCount);
+    assert.equal(summary.contentFeedbackCount, contentFeedbackCount);
+    assert.equal(summary.boughtCount, null);
+    assert.equal(summary.starDistribution, null);
+  }
+});
+
+test('Review Context SSR accepts widget-family version drift and numeric item IDs', () => {
+  const fixture = loadFixture('review-summary-1005009452926938.json');
+  const ssr = clone(fixture.ssr);
+  ssr.widgetId = 'bx/RedReviewsContextWidget/9.9.9';
+  ssr.children[0].widgetId = 'bx/RedReviewsTabs/8.8.8';
+  ssr.children[0].children[0].widgetId = 'bx/RedReviewsProductFeedbackList/7.7.7';
+  const summary = core.extractReviewSummaryFromSsrData({ arbitrary: [ssr] }, String(fixture.itemId));
+  assert.equal(summary.rating, 4.6);
+  assert.equal(summary.reviewCount, 36);
+  assert.equal(summary.contentFeedbackCount, 30);
+});
+
+test('Review Context SSR ignores feedback lists outside the matched current-item tabs', () => {
+  const fixture = loadFixture('review-summary-1005008195850531.json');
+  const ssr = clone(fixture.ssr);
+  ssr.children.push({
+    widgetId: 'bx/RedReviewsProductFeedbackList/0.99.0',
+    props: {
+      placement: 'PDP',
+      resolveParams: {
+        'review.productReviewsCount': 999,
+        'review.productFeedbacksCount': 888,
+      },
+    },
+  });
+  const summary = core.extractReviewSummaryFromSsrData(ssr, fixture.itemId);
+  assert.equal(summary.reviewCount, 5);
+  assert.equal(summary.contentFeedbackCount, 2);
+});
+
+test('Review Context SSR rejects different-item and contradictory tracking bindings', () => {
+  const fixture = loadFixture('review-summary-1005009452926938.json');
+  const differentItem = clone(fixture.ssr);
+  differentItem.children[0].props.analyticEvents.clickAllReviews.trackingInfo.itemId = 1005000000000001;
+  differentItem.children[0].props.analyticEvents.viewWidgetReview.trackingInfo.itemId = 1005000000000001;
+  assert.equal(core.extractReviewSummaryFromSsrData(differentItem, fixture.itemId), null);
+
+  const contradictory = clone(fixture.ssr);
+  contradictory.children[0].props.analyticEvents.viewWidgetReview.trackingInfo.itemId = 1005000000000002;
+  assert.equal(core.extractReviewSummaryFromSsrData(contradictory, fixture.itemId), null);
+
+  const ratingConflict = clone(fixture.ssr);
+  ratingConflict.children[0].props.analyticEvents.viewWidgetReview.trackingInfo.overallRating = '4,8';
+  assert.equal(core.extractReviewSummaryFromSsrData(ratingConflict, fixture.itemId), null);
+});
+
+test('Review Context SSR combines partial totals, permits duplicates, and fails conflicting fields closed', () => {
+  const fixture = loadFixture('review-summary-1005009452926938.json');
+  const tabs = clone(fixture.ssr.children[0]);
+  const feedback = tabs.children[0];
+  tabs.children.push(clone(feedback));
+  let summary = core.extractReviewSummaryFromSsrData({
+    widgetId: fixture.ssr.widgetId,
+    children: [tabs],
+  }, fixture.itemId);
+  assert.equal(summary.reviewCount, 36);
+  assert.equal(summary.contentFeedbackCount, 30);
+
+  const partialTabs = clone(fixture.ssr.children[0]);
+  const reviewsOnly = clone(partialTabs.children[0]);
+  delete reviewsOnly.props.resolveParams['review.productFeedbacksCount'];
+  const feedbacksOnly = clone(partialTabs.children[0]);
+  delete feedbacksOnly.props.resolveParams['review.productReviewsCount'];
+  partialTabs.children = [reviewsOnly, feedbacksOnly];
+  summary = core.extractReviewSummaryFromSsrData({
+    widgetId: fixture.ssr.widgetId,
+    children: [partialTabs],
+  }, fixture.itemId);
+  assert.equal(summary.reviewCount, 36);
+  assert.equal(summary.contentFeedbackCount, 30);
+
+  const conflictingTabs = clone(fixture.ssr.children[0]);
+  const conflict = clone(conflictingTabs.children[0]);
+  conflict.props.resolveParams['review.productReviewsCount'] = 37;
+  conflictingTabs.children.push(conflict);
+  summary = core.extractReviewSummaryFromSsrData({
+    widgetId: fixture.ssr.widgetId,
+    children: [conflictingTabs],
+  }, fixture.itemId);
+  assert.equal(summary.rating, 4.6);
+  assert.equal(summary.reviewCount, null);
+  assert.equal(summary.contentFeedbackCount, 30);
+});
+
+test('Review Context SSR preserves real zero totals', () => {
+  const fixture = loadFixture('review-summary-1005008195850531.json');
+  const ssr = clone(fixture.ssr);
+  const params = ssr.children[0].children[0].props.resolveParams;
+  params['review.productReviewsCount'] = 0;
+  params['review.productFeedbacksCount'] = 0;
+  const summary = core.extractReviewSummaryFromSsrData(ssr, fixture.itemId);
+  assert.equal(summary.reviewCount, 0);
+  assert.equal(summary.contentFeedbackCount, 0);
+});
+
+test('Review Context SSR normalizes the observed Needles 4,8 rating and totals', () => {
+  const fixture = loadFixture('review-summary-1005008195850531.json');
+  const ssr = clone(fixture.ssr);
+  const tabs = ssr.children[0];
+  for (const event of Object.values(tabs.props.analyticEvents)) {
+    event.trackingInfo.itemId = 1005005933779962;
+    event.trackingInfo.overallRating = '4,8';
+  }
+  const params = tabs.children[0].props.resolveParams;
+  params['review.productReviewsCount'] = 66;
+  params['review.productFeedbacksCount'] = 12;
+  const summary = core.extractReviewSummaryFromSsrData(ssr, '1005005933779962');
+  assert.equal(summary.rating, 4.8);
+  assert.equal(summary.reviewCount, 66);
+  assert.equal(summary.contentFeedbackCount, 12);
+});
+
+test('captured Relay and Dress DOM distributions map grades by active stars', () => {
+  const cases = [
+    ['review-summary-1005008195850531.json', { 5: 5, 4: 0, 3: 0, 2: 0, 1: 0 }],
+    ['review-summary-1005009452926938.json', { 5: 29, 4: 3, 3: 2, 2: 2, 1: 0 }],
+  ];
+  for (const [name, expected] of cases) {
+    const fixture = loadFixture(name);
+    const dom = syntheticReviewSummaryDom(fixture);
+    assert.equal(core.findReviewSummaryBoundary(dom.root), dom.boundary);
+    assert.deepEqual(core.parseStarDistribution(dom.boundary), expected);
+    const merged = core.mergeRatingSummary(
+      core.extractReviewSummaryFromSsrData(fixture.ssr, fixture.itemId),
+      null,
+      core.extractReviewSummaryFromDom(dom.root),
+    );
+    assert.equal(merged.diagnostics.starDistributionTotal, merged.reviewCount);
+    assert.equal(merged.diagnostics.starDistributionMatchesReviewCount, true);
+  }
+});
+
+test('star distribution supports shuffled rows and never infers grade from array position', () => {
+  const fixture = loadFixture('review-summary-1005009452926938.json');
+  const order = [2, 4, 0, 3, 1];
+  const dom = syntheticReviewSummaryDom(fixture, {
+    gradeRows: order.map((index) => fixture.dom.gradeRows[index]),
+    countRows: order.map((index) => fixture.dom.countRows[index]),
+  });
+  assert.deepEqual(core.parseStarDistribution(dom.boundary), { 5: 29, 4: 3, 3: 2, 2: 2, 1: 0 });
+});
+
+test('invalid or incomplete star structures fail closed instead of returning a partial distribution', () => {
+  const fixture = loadFixture('review-summary-1005009452926938.json');
+  const repeated = clone(fixture.dom.gradeRows);
+  repeated[4].activeStars = 2;
+  assert.equal(core.parseStarDistribution(syntheticReviewSummaryDom(fixture, { gradeRows: repeated }).boundary), null);
+
+  const missingGrade = clone(fixture.dom.gradeRows);
+  missingGrade[4].activeStars = 0;
+  assert.equal(core.parseStarDistribution(syntheticReviewSummaryDom(fixture, { gradeRows: missingGrade }).boundary), null);
+  assert.equal(core.parseStarDistribution(syntheticReviewSummaryDom(fixture, {
+    gradeRows: fixture.dom.gradeRows.slice(0, 4),
+  }).boundary), null);
+  assert.equal(core.parseStarDistribution(syntheticReviewSummaryDom(fixture, {
+    countRows: fixture.dom.countRows.slice(0, 4),
+  }).boundary), null);
+  const malformedCounts = clone(fixture.dom.countRows);
+  malformedCounts[0].text = 'many';
+  assert.equal(core.parseStarDistribution(syntheticReviewSummaryDom(fixture, { countRows: malformedCounts }).boundary), null);
+});
+
+test('star mismatch diagnostics retain the full distribution and report false', () => {
+  const fixture = loadFixture('review-summary-1005009452926938.json');
+  const counts = clone(fixture.dom.countRows);
+  counts[0].text = '28';
+  const domSummary = core.extractReviewSummaryFromDom(syntheticReviewSummaryDom(fixture, { countRows: counts }).root);
+  const summary = core.mergeRatingSummary(
+    core.extractReviewSummaryFromSsrData(fixture.ssr, fixture.itemId),
+    null,
+    domSummary,
+  );
+  assert.deepEqual(summary.starDistribution, { 5: 28, 4: 3, 3: 2, 2: 2, 1: 0 });
+  assert.equal(summary.diagnostics.starDistributionTotal, 35);
+  assert.equal(summary.diagnostics.starDistributionMatchesReviewCount, false);
+});
+
+test('review boundary requires the scoped anchor, tabs, and product-rating structure', () => {
+  const fixture = loadFixture('review-summary-1005009452926938.json');
+  assert.equal(core.findReviewSummaryBoundary(syntheticReviewSummaryDom(fixture, { missingAnchor: true }).root), null);
+  assert.equal(core.findReviewSummaryBoundary(syntheticReviewSummaryDom(fixture, { missingTabs: true }).root), null);
+  assert.equal(core.findReviewSummaryBoundary(syntheticReviewSummaryDom(fixture, { missingRatingRoot: true }).root), null);
+  const dom = syntheticReviewSummaryDom(fixture);
+  dom.root.outside = fixture.dom.outsideSentinels;
+  assert.deepEqual(core.parseStarDistribution(core.findReviewSummaryBoundary(dom.root)), {
+    5: 29, 4: 3, 3: 2, 2: 2, 1: 0,
+  });
+});
+
+test('buyer-photo summary uses View all count rather than rendered thumbnails', () => {
+  const fixture = loadFixture('review-summary-1005009452926938.json');
+  assert.equal(fixture.dom.buyerPhotos.renderedThumbnailCount, 30);
+  const photos = core.extractBuyerPhotos(syntheticReviewSummaryDom(fixture).boundary);
+  assert.deepEqual(photos, { value: 31, display: 'View all (31)' });
+  const summary = core.extractReviewSummaryFromDom(syntheticReviewSummaryDom(fixture).root);
+  assert.equal(summary.buyerPhotosCount, 31);
+  assert.equal(summary.display.buyerPhotosCount, 'View all (31)');
+});
+
+test('buyer-photo absence stays unknown while semantic zero is preserved', () => {
+  const relay = loadFixture('review-summary-1005008195850531.json');
+  assert.deepEqual(core.extractBuyerPhotos(syntheticReviewSummaryDom(relay).boundary), { value: null, display: null });
+  const zeroPhotos = { heading: 'All photos from buyers', display: 'View all (0)', renderedThumbnailCount: 0 };
+  assert.deepEqual(core.extractBuyerPhotos(syntheticReviewSummaryDom(relay, { buyerPhotos: zeroPhotos }).boundary), {
+    value: 0,
+    display: 'View all (0)',
+  });
+  assert.deepEqual(core.extractBuyerPhotos(syntheticReviewSummaryDom(relay, {
+    buyerPhotos: zeroPhotos,
+    photoDisplay: 'View everything',
+  }).boundary), { value: null, display: null });
+});
+
+test('captured Dress topics preserve localized text, count, mood, order, and no invented ID', () => {
+  const fixture = loadFixture('review-summary-1005009452926938.json');
+  const topics = core.extractReviewTopics(syntheticReviewSummaryDom(fixture).boundary);
+  assert.equal(topics.length, 7);
+  assert.deepEqual(topics[0], { text: 'Идеальный размер', count: 3, mood: 'positive' });
+  assert.deepEqual(topics[5], { text: 'Неправильный цвет', count: 2, mood: 'negative' });
+  assert.deepEqual(topics.at(-1), {
+    text: 'Не подходит для больших размеров груди', count: 2, mood: 'negative',
+  });
+  assert.equal(Object.hasOwn(topics[0], 'id'), false);
+});
+
+test('topics are optional and guarded by the exact scoped semantic heading', () => {
+  const relay = loadFixture('review-summary-1005008195850531.json');
+  assert.equal(core.extractReviewTopics(syntheticReviewSummaryDom(relay).boundary), null);
+  const dress = loadFixture('review-summary-1005009452926938.json');
+  assert.equal(core.extractReviewTopics(syntheticReviewSummaryDom(dress, {
+    topicHeading: 'Review filters',
+  }).boundary), null);
+  const malformed = clone(dress.dom.topics);
+  malformed.topics[0].count = 'many';
+  const topics = core.extractReviewTopics(syntheticReviewSummaryDom(dress, { topics: malformed }).boundary);
+  assert.equal(topics.length, 6);
+  assert.equal(topics.some((topic) => topic.text === 'Идеальный размер'), false);
+  const ambiguous = core.extractReviewTopics(syntheticReviewSummaryDom(dress, { conflictingMood: true }).boundary);
+  assert.ok(ambiguous.every((topic) => topic.mood === null));
+});
+
+test('rating diagnostics are recomputed after merge and null patches preserve same-item data', () => {
+  const fixture = loadFixture('review-summary-1005009452926938.json');
+  const structured = core.extractReviewSummaryFromSsrData(fixture.ssr, fixture.itemId);
+  const reviewDom = core.extractReviewSummaryFromDom(syntheticReviewSummaryDom(fixture).root);
+  let summary = core.mergeRatingSummary(structured, null, reviewDom);
+  assert.equal(summary.diagnostics.starDistributionMatchesReviewCount, true);
+  summary = core.withRatingDiagnostics({ ...summary, reviewCount: 35 });
+  assert.equal(summary.diagnostics.starDistributionTotal, 36);
+  assert.equal(summary.diagnostics.starDistributionMatchesReviewCount, false);
+
+  const productFixture = loadFixture('product-1005009452926938.json');
+  const product = core.normalizeProduct(productFixture.data, fixture.sourceUrl);
+  const enriched = core.updateRatingSummary(product, core.mergeRatingSummary(structured, null, reviewDom));
+  const unchanged = core.updateRatingSummary(enriched, {
+    rating: null,
+    reviewCount: null,
+    contentFeedbackCount: null,
+    starDistribution: null,
+    buyerPhotosCount: null,
+    reviewTopics: null,
+    display: {},
+  });
+  assert.equal(unchanged, enriched);
+});
+
+test('combined review enrichment preserves selected SKU, price, delivery, store, and product sections', () => {
+  const productFixture = loadFixture('product-1005009452926938.json');
+  const reviewFixture = loadFixture('review-summary-1005009452926938.json');
+  const pageUrl = `${reviewFixture.sourceUrl}`;
+  let product = core.normalizeProduct(productFixture.data, pageUrl);
+  const sentinels = {
+    delivery: { methods: [{ sentinel: 'delivery' }] },
+    store: { name: 'WLIN OOTD Store' },
+    gallery: { items: [{ type: 'image', imageUrl: 'https://example.com/gallery.jpg' }] },
+    description: core.buildDescription('dom', '<p>description</p>', [{ type: 'text', text: 'description' }]),
+    characteristics: [{ name: 'Material', value: 'Synthetic' }],
+  };
+  Object.assign(product, sentinels);
+  const selectedSku = product.selectedSku;
+  const price = product.price;
+  const ratingDom = syntheticRatingDom({ ratingText: '4.6', reviewText: '36 reviews', boughtText: '414 bought' });
+  const enriched = core.enrichProductFallbacks(product, {
+    structuredRating: core.extractReviewSummaryFromSsrData(reviewFixture.ssr, reviewFixture.itemId),
+    domRating: core.extractBasicRatingFromDom(ratingDom.root),
+    reviewDomSummary: core.extractReviewSummaryFromDom(syntheticReviewSummaryDom(reviewFixture).root),
+  });
+  assert.equal(enriched.selectedSku, selectedSku);
+  assert.equal(enriched.price, price);
+  for (const field of ['delivery', 'store', 'gallery', 'description', 'characteristics']) {
+    assert.equal(enriched[field], sentinels[field]);
+  }
+  assert.equal(enriched.ratingSummary.contentFeedbackCount, 30);
+  assert.equal(enriched.ratingSummary.boughtCount, 414);
+  assert.equal(enriched.ratingSummary.buyerPhotosCount, 31);
+  assert.equal(enriched.ratingSummary.reviewTopics.length, 7);
+  assert.equal(core.enrichProductFallbacks(enriched, {}), enriched);
+});
+
+test('review DOM stale protection rejects the old boundary until content changes', () => {
+  const relay = loadFixture('review-summary-1005008195850531.json');
+  const dress = loadFixture('review-summary-1005009452926938.json');
+  const oldDom = syntheticReviewSummaryDom(relay);
+  const oldSummary = core.extractReviewSummaryFromDom(oldDom.root);
+  const changedSummary = core.extractReviewSummaryFromDom(syntheticReviewSummaryDom(dress).root);
+  assert.equal(core.isStaleRatingSummary(oldDom.boundary, oldSummary, oldDom.boundary, oldSummary), true);
+  assert.equal(core.isStaleRatingSummary(oldDom.boundary, changedSummary, oldDom.boundary, oldSummary), false);
+});
+
+test('ChatGPT review summary reports counts, topics, and mismatch diagnostics honestly', () => {
+  const productFixture = loadFixture('product-1005009452926938.json');
+  const reviewFixture = loadFixture('review-summary-1005009452926938.json');
+  const product = core.normalizeProduct(productFixture.data, reviewFixture.sourceUrl);
+  const structured = core.extractReviewSummaryFromSsrData(reviewFixture.ssr, reviewFixture.itemId);
+  const counts = clone(reviewFixture.dom.countRows);
+  counts[0].text = '28';
+  const reviewDom = core.extractReviewSummaryFromDom(syntheticReviewSummaryDom(reviewFixture, { countRows: counts }).root);
+  product.ratingSummary = core.mergeRatingSummary(structured, {
+    boughtCount: 414,
+    display: { boughtCount: '414 bought' },
+  }, reviewDom);
+  const output = core.exportForChatGPT(product);
+  assert.match(output, /Content feedbacks: 30/);
+  assert.match(output, /Stars: 5★ 28 \| 4★ 3 \| 3★ 2 \| 2★ 2 \| 1★ 0/);
+  assert.match(output, /Star total: 35\nStar total matches reviews: no/);
+  assert.match(output, /Buyer photos: 31/);
+  assert.match(output, /Review topics:\n- Идеальный размер — 3 — positive/);
 });
 
 test('seller percentage parser accepts captured locale forms and preserves true zero', () => {

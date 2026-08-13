@@ -315,18 +315,72 @@ Acceptance: стоимость и ETA принадлежат конкретно�
 
 ### Review summary
 
-- [ ] Нормализовать rating, total reviews/ratings, content feedback count и
+- [x] Нормализовать product rating, total reviews, content feedback count и
       bought count из structured/semantic sources.
-- [ ] Извлечь 5★/4★/3★/2★/1★ distribution без зависимости от CSS hash.
-- [ ] Проверять сумму star distribution против reviews count, когда все значения
+- [x] Извлечь 5★/4★/3★/2★/1★ distribution без зависимости от полного CSS hash.
+- [x] Проверять сумму star distribution против review count, когда все значения
       доступны; mismatch показывать как diagnostic, а не скрывать.
-- [ ] Сохранить buyer photos count, если источник однозначен.
-- [ ] Добавить optional `reviewTopics` только при устойчивом extraction.
-- [ ] Добавить regression: rating `4.8`, reviews `610`, feedbacks `283`, bought
-      `2001`; stars `562/27/6/5/10`.
+- [x] Сохранить buyer photos count из отдельного summary source.
+- [x] Добавить optional `reviewTopics` из подтверждённого scoped DOM.
+- [x] Добавить реальные captured regressions для Review Summary на текущих
+      товарах; historical roadmap reference `4.8 / 610 / 283 / 2001 /
+      562-27-6-5-10` не превращать в fixture, поскольку provenance/item ID не
+      восстановлены. В git history найдено только его появление в commit
+      `c2359ccd01aee28b3f8cbd5373c5d2cd2bc76dbd` (`docs: add project roadmap`),
+      без исходного capture.
+
+Normalized extension реализован в существующем `ratingSummary`:
+
+```text
+ratingSummary {
+  rating, reviewCount, contentFeedbackCount, boughtCount,
+  starDistribution, buyerPhotosCount, reviewTopics,
+  diagnostics {
+    starDistributionTotal, starDistributionMatchesReviewCount
+  },
+  display { rating, reviewCount, boughtCount, buyerPhotosCount }
+}
+```
+
+Structured boundary: `#__AER_DATA__` → `RedReviewsContextWidget` → доказанно
+связанный с exact current item `RedReviewsTabs` → descendant
+`RedReviewsProductFeedbackList`. `reviewCount` и `contentFeedbackCount` — разные
+поля. Семантика raw `review.productFeedbacksCount` остаётся нейтральной, поэтому
+normalized name — `contentFeedbackCount`.
+
+DOM boundary начинается с parent `#reviews_anchor` и принимается только при
+наличии `RedReviewsTabs__desktop__` и
+`GlowReviewsProductRating_MainSection__mainSection__`. Star grade определяется
+количеством active stars, а не row index. Полная distribution сохраняется и при
+mismatch, который отражается в diagnostics. Buyer photos берутся из отдельного
+`View all (N)`, а не по числу rendered thumbnails. `reviewTopics` optional и
+fail-closed при неподтверждённой locale/section semantics. Bought продолжает
+использовать existing product-header DOM source; подтверждённого structured
+bought source нет.
+
+Live smoke 2026-08-13 на реально активном Ali Helper v0.1.8:
+
+- Relay `1005008195850531`: rating 5; reviews 5; content feedbacks 2; bought 13;
+  stars `5/0/0/0/0`; star total 5; matches reviews yes; buyer photos null;
+  topics null.
+- Dress `1005009452926938`: rating 4.6; reviews 36; content feedbacks 30;
+  bought 414; stars `29/3/2/2/0`; star total 36; matches reviews yes; buyer
+  photos 31; topics 7. Summary показывал 31 при 30 rendered thumbnails.
+- Needles `1005005933779962`: rating 4.8; reviews 66; content feedbacks 12;
+  bought 338; stars `60/2/1/1/2`; star total 66; matches reviews yes; buyer
+  photos 8; topics 6.
+
+`Copy product` и `Copy for ChatGPT` сохраняли Review Summary вместе со Store,
+Gallery, Characteristics, Description, selected SKU и price. Delivery на
+последнем Dress reload естественно отсутствовала; preservation при существующем
+capture покрыт regression test. Live counts — dated observations, а не вечные
+expectations.
+
+Individual reviews и pagination в этот scope не входят; дополнительных
+review/API requests реализация не делает.
 
 Acceptance: значения summary не смешиваются между product, seller и content
-feedback; известная star distribution суммируется в 610.
+feedback; полная star distribution сохраняется и честно диагностируется.
 
 ### First-page SSR reviews
 

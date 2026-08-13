@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ali Helper
 // @namespace    https://github.com/local/ali-helper
-// @version      0.1.8
+// @version      0.1.9
 // @description  Read-only AliExpress URL cleaner and product/variant exporter
 // @match        https://aliexpress.ru/item/*
 // @match        https://www.aliexpress.com/item/*
@@ -18,7 +18,7 @@
 (function factory(root) {
   'use strict';
 
-  const VERSION = '0.1.8';
+  const VERSION = '0.1.9';
   const SETTINGS_KEY = 'ali-helper:settings:v1';
   const CHARACTERISTICS_BOUNDARY_SELECTOR = '[class*="HazeProductCharacteristics__groupsContainerForSku"]';
   const CHARACTERISTICS_ITEM_SELECTOR = '[class*="HazeProductCharacteristics__itemForSku"]';
@@ -29,6 +29,19 @@
   const PRODUCT_RATING_SELECTOR = '[class*="HazeProductDescription__ratingWrap"]';
   const PRODUCT_REVIEW_COUNT_SELECTOR = 'a[href="#reviews_anchor"]';
   const PRODUCT_BOUGHT_COUNT_SELECTOR = '[class*="HazeProductDescription__buyCounter"]';
+  const REVIEW_ANCHOR_SELECTOR = '#reviews_anchor';
+  const REVIEW_TABS_SELECTOR = '[class*="RedReviewsTabs__desktop__"]';
+  const REVIEW_RATING_ROOT_SELECTOR = '[class*="GlowReviewsProductRating_MainSection__mainSection__"]';
+  const REVIEW_GRADE_GROUP_SELECTOR = '[class*="GlowReviewsProductRating_AdditionalSection__grade__"]';
+  const REVIEW_COUNT_GROUP_SELECTOR = '[class*="GlowReviewsProductRating_AdditionalSection__gradeCount__"]';
+  const REVIEW_GRADE_ROW_SELECTOR = '[class*="GlowReviewsProductRating_Grades__gradeWrapper__"]';
+  const REVIEW_STAR_SELECTOR = '[class*="GlowReviewsProductRating_StarGroup__star__"]';
+  const REVIEW_ACTIVE_STAR_SELECTOR = '[class*="GlowReviewsProductRating_StarGroup__starActive__"]';
+  const REVIEW_PHOTOS_SELECTOR = '[class*="RedReviewsGallery__defaultWrapper__"]';
+  const REVIEW_TOPICS_SELECTOR = '[class*="RedReviewsTags__tagsWrapper__"]';
+  const REVIEW_TOPIC_SELECTOR = '[class*="RedReviewsTags_Tag__tag__"]';
+  const REVIEW_TOPIC_TEXT_SELECTOR = '[class*="RedReviewsTags_Tag__tagText__"]';
+  const REVIEW_TOPIC_COUNT_SELECTOR = '[class*="RedReviewsTags_Tag__counter__"]';
   const STORE_BOUNDARY_SELECTOR = '#storeInfo';
   const STORE_HEADER_SELECTOR = '[data-testid="store_header"]';
   const STORE_TITLE_SELECTOR = '[class*="RedStoreInfo_Header__title__"]';
@@ -890,9 +903,116 @@
     return {
       rating: null,
       reviewCount: null,
+      contentFeedbackCount: null,
       boughtCount: null,
-      display: { rating: null, reviewCount: null, boughtCount: null },
+      starDistribution: null,
+      buyerPhotosCount: null,
+      reviewTopics: null,
+      diagnostics: {
+        starDistributionTotal: null,
+        starDistributionMatchesReviewCount: null,
+      },
+      display: { rating: null, reviewCount: null, boughtCount: null, buyerPhotosCount: null },
     };
+  }
+
+  function widgetFamily(value, prefix) {
+    return typeof value?.widgetId === 'string' && value.widgetId.startsWith(prefix);
+  }
+
+  function collectObjectDescendants(rootValue, predicate, limits = {}) {
+    const maxDepth = limits.maxDepth || 50;
+    const maxVisited = limits.maxVisited || 30000;
+    const seen = new WeakSet();
+    const stack = [{ value: rootValue, depth: 0 }];
+    const results = [];
+    let visited = 0;
+    while (stack.length && visited < maxVisited) {
+      const current = stack.pop();
+      const value = current.value;
+      if (!value || typeof value !== 'object' || seen.has(value) || current.depth > maxDepth) continue;
+      seen.add(value);
+      visited += 1;
+      if (!Array.isArray(value) && predicate(value)) results.push(value);
+      for (const child of Object.values(value)) {
+        if (child && typeof child === 'object') stack.push({ value: child, depth: current.depth + 1 });
+      }
+    }
+    return results;
+  }
+
+  function boundReviewTabsCandidate(widget, expectedItemId) {
+    if (!widgetFamily(widget, 'bx/RedReviewsTabs/')) return null;
+    const expected = asString(expectedItemId);
+    if (!expected) return null;
+    const events = widget.props?.analyticEvents;
+    const trackingSignals = [
+      events?.clickAllReviews?.trackingInfo,
+      events?.viewWidgetReview?.trackingInfo,
+    ].filter((signal) => signal && typeof signal === 'object');
+    const itemIds = trackingSignals.map((signal) => asString(signal.itemId)).filter(Boolean);
+    if (!itemIds.length || !itemIds.includes(expected) || itemIds.some((itemId) => itemId !== expected)) return null;
+
+    const ratingInputs = trackingSignals
+      .map((signal) => signal.overallRating)
+      .filter((value) => value !== null && value !== undefined && value !== '');
+    const ratings = ratingInputs.map(parseLocalizedRating);
+    const uniqueRatings = [...new Set(ratings.filter((value) => value !== null))];
+    if (ratings.some((value) => value === null) || uniqueRatings.length > 1) return null;
+    return { rating: uniqueRatings[0] ?? null };
+  }
+
+  function resolveConsistentField(candidates, field) {
+    const values = [...new Set(candidates.map((candidate) => candidate[field]).filter((value) => value !== null))];
+    return values.length === 1 ? values[0] : null;
+  }
+
+  function extractReviewSummaryFromSsrData(rootValue, expectedItemId, limits = {}) {
+    const contexts = collectObjectDescendants(
+      rootValue,
+      (value) => widgetFamily(value, 'bx/RedReviewsContextWidget/'),
+      limits,
+    );
+    const candidates = [];
+    for (const context of contexts) {
+      const tabsWidgets = collectObjectDescendants(
+        context,
+        (value) => widgetFamily(value, 'bx/RedReviewsTabs/'),
+        limits,
+      );
+      for (const tabs of tabsWidgets) {
+        const binding = boundReviewTabsCandidate(tabs, expectedItemId);
+        if (!binding) continue;
+        const feedbackWidgets = collectObjectDescendants(
+          tabs,
+          (value) => widgetFamily(value, 'bx/RedReviewsProductFeedbackList/')
+            && value.props?.placement === 'PDP',
+          limits,
+        );
+        const totals = feedbackWidgets.map((widget) => {
+          const params = widget.props?.resolveParams;
+          const hasReviews = params && Object.prototype.hasOwnProperty.call(params, 'review.productReviewsCount');
+          const hasFeedbacks = params && Object.prototype.hasOwnProperty.call(params, 'review.productFeedbacksCount');
+          return {
+            reviewCount: hasReviews ? parseLocalizedCount(params['review.productReviewsCount']) : null,
+            contentFeedbackCount: hasFeedbacks ? parseLocalizedCount(params['review.productFeedbacksCount']) : null,
+          };
+        });
+        candidates.push({
+          rating: binding.rating,
+          reviewCount: resolveConsistentField(totals, 'reviewCount'),
+          contentFeedbackCount: resolveConsistentField(totals, 'contentFeedbackCount'),
+        });
+      }
+    }
+    if (!candidates.length) return null;
+    const result = emptyRatingSummary();
+    result.rating = resolveConsistentField(candidates, 'rating');
+    result.reviewCount = resolveConsistentField(candidates, 'reviewCount');
+    result.contentFeedbackCount = resolveConsistentField(candidates, 'contentFeedbackCount');
+    return result.rating === null && result.reviewCount === null && result.contentFeedbackCount === null
+      ? null
+      : withRatingDiagnostics(result);
   }
 
   function primitiveRatingCandidate(props, expectedItemId) {
@@ -978,35 +1098,173 @@
     return result.rating === null && result.reviewCount === null && result.boughtCount === null ? null : result;
   }
 
-  function mergeRatingSummary(structured, dom) {
-    if (!structured && !dom) return null;
+  function findReviewSummaryBoundary(rootNode) {
+    if (!rootNode || typeof rootNode.querySelector !== 'function') return null;
+    const anchor = rootNode.matches?.(REVIEW_ANCHOR_SELECTOR)
+      ? rootNode
+      : rootNode.querySelector(REVIEW_ANCHOR_SELECTOR);
+    const candidate = anchor?.parentElement;
+    if (!candidate || typeof candidate.querySelector !== 'function') return null;
+    if (!candidate.querySelector(REVIEW_TABS_SELECTOR)) return null;
+    if (!candidate.querySelector(REVIEW_RATING_ROOT_SELECTOR)) return null;
+    return candidate;
+  }
+
+  function elementText(element) {
+    return normalizeHumanText(element?.innerText ?? element?.textContent) || null;
+  }
+
+  function parseStarDistribution(boundary) {
+    const ratingRoot = boundary?.querySelector?.(REVIEW_RATING_ROOT_SELECTOR);
+    const gradeGroup = ratingRoot?.querySelector?.(REVIEW_GRADE_GROUP_SELECTOR);
+    const countGroup = ratingRoot?.querySelector?.(REVIEW_COUNT_GROUP_SELECTOR);
+    const gradeRows = gradeGroup?.querySelectorAll?.(REVIEW_GRADE_ROW_SELECTOR) || [];
+    const countRows = countGroup?.children || [];
+    if (gradeRows.length !== 5 || countRows.length !== 5) return null;
+    const distribution = {};
+    for (let index = 0; index < 5; index += 1) {
+      const row = gradeRows[index];
+      const totalStars = row.querySelectorAll?.(REVIEW_STAR_SELECTOR)?.length;
+      const grade = row.querySelectorAll?.(REVIEW_ACTIVE_STAR_SELECTOR)?.length;
+      const count = parseLocalizedCount(elementText(countRows[index]));
+      if (totalStars !== 5 || !Number.isInteger(grade) || grade < 1 || grade > 5 || count === null) return null;
+      if (Object.prototype.hasOwnProperty.call(distribution, grade)) return null;
+      distribution[grade] = count;
+    }
+    return [1, 2, 3, 4, 5].every((grade) => Object.prototype.hasOwnProperty.call(distribution, grade))
+      ? distribution
+      : null;
+  }
+
+  function findExactDescendantText(rootNode, pattern) {
+    if (!rootNode?.querySelectorAll) return null;
+    return [...rootNode.querySelectorAll('*')].find((element) => {
+      const text = elementText(element);
+      if (!text || !pattern.test(text)) return false;
+      return ![...(element.children || [])].some((child) => pattern.test(elementText(child) || ''));
+    }) || null;
+  }
+
+  function extractBuyerPhotos(boundary) {
+    const wrapper = boundary?.querySelector?.(REVIEW_PHOTOS_SELECTOR);
+    if (!wrapper) return { value: null, display: null };
+    if (!findExactDescendantText(wrapper, /^All photos from buyers$/i)) return { value: null, display: null };
+    const displayElement = findExactDescendantText(wrapper, /^View all \([\d\s,]+\)$/i);
+    const display = elementText(displayElement);
+    const countMatch = display?.match(/^View all \(([\d\s,]+)\)$/i);
+    return { value: parseLocalizedCount(countMatch?.[1]), display: countMatch ? display : null };
+  }
+
+  function extractReviewTopics(boundary) {
+    const wrappers = boundary?.querySelectorAll?.(REVIEW_TOPICS_SELECTOR) || [];
+    const wrapper = [...wrappers].find((candidate) => findExactDescendantText(
+      candidate,
+      /^Most mentioned in reviews$/i,
+    ));
+    if (!wrapper) return null;
+    const topics = [];
+    for (const topicNode of wrapper.querySelectorAll?.(REVIEW_TOPIC_SELECTOR) || []) {
+      const text = elementText(topicNode.querySelector?.(REVIEW_TOPIC_TEXT_SELECTOR));
+      const count = parseLocalizedCount(elementText(topicNode.querySelector?.(REVIEW_TOPIC_COUNT_SELECTOR)));
+      if (!text || count === null) continue;
+      const className = typeof topicNode.className === 'string' ? topicNode.className : '';
+      const positive = className.includes('positiveTagMood__');
+      const negative = className.includes('negativeTagMood__');
+      topics.push({ text, count, mood: positive === negative ? null : (positive ? 'positive' : 'negative') });
+    }
+    return topics.length ? topics : null;
+  }
+
+  function extractReviewSummaryFromDom(rootNode) {
+    const boundary = findReviewSummaryBoundary(rootNode);
+    if (!boundary) return null;
+    const result = emptyRatingSummary();
+    result.starDistribution = parseStarDistribution(boundary);
+    const photos = extractBuyerPhotos(boundary);
+    result.buyerPhotosCount = photos.value;
+    result.display.buyerPhotosCount = photos.display;
+    result.reviewTopics = extractReviewTopics(boundary);
+    return result.starDistribution || result.buyerPhotosCount !== null || result.reviewTopics
+      ? withRatingDiagnostics(result)
+      : null;
+  }
+
+  function withRatingDiagnostics(summary) {
+    if (!summary) return summary;
+    const next = { ...summary, diagnostics: {
+      starDistributionTotal: null,
+      starDistributionMatchesReviewCount: null,
+    } };
+    if (summary.starDistribution) {
+      next.diagnostics.starDistributionTotal = [5, 4, 3, 2, 1]
+        .reduce((total, grade) => total + summary.starDistribution[grade], 0);
+      next.diagnostics.starDistributionMatchesReviewCount = summary.reviewCount === null
+        || summary.reviewCount === undefined
+        ? null
+        : next.diagnostics.starDistributionTotal === summary.reviewCount;
+    }
+    return next;
+  }
+
+  function mergeRatingSummary(structured, dom, reviewDom) {
+    if (!structured && !dom && !reviewDom) return null;
     const result = emptyRatingSummary();
     result.rating = structured?.rating ?? dom?.rating ?? null;
     result.reviewCount = structured?.reviewCount ?? dom?.reviewCount ?? null;
+    result.contentFeedbackCount = structured?.contentFeedbackCount ?? null;
     result.boughtCount = dom?.boughtCount ?? structured?.boughtCount ?? null;
+    result.starDistribution = reviewDom?.starDistribution ?? null;
+    result.buyerPhotosCount = reviewDom?.buyerPhotosCount ?? null;
+    result.reviewTopics = reviewDom?.reviewTopics ?? null;
     for (const field of ['rating', 'reviewCount', 'boughtCount']) {
       result.display[field] = dom?.display?.[field] ?? structured?.display?.[field] ?? null;
     }
-    return result;
+    result.display.buyerPhotosCount = reviewDom?.display?.buyerPhotosCount ?? null;
+    return withRatingDiagnostics(result);
+  }
+
+  function starDistributionsEqual(left, right) {
+    if (left === right) return true;
+    if (!left || !right) return false;
+    return [5, 4, 3, 2, 1].every((grade) => left[grade] === right[grade]);
+  }
+
+  function reviewTopicsEqual(left, right) {
+    if (left === right) return true;
+    if (!left || !right || left.length !== right.length) return false;
+    return left.every((topic, index) => topic.text === right[index].text
+      && topic.count === right[index].count
+      && topic.mood === right[index].mood);
   }
 
   function ratingSummariesEqual(left, right) {
     if (left === right) return true;
     if (!left || !right) return false;
-    return ['rating', 'reviewCount', 'boughtCount'].every((field) => left[field] === right[field]
-      && left.display?.[field] === right.display?.[field]);
+    return ['rating', 'reviewCount', 'contentFeedbackCount', 'boughtCount', 'buyerPhotosCount']
+      .every((field) => left[field] === right[field])
+      && ['rating', 'reviewCount', 'boughtCount', 'buyerPhotosCount']
+        .every((field) => left.display?.[field] === right.display?.[field])
+      && starDistributionsEqual(left.starDistribution, right.starDistribution)
+      && reviewTopicsEqual(left.reviewTopics, right.reviewTopics)
+      && left.diagnostics?.starDistributionTotal === right.diagnostics?.starDistributionTotal
+      && left.diagnostics?.starDistributionMatchesReviewCount === right.diagnostics?.starDistributionMatchesReviewCount;
   }
 
   function updateRatingSummary(product, patch) {
     if (!product || !patch) return product;
     const previous = product.ratingSummary;
     const next = emptyRatingSummary();
-    for (const field of ['rating', 'reviewCount', 'boughtCount']) {
+    for (const field of ['rating', 'reviewCount', 'contentFeedbackCount', 'boughtCount', 'buyerPhotosCount']) {
       next[field] = patch[field] ?? previous?.[field] ?? null;
+    }
+    for (const field of ['rating', 'reviewCount', 'boughtCount', 'buyerPhotosCount']) {
       next.display[field] = patch.display?.[field] ?? previous?.display?.[field] ?? null;
     }
-    if (ratingSummariesEqual(previous, next)) return product;
-    return { ...product, ratingSummary: next };
+    next.starDistribution = patch.starDistribution ?? previous?.starDistribution ?? null;
+    next.reviewTopics = patch.reviewTopics ?? previous?.reviewTopics ?? null;
+    const diagnosed = withRatingDiagnostics(next);
+    if (ratingSummariesEqual(previous, diagnosed)) return product;
+    return { ...product, ratingSummary: diagnosed };
   }
 
   function isStaleRatingSummary(boundary, summary, staleBoundary, staleSummary) {
@@ -1018,7 +1276,7 @@
     updatedProduct = updateGallery(updatedProduct, sources.structuredGallery);
     updatedProduct = updateRatingSummary(
       updatedProduct,
-      mergeRatingSummary(sources.structuredRating, sources.domRating),
+      mergeRatingSummary(sources.structuredRating, sources.domRating, sources.reviewDomSummary),
     );
     updatedProduct = updateStore(updatedProduct, mergeStore(sources.structuredStore, sources.domStore));
     updatedProduct = updateCharacteristics(updatedProduct, sources.characteristics);
@@ -1335,10 +1593,22 @@
 
   function formatRatingSummary(summary) {
     const display = (field) => summary?.display?.[field] ?? summary?.[field] ?? '—';
+    const distribution = summary?.starDistribution;
+    const topics = summary?.reviewTopics;
+    const matches = summary?.diagnostics?.starDistributionMatchesReviewCount;
     return [
       `Rating: ${display('rating')}`,
       `Reviews: ${display('reviewCount')}`,
+      `Content feedbacks: ${summary?.contentFeedbackCount ?? '—'}`,
       `Bought: ${display('boughtCount')}`,
+      `Stars: ${distribution ? [5, 4, 3, 2, 1].map((grade) => `${grade}★ ${distribution[grade]}`).join(' | ') : '—'}`,
+      `Star total: ${summary?.diagnostics?.starDistributionTotal ?? '—'}`,
+      `Star total matches reviews: ${matches === null || matches === undefined ? '—' : (matches ? 'yes' : 'no')}`,
+      `Buyer photos: ${summary?.buyerPhotosCount ?? '—'}`,
+      'Review topics:',
+      topics?.length
+        ? topics.map((topic) => `- ${topic.text} — ${topic.count} — ${topic.mood || '—'}`).join('\n')
+        : '—',
     ].join('\n');
   }
 
@@ -1474,9 +1744,16 @@
     storesEqual,
     updateStore,
     isStaleStore,
+    extractReviewSummaryFromSsrData,
     extractBasicRatingFromSsrData,
     findProductHeaderBoundary,
     extractBasicRatingFromDom,
+    findReviewSummaryBoundary,
+    parseStarDistribution,
+    extractBuyerPhotos,
+    extractReviewTopics,
+    extractReviewSummaryFromDom,
+    withRatingDiagnostics,
     mergeRatingSummary,
     ratingSummariesEqual,
     updateRatingSummary,
@@ -1656,10 +1933,10 @@
     return null;
   }
 
-  function findBasicRatingInSsr(expectedItemId, script = document.querySelector('#__AER_DATA__')) {
+  function findReviewSummaryInSsr(expectedItemId, script = document.querySelector('#__AER_DATA__')) {
     if (!script) return null;
     try {
-      return extractBasicRatingFromSsrData(JSON.parse(script.textContent || ''), expectedItemId);
+      return extractReviewSummaryFromSsrData(JSON.parse(script.textContent || ''), expectedItemId);
     } catch (_) {
       return null;
     }
@@ -1833,6 +2110,10 @@
       ratingDomSummary: null,
       staleRatingBoundary: null,
       staleRatingDomSummary: null,
+      reviewSummaryBoundary: null,
+      reviewDomSummary: null,
+      staleReviewSummaryBoundary: null,
+      staleReviewDomSummary: null,
       storeSsrScript: null,
       storeSsrItemId: null,
       storeSsr: null,
@@ -1895,7 +2176,7 @@
         && (runtime.ratingSsrItemId !== runtime.itemId || runtime.ratingSsrScript !== ssrScript)) {
         runtime.ratingSsrScript = ssrScript;
         runtime.ratingSsrItemId = runtime.itemId;
-        runtime.ratingSsrSummary = findBasicRatingInSsr(runtime.itemId, ssrScript);
+        runtime.ratingSsrSummary = findReviewSummaryInSsr(runtime.itemId, ssrScript);
       }
       if (runtime.itemId === runtime.initialItemId
         && (runtime.gallerySsrItemId !== runtime.itemId || runtime.gallerySsrScript !== ssrScript)) {
@@ -1924,6 +2205,22 @@
         runtime.ratingDomSummary = currentDomRating;
         runtime.staleRatingBoundary = null;
         runtime.staleRatingDomSummary = null;
+      }
+
+      const reviewSummaryBoundary = findReviewSummaryBoundary(document);
+      const reviewDomSummary = extractReviewSummaryFromDom(document);
+      const staleReviewSummary = isStaleRatingSummary(
+        reviewSummaryBoundary,
+        reviewDomSummary,
+        runtime.staleReviewSummaryBoundary,
+        runtime.staleReviewDomSummary,
+      );
+      const currentReviewDomSummary = staleReviewSummary ? null : reviewDomSummary;
+      if (currentReviewDomSummary) {
+        runtime.reviewSummaryBoundary = reviewSummaryBoundary;
+        runtime.reviewDomSummary = currentReviewDomSummary;
+        runtime.staleReviewSummaryBoundary = null;
+        runtime.staleReviewDomSummary = null;
       }
 
       const storeBoundary = findStoreBoundary(document);
@@ -1973,6 +2270,7 @@
         structuredGallery: runtime.gallerySsr,
         structuredRating: runtime.ratingSsrSummary,
         domRating: currentDomRating,
+        reviewDomSummary: currentReviewDomSummary,
         structuredStore: runtime.storeSsr,
         domStore: currentDomStore,
         characteristics: currentCharacteristics,
@@ -2007,6 +2305,10 @@
           runtime.ratingSsrScript = null;
           runtime.ratingSsrItemId = null;
           runtime.ratingSsrSummary = null;
+          runtime.staleReviewSummaryBoundary = runtime.reviewSummaryBoundary;
+          runtime.staleReviewDomSummary = runtime.reviewDomSummary;
+          runtime.reviewSummaryBoundary = null;
+          runtime.reviewDomSummary = null;
           runtime.storeSsrScript = null;
           runtime.storeSsrItemId = null;
           runtime.storeSsr = null;

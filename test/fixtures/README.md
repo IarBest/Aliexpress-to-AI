@@ -94,3 +94,22 @@ scoped `#storeInfo` boundary from the same date. It records the exact stable
 class fragments, element roles, texts, hrefs, and stat child-tag structure
 used by the DOM regression without adding a DOM library. Full CSS-module
 hashes are evidence only and are not used by production selectors.
+
+The `review-summary-*.json` files are minimized live captures made on
+2026-08-13. Each keeps the real `#__AER_DATA__` hierarchy from
+`RedReviewsContextWidget` through the exact-current-item `RedReviewsTabs` to
+its descendant PDP `RedReviewsProductFeedbackList`; unrelated tracking fields
+and all individual review records were removed. The Relay capture records
+rating 5.0, 5 reviews, 2 content feedbacks, and a 5/0/0/0/0 DOM distribution.
+The Dress capture records rating 4.6, 36 reviews, 30 content feedbacks, a
+29/3/2/2/0 distribution, `View all (31)` buyer photos, and seven optional DOM
+topics. Dress rendered 30 photo-carousel items at capture time, which is why
+the parser and tests deliberately use the separate summary value 31 rather
+than counting thumbnails. Review totals, bought counts, photos, topics, and
+other live values can drift independently after capture.
+
+The historical roadmap reference 4.8 / 610 / 283 / 2001 /
+562-27-6-5-10 has no proven item ID or captured source and was therefore not
+reconstructed as a fixture. Review topics remain optional, locale-guarded DOM
+data; their absence is represented as unknown rather than as an empty topic
+list.

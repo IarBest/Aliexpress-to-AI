@@ -1,0 +1,93 @@
+{
+  "capturedAt": "2026-08-13",
+  "sourceKind": "minimized live #__AER_DATA__ and scoped DOM observation",
+  "itemId": "1005009452926938",
+  "sourceUrl": "https://aliexpress.ru/item/1005009452926938.html?sku_id=12000049151727538",
+  "ssr": {
+    "widgetId": "bx/RedReviewsContextWidget/0.15.0",
+    "props": {
+      "callMltags": true,
+      "resolveParams": { "platform": "pc" }
+    },
+    "children": [
+      {
+        "widgetId": "bx/RedReviewsTabs/0.28.0",
+        "props": {
+          "placement": "PDP",
+          "analyticEvents": {
+            "clickAllReviews": {
+              "trackingInfo": { "itemId": 1005009452926938, "overallRating": "4,6" }
+            },
+            "viewWidgetReview": {
+              "trackingInfo": { "itemId": 1005009452926938, "overallRating": "4,6" }
+            }
+          }
+        },
+        "children": [
+          {
+            "widgetId": "bx/RedReviewsProductFeedbackList/0.35.0",
+            "props": {
+              "placement": "PDP",
+              "resolveParams": {
+                "abtest:PDPSplitReviewsPC": "",
+                "review.productFeedbacksCount": 30,
+                "review.productReviewsCount": 36
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "dom": {
+    "anchorId": "reviews_anchor",
+    "boundaryClassName": "HazeRoundedBox_HazeRoundedBox__box__vi2nz HazeRoundedBox_HazeRoundedBox__hideEmpty__vi2nz",
+    "requiredClassFragments": [
+      "RedReviewsTabs__desktop__",
+      "GlowReviewsProductRating_MainSection__mainSection__"
+    ],
+    "rating": "4,6",
+    "reviewDisplay": "All 36 reviews",
+    "boughtDisplay": "414 purchased",
+    "gradeRows": [
+      { "className": "GlowReviewsProductRating_Grades__gradeWrapper__a6bvu", "totalStars": 5, "activeStars": 5 },
+      { "className": "GlowReviewsProductRating_Grades__gradeWrapper__a6bvu", "totalStars": 5, "activeStars": 4 },
+      { "className": "GlowReviewsProductRating_Grades__gradeWrapper__a6bvu", "totalStars": 5, "activeStars": 3 },
+      { "className": "GlowReviewsProductRating_Grades__gradeWrapper__a6bvu", "totalStars": 5, "activeStars": 2 },
+      { "className": "GlowReviewsProductRating_Grades__gradeWrapper__a6bvu", "totalStars": 5, "activeStars": 1 }
+    ],
+    "countRows": [
+      { "text": "29" },
+      { "text": "3" },
+      { "text": "2" },
+      { "text": "2" },
+      { "text": "0" }
+    ],
+    "buyerPhotos": {
+      "wrapperClassName": "RedReviewsGallery_RedReviewsGallery__defaultWrapper__ltym4",
+      "heading": "All photos from buyers",
+      "display": "View all (31)",
+      "renderedThumbnailCount": 30
+    },
+    "topics": {
+      "wrapperClassName": "RedReviewsTags_RedReviewsTags__tagsWrapper__19yq9 RedReviewsTags_RedReviewsTags__placedInPage__19yq9 RedReviewsTags_RedReviewsTags__miniPaddings__19yq9",
+      "heading": "Most mentioned in reviews",
+      "topics": [
+        { "className": "RedReviewsTags_Tag__tag__ezr6t RedReviewsTags_Tag__positiveTagMood__ezr6t", "text": "Идеальный размер", "count": "3" },
+        { "className": "RedReviewsTags_Tag__tag__ezr6t RedReviewsTags_Tag__positiveTagMood__ezr6t", "text": "Хорошо сшит", "count": "2" },
+        { "className": "RedReviewsTags_Tag__tag__ezr6t RedReviewsTags_Tag__positiveTagMood__ezr6t", "text": "Хорошо сидит", "count": "2" },
+        { "className": "RedReviewsTags_Tag__tag__ezr6t RedReviewsTags_Tag__positiveTagMood__ezr6t", "text": "Ткань не просвечивает", "count": "1" },
+        { "className": "RedReviewsTags_Tag__tag__ezr6t RedReviewsTags_Tag__positiveTagMood__ezr6t", "text": "Прекрасная посадка", "count": "1" },
+        { "className": "RedReviewsTags_Tag__tag__ezr6t RedReviewsTags_Tag__negativeTagMood__ezr6t", "text": "Неправильный цвет", "count": "2" },
+        { "className": "RedReviewsTags_Tag__tag__ezr6t RedReviewsTags_Tag__negativeTagMood__ezr6t", "text": "Не подходит для больших размеров груди", "count": "2" }
+      ]
+    },
+    "outsideSentinels": {
+      "storeInfo": "#storeInfo",
+      "recommendation": "UniversalFeed",
+      "megabonus": "Megabonus",
+      "aliHelper": "#ali-helper-host",
+      "sellerRating": "85% seller's rating"
+    }
+  }
+}
