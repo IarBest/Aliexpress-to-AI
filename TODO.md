@@ -670,6 +670,11 @@ texts или images.
 - [x] Расширять `Copy for ChatGPT` только из normalized model, не из DOM.
 - [x] Добавить sections Title/Clean URL/Item ID и selected SKU/variants.
 - [x] Добавить selected price, regular price и stock.
+      P5C: resolved selected SKU продолжает показывать selected normalized current
+      price; unresolved selection теперь обозначается явно. Доступные current SKU
+      prices форматируются через `formatMoney()`, дедуплицируются по отображаемой
+      строке и сохраняют first-seen order; выводятся первые 5 через `|`, затем точное
+      `(+N more)`. Пустые price data сообщаются явно; min/max range не подразумевается.
 - [x] Добавить SELLER, RATING и STAR DISTRIBUTION после появления данных.
 - [x] Добавить VARIANTS summary и отдельный full combinations export.
 - [x] Добавить SIZE GUIDE, CHARACTERISTICS, DELIVERY и ordered DESCRIPTION.

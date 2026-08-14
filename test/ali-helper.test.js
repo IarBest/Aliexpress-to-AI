@@ -2105,6 +2105,91 @@ test('main product export bounds only Description and leaves Gallery and section
   assert.ok(output.indexOf('GALLERY:') < output.indexOf('DESCRIPTION:'));
 });
 
+test('ChatGPT export keeps the resolved dress SKU current price unchanged', () => {
+  const fixture = loadFixture('product-1005009452926938.json');
+  const product = core.normalizeProduct(
+    fixture.data,
+    'https://aliexpress.ru/item/1005009452926938.html?sku_id=12000049151727540',
+  );
+  const output = core.exportForChatGPT(product);
+
+  assert.match(output, /Selected SKU: 12000049151727540\n/);
+  assert.match(output, /Price: \$\u00a026\.08\n/);
+  assert.doesNotMatch(output, /Selected SKU unresolved/);
+});
+
+test('unresolved ChatGPT price summary deduplicates formatted prices, ignores missing prices, and does not mutate the product', () => {
+  const fixture = loadFixture('product-1005008195850531.json');
+  const product = core.normalizeProduct(fixture.data, 'https://aliexpress.ru/item/1005008195850531.html');
+  product.selectedSku = null;
+  product.selectedSkuId = 'unresolved-sku';
+  product.skus = [
+    { price: { current: { value: '10', currency: 'USD', formatted: '$10.00' } } },
+    { price: { current: null } },
+    { price: { current: { value: '10.0', currency: 'USD', formatted: '$10.00' } } },
+    { price: { current: { value: '12', currency: 'USD', formatted: '$12.00' } } },
+    { price: { current: { value: '13', currency: 'USD', formatted: '$13.00' } } },
+    { price: {} },
+  ];
+  const before = clone({ skus: product.skus, selectedSku: product.selectedSku, selectedSkuId: product.selectedSkuId });
+
+  const output = core.exportForChatGPT(product);
+
+  assert.match(output, /Selected SKU: unresolved-sku \(not resolved\)/);
+  assert.match(output, /Price: Selected SKU unresolved; 3 unique SKU prices: \$10\.00 \| \$12\.00 \| \$13\.00/);
+  assert.doesNotMatch(output, /Price:.*–/);
+  assert.doesNotMatch(output, /Price:.*—.*\|/);
+  assert.deepEqual(
+    { skus: product.skus, selectedSku: product.selectedSku, selectedSkuId: product.selectedSkuId },
+    before,
+  );
+  assert.ok(output.indexOf('CHARACTERISTICS:') < output.indexOf('GALLERY:'));
+  assert.ok(output.indexOf('GALLERY:') < output.indexOf('DESCRIPTION:'));
+  assert.match(output, /DESCRIPTION:\n/);
+});
+
+test('unresolved ChatGPT price summary describes one unique price without claiming it is selected', () => {
+  const fixture = loadFixture('product-1005008195850531.json');
+  const product = core.normalizeProduct(fixture.data, 'https://aliexpress.ru/item/1005008195850531.html');
+  product.selectedSku = null;
+  product.skus = [
+    { price: { current: { formatted: '$10' } } },
+    { price: { current: { formatted: '$10' } } },
+  ];
+
+  assert.match(
+    core.exportForChatGPT(product),
+    /Price: Selected SKU unresolved; 1 unique SKU price: \$10\n/,
+  );
+});
+
+test('unresolved ChatGPT price summary reports when no current SKU prices are available', () => {
+  const fixture = loadFixture('product-1005008195850531.json');
+  const product = core.normalizeProduct(fixture.data, 'https://aliexpress.ru/item/1005008195850531.html');
+  product.selectedSku = null;
+  product.selectedSkuId = null;
+  product.skus = [{ price: {} }, { price: { current: null } }, { price: { current: {} } }];
+
+  const output = core.exportForChatGPT(product);
+  assert.match(output, /Selected SKU: — \(not resolved\)/);
+  assert.match(output, /Price: Selected SKU unresolved; no current SKU prices available\n/);
+});
+
+test('unresolved ChatGPT price summary shows the first five unique prices and exact omitted count', () => {
+  const fixture = loadFixture('product-1005008195850531.json');
+  const product = core.normalizeProduct(fixture.data, 'https://aliexpress.ru/item/1005008195850531.html');
+  product.selectedSku = null;
+  product.skus = ['$12.34', '$13.20', '$15.00', '$16.10', '$17.50', '$18.25', '$19.75', '$12.34']
+    .map((formatted) => ({ price: { current: { formatted } } }));
+
+  const output = core.exportForChatGPT(product);
+  assert.match(
+    output,
+    /Price: Selected SKU unresolved; 7 unique SKU prices: \$12\.34 \| \$13\.20 \| \$15\.00 \| \$16\.10 \| \$17\.50 \(\+2 more\)\n/,
+  );
+  assert.doesNotMatch(output, /\$18\.25|\$19\.75/);
+});
+
 test('full Description export is isolated from raw HTML and unrelated product data', () => {
   const product = {
     title: 'Test item',

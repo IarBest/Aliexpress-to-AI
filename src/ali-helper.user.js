@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ali Helper
 // @namespace    https://github.com/local/ali-helper
-// @version      0.1.13
+// @version      0.1.14
 // @description  Read-only AliExpress URL cleaner and product/variant exporter
 // @match        https://aliexpress.ru/item/*
 // @match        https://www.aliexpress.com/item/*
@@ -18,7 +18,7 @@
 (function factory(root) {
   'use strict';
 
-  const VERSION = '0.1.13';
+  const VERSION = '0.1.14';
   const SETTINGS_KEY = 'ali-helper:settings:v1';
   const NATIVE_REVIEW_PATHNAME = '/aer-jsonapi/review/v5/desktop/product-reviews';
   const REVIEW_CAPTURE_CAP = 30;
@@ -2042,6 +2042,24 @@
     return money.formatted || [money.value, money.currency].filter(Boolean).join(' ') || '—';
   }
 
+  function formatUnresolvedSkuPriceSummary(skus, options = {}) {
+    const sampleLimit = Number.isInteger(options.sampleLimit) && options.sampleLimit > 0 ? options.sampleLimit : 5;
+    const uniquePrices = [];
+    const seen = new Set();
+    for (const sku of skus || []) {
+      const price = formatMoney(sku?.price?.current);
+      if (price === '—' || seen.has(price)) continue;
+      seen.add(price);
+      uniquePrices.push(price);
+    }
+    if (!uniquePrices.length) return 'Selected SKU unresolved; no current SKU prices available';
+
+    const count = uniquePrices.length;
+    const shown = uniquePrices.slice(0, sampleLimit).join(' | ');
+    const omitted = count - Math.min(count, sampleLimit);
+    return `Selected SKU unresolved; ${count} unique SKU price${count === 1 ? '' : 's'}: ${shown}${omitted ? ` (+${omitted} more)` : ''}`;
+  }
+
   function formatSelections(sku) {
     return sku?.selections?.map((selection) => `${selection.groupName}: ${selection.name}`).join('; ') || '—';
   }
@@ -2273,8 +2291,7 @@
 
   function exportForChatGPT(product) {
     const selected = product.selectedSku;
-    const prices = product.skus.map((sku) => sku.price.current?.value).filter(Boolean);
-    const priceSummary = selected ? formatMoney(selected.price.current) : [...new Set(prices)].slice(0, 5).join(' – ') || '—';
+    const priceSummary = selected ? formatMoney(selected.price.current) : formatUnresolvedSkuPriceSummary(product.skus);
     return [
       'ALIEXPRESS PRODUCT',
       '',
@@ -2412,6 +2429,7 @@
     exportVariants,
     exportDescription,
     exportForChatGPT,
+    formatUnresolvedSkuPriceSummary,
     formatSelections,
     formatSourceLabel,
     formatProductStatus,
