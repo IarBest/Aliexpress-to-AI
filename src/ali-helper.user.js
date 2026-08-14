@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ali Helper
 // @namespace    https://github.com/local/ali-helper
-// @version      0.1.14
+// @version      0.1.15
 // @description  Read-only AliExpress URL cleaner and product/variant exporter
 // @match        https://aliexpress.ru/item/*
 // @match        https://www.aliexpress.com/item/*
@@ -18,7 +18,7 @@
 (function factory(root) {
   'use strict';
 
-  const VERSION = '0.1.14';
+  const VERSION = '0.1.15';
   const SETTINGS_KEY = 'ali-helper:settings:v1';
   const NATIVE_REVIEW_PATHNAME = '/aer-jsonapi/review/v5/desktop/product-reviews';
   const REVIEW_CAPTURE_CAP = 30;
@@ -125,8 +125,8 @@
 
   function normalizeItemUrl(input, targetMarket) {
     const url = input instanceof URL ? new URL(input.href) : new URL(input);
+    if (!isItemPage(url)) throw new Error('URL is not an AliExpress item page');
     const itemId = getItemId(url);
-    if (!itemId) throw new Error('URL is not an AliExpress item page');
 
     const requestedMarket = targetMarket || (/\.ru$/i.test(url.hostname) ? 'ru' : 'com');
     url.protocol = 'https:';

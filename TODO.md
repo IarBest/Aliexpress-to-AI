@@ -718,14 +718,30 @@ Acceptance: UI отражает partial data честно, не дублируе
 
 ### URL normalization
 
-- [ ] Добавить отдельные cases `.com -> .ru` и `.ru -> .com`.
-- [ ] Проверить сохранение `sku_id` и полезного `shpMethod`.
-- [ ] Проверить удаление `spm`, всех `utm_*` и известных affiliate params.
-- [ ] Проверить сохранение неизвестного query parameter.
-- [ ] Проверить удаление hash.
-- [ ] Проверить optional trailing slash и URL с/без `.html`.
-- [ ] Проверить повторную нормализацию уже clean URL (idempotence).
-- [ ] Не превращать cleaning в whitelist query params.
+- [x] Добавить отдельные cases `.com -> .ru` и `.ru -> .com`.
+- [x] Проверить сохранение `sku_id` и полезного `shpMethod`.
+- [x] Проверить удаление `spm`, всех `utm_*` и известных affiliate params.
+- [x] Проверить сохранение неизвестного query parameter.
+- [x] Проверить удаление hash.
+- [x] Проверить optional trailing slash и URL с/без `.html`.
+- [x] Проверить повторную нормализацию уже clean URL (idempotence).
+- [x] Не превращать cleaning в whitelist query params.
+
+Implementation note (P6A): canonical hosts are `aliexpress.ru` for RU and
+`www.aliexpress.com` for COM. Useful and unknown query parameters, including
+repeated unknown values, survive; known tracking is removed case-insensitively,
+and hash is removed. Accepted PDP path variants canonicalize to
+`/item/<id>.html`, and normalization is idempotent. Item-shaped URLs on
+unrelated hosts now fail closed through the existing `isItemPage()` policy;
+`getItemId()` semantics were intentionally not changed.
+
+AliExpress may immediately redirect COM navigation back to RU through its own
+regional gateway; this does not invalidate deterministic RU/COM formatter
+tests.
+
+Deferred micro-hardening: an explicit `targetMarket` value other than `ru` or
+`com` currently falls through to COM. Current production callers pass only
+valid `ru` / `com`; this was intentionally not changed in P6A.
 
 Acceptance: известный tracking удаляется, неизвестное/полезное состояние не
 теряется, результат стабилен при повторном вызове.

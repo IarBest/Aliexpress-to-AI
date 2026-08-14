@@ -292,10 +292,114 @@ test('userscript metadata and runtime versions stay in sync', () => {
   assert.equal(runtimeVersion[1], metadataVersion[1]);
 });
 
-test('normalizes COM URL, removes tracking and hash, and keeps sku_id and unknown params', () => {
-  const input = 'https://www.aliexpress.com/item/1005008195850531.html?spm=a2g0o&utm_source=x&af=739_607243&sku_id=123&mystery=keep#frag';
+test('normalizes COM to RU and RU to COM with canonical hosts', () => {
+  const cases = [
+    {
+      input: 'https://www.aliexpress.com/item/1005008195850531.html',
+      market: 'ru',
+      expected: 'https://aliexpress.ru/item/1005008195850531.html',
+    },
+    {
+      input: 'https://aliexpress.ru/item/1005008195850531.html',
+      market: 'com',
+      expected: 'https://www.aliexpress.com/item/1005008195850531.html',
+    },
+  ];
+
+  for (const { input, market, expected } of cases) {
+    assert.equal(core.normalizeItemUrl(input, market).href, expected);
+  }
+});
+
+test('toggles canonical market URLs in both directions', () => {
+  assert.equal(
+    core.toggleMarketUrl('https://www.aliexpress.com/item/1005008195850531.html').href,
+    'https://aliexpress.ru/item/1005008195850531.html',
+  );
+  assert.equal(
+    core.toggleMarketUrl('https://aliexpress.ru/item/1005008195850531.html').href,
+    'https://www.aliexpress.com/item/1005008195850531.html',
+  );
+});
+
+test('preserves useful and repeated unknown query state while cleaning and switching markets', () => {
+  const input = 'https://www.aliexpress.com/item/1005009452926938.html?sku_id=12000049151727540&shpMethod=AE_CN_SUPER_ECONOMY_G&future_param=a&future_param=b&spm=tracking';
   const result = core.normalizeItemUrl(input, 'ru');
-  assert.equal(result.href, 'https://aliexpress.ru/item/1005008195850531.html?sku_id=123&mystery=keep');
+
+  assert.equal(result.href, 'https://aliexpress.ru/item/1005009452926938.html?sku_id=12000049151727540&shpMethod=AE_CN_SUPER_ECONOMY_G&future_param=a&future_param=b');
+  assert.equal(result.searchParams.get('sku_id'), '12000049151727540');
+  assert.equal(result.searchParams.get('shpMethod'), 'AE_CN_SUPER_ECONOMY_G');
+  assert.deepEqual(result.searchParams.getAll('future_param'), ['a', 'b']);
+});
+
+test('removes the established tracking parameter matrix case-insensitively', () => {
+  const trackingNames = [
+    'spm', 'UTM_Source', 'utm_medium', 'utm_campaign',
+    'aff_fcid', 'aff_fsk', 'aff_platform', 'aff_trace_key', 'affiliate_id', 'af',
+  ];
+  const query = new URLSearchParams([
+    ...trackingNames.map((name) => [name, 'remove-me']),
+    ['future_param', 'keep-me'],
+  ]);
+  const result = core.normalizeItemUrl(`https://aliexpress.ru/item/1005008195850531.html?${query}`);
+
+  for (const name of trackingNames) assert.equal(result.searchParams.has(name), false, name);
+  assert.equal(result.searchParams.get('future_param'), 'keep-me');
+});
+
+test('removes URL fragments during normalization', () => {
+  for (const hash of ['#reviews', '#anything']) {
+    const result = core.normalizeItemUrl(`https://aliexpress.ru/item/1005008195850531.html${hash}`);
+    assert.equal(result.hash, '');
+    assert.equal(result.href, 'https://aliexpress.ru/item/1005008195850531.html');
+  }
+});
+
+test('canonicalizes every accepted item pathname form', () => {
+  for (const pathname of [
+    '/item/1005008195850531',
+    '/item/1005008195850531/',
+    '/item/1005008195850531.html',
+    '/item/1005008195850531.html/',
+  ]) {
+    assert.equal(
+      core.normalizeItemUrl(`https://aliexpress.ru${pathname}`).href,
+      'https://aliexpress.ru/item/1005008195850531.html',
+      pathname,
+    );
+  }
+});
+
+test('normalization is idempotent for dirty and already-canonical URLs', () => {
+  const inputs = [
+    'https://www.aliexpress.com/item/1005009452926938/?spm=tracking&sku_id=12000049151727540&shpMethod=AE_CN_SUPER_ECONOMY_G&future_param=keep-me#reviews',
+    'https://aliexpress.ru/item/1005008195850531.html?future_param=keep-me',
+  ];
+
+  for (const input of inputs) {
+    const once = core.normalizeItemUrl(input);
+    const twice = core.normalizeItemUrl(once);
+    assert.equal(twice.href, once.href);
+  }
+});
+
+test('rejects invalid PDP inputs and unrelated-host item-shaped URLs', () => {
+  const invalidInputs = [
+    'https://aliexpress.ru/',
+    'https://aliexpress.ru/item/not-a-number.html',
+    'https://aliexpress.ru/item/123/reviews',
+    'https://example.com/item/123.html',
+    'https://shop.example.org/item/1005008195850531.html',
+  ];
+
+  for (const input of invalidInputs) assert.throws(() => core.normalizeItemUrl(input), undefined, input);
+});
+
+test('canonicalizes accepted AliExpress protocol and port state', () => {
+  const result = core.normalizeItemUrl('http://www.aliexpress.com:8080/item/1005008195850531/');
+  assert.equal(result.href, 'https://www.aliexpress.com/item/1005008195850531.html');
+  assert.equal(result.protocol, 'https:');
+  assert.equal(result.port, '');
 });
 
 test('recognizes only AliExpress item pages', () => {
