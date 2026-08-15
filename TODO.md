@@ -1,15 +1,14 @@
 # TODO
 
 Живой технический roadmap Ali Helper. P0 закрыт после успешного live
-Tampermonkey smoke test. Следующий практический этап — shipping для current
-selected SKU (P2); расширение product extraction (P1: characteristics,
-description, rating/store/gallery и т. д.) выполняется после shipping. Нумерация
-разделов сохранена как классификация roadmap, а не как фактический execution
-order.
+Tampermonkey smoke test. P0–P7 являются capability groups, а не фактическим
+execution order. Текущий приоритет определяется оставшимися открытыми и явно
+research-gated пунктами.
 
 ## Definition of done
 
-Пункт считается завершённым только если:
+Это reusable per-task completion template, а не checklist готовности всего
+проекта. Пункт считается завершённым только если:
 
 - [ ] код реализован и ограничен заявленной задачей;
 - [ ] regression tests добавлены или обновлены;
@@ -191,9 +190,10 @@ seller rating или recommendation cards.
       `#__AER_DATA__` и scoped `#storeInfo` / `RedStoreInfo` DOM.
 - [x] Получить store ID только из подтверждённого URL shape
       `https://aliexpress.ru/store/<digits>`.
-- [ ] Подтвердить `sellerId` в реально captured raw `productData` response и,
-      если поле действительно существует и однозначно связано с current item,
-      поставить его выше текущих SSR/DOM sources.
+- [ ] **Deferred research:** подтвердить higher-priority `sellerId` в реально
+      captured raw `productData` response. Normalized `sellerId` уже работает
+      из подтверждённых SSR/scoped DOM sources; новый API source принимать
+      только если будущий capture докажет однозначную связь поля с current item.
 - [x] Использовать текущий production priority для seller ID: matched
       store-level `#__AER_DATA__` → `seller_id` из scoped `#storeInfo` chat URL
       → `null`.
@@ -258,8 +258,10 @@ Acceptance: normalized `characteristics` содержит только product p
 
 ### Full seller description
 
-- [ ] Найти original React `dangerouslySetInnerHTML.__html` для
-      `#content_anchor` как preferred source.
+- [ ] **Deferred research:** повторно искать original React
+      `dangerouslySetInnerHTML.__html` для `#content_anchor` только если будущая
+      live evidence откроет безопасный preferred source. Текущий production DOM
+      fallback через `#content_anchor.innerHTML` реализован и протестирован.
 - [x] Использовать `#content_anchor.innerHTML` как fallback.
 - [x] Не считать краткий `productData.description` полным seller description.
 - [x] Разобрать description в `{ rawHtml, blocks, text, images }`.
@@ -291,25 +293,33 @@ Acceptance: порядок seller content восстанавливается, а
 
 - [x] Зафиксировать минимизированный request/response fixture `calculate` для
       одного SKU без account-sensitive данных.
-- [ ] Построить SKU-specific payload из `productId`, selected `skuId`, buyer
-      price, count, destination/currency и `freightExt` только при необходимости.
 - [x] Не использовать `logisticAmount` как стоимость доставки.
 - [x] Нормализовать method/group, `serviceName`, cost, currency, ETA/date range
       и destination, если оно известно.
 - [x] Связать shipping result с конкретным SKU ID в normalized model.
-- [ ] По умолчанию запрашивать shipping только для selected SKU по явному
-      действию или строго контролируемому current-SKU flow.
 - [x] Кэшировать результат по SKU/request context в рамках page session.
 - [x] Инвалидировать/переключать displayed shipping при смене selected SKU.
-- [ ] Показать partial/error state при unavailable/blocked `calculate` response.
+- [ ] **Deferred / design-gated:** определить truthful unavailable/blocked
+      shipping state для passive mode. Captured partial response уже
+      нормализуется как neutral partial Delivery, но отсутствие response нельзя
+      безопасно отличить от ситуации, когда AliExpress не запускал `calculate`.
 - [x] Добавить tests для free, paid и нескольких shipping methods.
 
 Passive runtime binding, page-session cache и защита от stale delivery
 подтверждены вторым live Tampermonkey smoke test. Ali Helper по-прежнему не
 строит и не отправляет собственный `calculate` request.
 
+Ранее планировались helper-generated SKU-specific payload и explicit/current-SKU
+sender. Этот план superseded принятой production architecture: Ali Helper
+пассивно перехватывает native `calculate`, связывает captured request context с
+product/SKU/environment и кэширует результат. Собственные shipping requests
+сейчас не требуются и не разрешены production design. Возможный `Refresh
+shipping` является отдельной будущей research-gated функцией.
+
 Acceptance: стоимость и ETA принадлежат конкретному SKU; массовых запросов и
 подмены shipping через `logisticAmount` нет.
+
+Passive selected-SKU shipping acceptance завершён.
 
 ## P3 — Review summary and SSR reviews
 
@@ -509,13 +519,13 @@ additional objects и review videos пока не наблюдались. `produ
 
 ## P4 — Reviews pagination and follow-ups
 
-### Explicit pagination
+### Passive pagination
 
 Production passive native capture реализован: Ali Helper наблюдает responses
 только после действий самой страницы и не создаёт review requests. Explicit
-sender и `Load reviews` action не реализованы; обязательность и семантика opaque
-`_bx-v` для собственного request остаются недоказанными. Поэтому весь P4 не
-считается завершённым.
+sender и `Load reviews` action не входят в критерий завершения passive
+pagination. SSR page 1, native page 2+, context isolation, contiguous merge,
+capture cap, gaps/conflicts, follow-ups и active-context export реализованы.
 
 - [x] Пассивно перехватывать native AliExpress review pagination/filter/sort/SKU
       responses только после действий самой страницы; Ali Helper не создаёт
@@ -536,18 +546,22 @@ sender и `Load reviews` action не реализованы; обязатель�
 - [x] Показывать loaded count/pages/context/cap в reviews-page status/export.
 - [x] Не угадывать неизвестные sort/filter codes: human labels только для
       wire-confirmed values, остальные generic.
-- [ ] Добавить explicit `Load reviews` / next-page action только если отдельно
-      будет доказано, что userscript может безопасно формировать собственный
-      request.
-- [ ] Доказать обязательность/семантику opaque `_bx-v` и auth/runtime boundary
-      перед любым helper-generated review request.
-- [ ] Если sender когда-либо будет разрешён — строить request только из
-      доказанного semantic body, без копирования opaque native state.
-- [ ] Сделать capture/load cap configurable; текущий production passive cap
-      фиксирован на 30.
-- [ ] Добавить known-total/progress/stop logic для helper-controlled loading,
-      если такой loading вообще будет реализован.
-- [ ] Проверить native repeat-request/cache behavior, если это станет нужно.
+- [ ] Сделать passive capture cap configurable; текущий production cap
+      фиксирован на 30 reviews на context.
+
+#### Optional active-loading research — deferred
+
+- [ ] **Deferred research:** добавить explicit `Load reviews` / next-page sender
+      только после доказательства, что userscript может безопасно формировать
+      собственный request.
+- [ ] **Deferred research:** доказать обязательность/семантику opaque `_bx-v` и
+      auth/runtime boundary перед любым helper-generated review request.
+- [ ] **Deferred research:** если sender будет разрешён, строить request только
+      из доказанного semantic body, без копирования opaque native state.
+- [ ] **Deferred / design-gated:** определить known-total/progress/stop logic для
+      active loading; текущий response не содержит total, hasNext или cursor.
+- [ ] **Deferred research:** проверить native repeat-request/cache behavior,
+      только если это потребуется для будущего active sender.
 
 #### Confirmed native wire protocol
 
@@ -680,14 +694,16 @@ texts или images.
 - [x] Добавить SIZE GUIDE, CHARACTERISTICS, DELIVERY и ordered DESCRIPTION.
 - [x] Добавить REVIEWS summary и ограниченную выборку reviews.
 - [x] Не выводить автоматически сотни SKU или reviews.
-- [ ] Для больших sections показывать summary/current data и предоставлять
+- [x] Для больших sections показывать summary/current data и предоставлять
       отдельный explicit full export action.
       Description покрыт отдельно: основной product ChatGPT export сохраняет
       normalized heading/text/link visible text в source order с бюджетом 2500
       символов, исключает image URLs и link destination URLs, сообщает counts и
       explicit omission diagnostics; `Copy description` экспортирует полный
-      ordered normalized Description без `rawHtml`. Общий пункт остаётся открыт
-      для других sections, которым в будущем действительно потребуется limiting.
+      ordered normalized Description без `rawHtml`. SKU combinations используют
+      bounded summary + `Copy variants`; reviews — limited ChatGPT sample + full
+      JSON. Для новой large section при необходимости создаётся отдельная
+      falsifiable задача на limiting/full export.
 - [x] Проверить deterministic output на regression fixtures.
 
 Reviews ChatGPT export: default sample = 5; formatter clamp = 1–20;
@@ -701,15 +717,22 @@ Acceptance: основной export остаётся читаемым и огр�
 
 - [ ] Ввести явные loading/ready/partial/error states вместо одного status text.
 - [ ] Показывать найденные sources и отсутствующие optional sections.
-- [ ] Давать понятную schema/source error без вывода чувствительных данных.
-- [ ] Сохранить collapsible panel и settings через Tampermonkey storage.
+- [ ] Ввести unified product/per-section source/schema diagnostic contract без
+      чувствительных данных. Reviews уже имеют safe enumerated SSR diagnostics;
+      product-side и cross-section diagnostics ещё не унифицированы.
+- [x] Сохранить collapsible panel и settings через Tampermonkey storage.
 - [ ] Проверить layout на desktop и узком viewport без перекрытия основных
       AliExpress controls.
-- [ ] Корректно обновлять panel после SPA item/SKU changes.
-- [ ] Организовать actions без перегрузки панели: Copy clean URL, product JSON,
-      variants, ChatGPT, description, reviews, Load reviews, Refresh shipping.
+- [x] Корректно обновлять panel после SPA item/SKU changes.
+- [ ] Переработать organization/layout существующих actions без перегрузки
+      панели; будущие active `Load reviews` / `Refresh shipping` добавлять только
+      после прохождения соответствующих research gates.
 - [ ] При росте действий использовать sections/menu вместо постоянной сетки всех
       кнопок.
+
+Collapse/settings persistence и SPA SKU update подтверждены существующими tests
+и P0 live smoke history; при item change runtime очищает текущий product и ждёт
+данные нового item.
 
 Acceptance: UI отражает partial data честно, не дублируется и остаётся удобным
 после SPA navigation.
@@ -748,18 +771,33 @@ Acceptance: известный tracking удаляется, неизвестно
 
 ### Runtime resilience
 
-- [ ] Аудировать selectors на полный CSS-module hash и заменить устойчивыми
+- [x] Аудировать selectors на полный CSS-module hash и заменить устойчивыми
       fragments/IDs/attributes.
-- [ ] Сохранить жёсткие limits recursive traversals и tests на достижение limits.
-- [ ] Записывать source used и безопасный schema mismatch diagnostic.
+- [ ] Добавить systematic limit-reached regressions и explicit safe diagnostics
+      для relevant bounded traversals beyond reviews; сами depth/visited limits
+      уже применяются широко.
+- [ ] Унифицировать per-section source/missing/schema diagnostics; отдельные
+      source fields и safe review diagnostics уже существуют.
 - [ ] Реализовать graceful partial model вместо молча неверного полного export.
 - [ ] Управлять lifecycle polling/observers: не оставлять бесконечные interval
       leaks после SPA navigation или teardown.
-- [ ] Сделать повторную инициализацию idempotent.
-- [ ] Проверить отсутствие двойного wrapping fetch/XHR.
-- [ ] Проверить отсутствие duplicate panel/listeners.
-- [ ] Обработать смену item ID без принятия запоздавшего response старого товара.
-- [ ] Не включать source URLs с tokens/tracking в diagnostics/export.
+- [ ] Добавить runtime singleton/teardown guard для полной idempotence повторной
+      инициализации, включая polling lifecycle.
+- [ ] Добавить regression proof idempotence для оставшегося fetch/XHR wrapper
+      stack и intentional layering. Wrappers уже используют flags, а review
+      fetch idempotence отдельно протестирован.
+- [x] Проверить отсутствие duplicate panel/listeners.
+- [ ] Закрыть late old-item response case без trustworthy payload item ID и
+      добавить asynchronous regression. Explicit mismatching product/SKU IDs уже
+      отклоняются; risk остаётся в fallback `acceptProductData()` к текущему
+      runtime item ID.
+- [x] Не включать source URLs с tokens/tracking в diagnostics/export.
+
+Production DOM selectors используют semantic IDs, `data-testid` и class-name
+fragments, а не complete CSS-module hashes. Mount guard проверяет
+`#ali-helper-host`, listeners принадлежат только созданному guarded panel
+instance. Export/debug paths sanitise либо не сохраняют sensitive source/network
+URL material.
 
 Acceptance: при изменении AliExpress schema helper сообщает partial/error state,
 не экспортирует правдоподобные неправильные данные и не накапливает runtime
@@ -771,24 +809,32 @@ handlers.
 обезличенную matrix fixtures/live references для следующих случаев:
 
 - [ ] товар без вариантов;
-- [ ] одна variant dimension;
-- [ ] две и более variant dimensions;
-- [ ] отсутствующие Cartesian combinations;
-- [ ] большое число SKU;
-- [ ] size guide CM/IN;
-- [ ] отсутствие size guide;
-- [ ] description преимущественно text;
-- [ ] description преимущественно images;
-- [ ] free shipping;
-- [ ] paid shipping;
-- [ ] несколько shipping methods;
-- [ ] много reviews;
-- [ ] translated review и original text;
-- [ ] review только с original text;
-- [ ] additional/follow-up review;
-- [ ] photos в initial и только в follow-up;
-- [ ] seller/store отсутствует или доступен частично;
-- [ ] third-party extension DOM рядом с product/store blocks.
+- [x] одна variant dimension;
+- [x] две и более variant dimensions;
+- [ ] реально captured отсутствующие/sparse Cartesian combinations; synthetic
+      удаление priceList row доказывает parser behavior, но не закрывает matrix;
+- [x] большое число SKU;
+- [x] size guide CM/IN;
+- [x] отсутствие size guide;
+- [x] description преимущественно text;
+- [x] description преимущественно images;
+- [ ] реально captured free shipping; synthetic zero-cost test недостаточен;
+- [x] paid shipping;
+- [ ] реально captured несколько shipping methods; synthetic multi-method test
+      недостаточен;
+- [x] много reviews;
+- [x] translated review и original text;
+- [ ] реально captured review только с original text;
+- [x] additional/follow-up review;
+- [x] photos в initial и только в follow-up;
+- [ ] реально captured seller/store отсутствует или доступен частично;
+- [x] third-party extension DOM рядом с product/store blocks.
+
+Закрытые matrix cases опираются на существующие captured product, Description,
+shipping и review fixtures/tests: Relay `Bundle: 7`, Dress `Color 9 × Size 5` и
+45 SKU, CM/IN, Relay без size guide, dated text/image Description observations,
+paid `calculate`, passive 30-review capture, independent translated/original и
+follow-up semantics, а также scoped third-party DOM exclusion.
 
 Для каждого case фиксировать item/source date, ожидаемые counts/relations и
 ограничения region/session без сохранения персональных данных.
@@ -797,11 +843,18 @@ handlers.
 
 Эти идеи не блокируют основной roadmap:
 
-- [ ] Bulk shipping calculation только по явному действию и с hard cap.
+- [ ] **Deferred research:** Bulk shipping calculation только по явному действию
+      и с hard cap, после доказательства безопасного active shipping
+      sender/runtime boundary.
 - [ ] Исследование и декодирование review SKU filters.
 - [ ] Исследование дополнительных `sort` values для reviews.
 - [ ] Более богатое извлечение `Most mentioned in reviews`.
-- [ ] Отдельный export ordered description image URLs.
-- [ ] Optional self-contained export/archive, только при доказанной потребности.
-- [ ] Browser extension version, только если ограничения Tampermonkey окажутся
-      существенными; Tampermonkey остаётся предпочтительной платформой.
+- [ ] **Deferred / needs design evidence:** Optional self-contained
+      export/archive только при доказанной потребности и определённом формате.
+- [ ] **Deferred / needs design evidence:** Browser extension version только
+      если ограничения Tampermonkey окажутся существенными; Tampermonkey остаётся
+      предпочтительной платформой.
+
+Отдельный ordered Description-image-URL export superseded действием `Copy
+description`, которое экспортирует полный ordered normalized Description,
+включая image URLs в исходном контексте.
