@@ -2541,6 +2541,7 @@
     redactSensitiveJson,
     createShippingDebugCapture,
     installProductDataInterceptor,
+    installShippingCalculateInterceptor,
     installNativeReviewInterceptor,
     RUNTIME_REGISTRY_KEY,
     createProductPollingLifecycle,
