@@ -789,10 +789,17 @@ Acceptance: известный tracking удаляется, неизвестно
       только один product/reviews controller и один `pagehide` listener. Dispose
       idempotent; disposed registration намеренно terminal для текущего document,
       а fresh full document load естественно создаёт новый runtime.
-- [ ] Добавить regression proof idempotence для оставшегося fetch/XHR wrapper
-      stack и intentional layering. Wrappers уже используют flags, а review
-      fetch idempotence отдельно протестирован; runtime singleton не считается
-      доказательством полной wrapper-stack idempotence.
+- [x] Добавить regression proof idempotence для оставшегося fetch/XHR wrapper
+      stack и intentional layering. Протестированы:
+      product/shipping repeated install;
+      existing reviews idempotence;
+      все 6 fetch-порядков установки;
+      product↔shipping XHR orders;
+      native fetch ровно один раз;
+      native XHR open/send ровно один раз;
+      args/this/Promise семантика сохранена;
+      endpoint isolation;
+      отсутствие helper-generated requests.
 - [x] Проверить отсутствие duplicate panel/listeners.
 - [x] Закрыть late old-item response case без trustworthy payload item ID и
       добавить asynchronous regression. Explicit `productId` / `itemId` / `id`

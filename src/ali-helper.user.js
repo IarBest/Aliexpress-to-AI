@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ali Helper
 // @namespace    https://github.com/local/ali-helper
-// @version      0.1.17
+// @version      0.1.18
 // @description  Read-only AliExpress URL cleaner and product/variant exporter
 // @match        https://aliexpress.ru/item/*
 // @match        https://www.aliexpress.com/item/*
@@ -18,7 +18,7 @@
 (function factory(root) {
   'use strict';
 
-  const VERSION = '0.1.17';
+  const VERSION = '0.1.18';
   const SETTINGS_KEY = 'ali-helper:settings:v1';
   const NATIVE_REVIEW_PATHNAME = '/aer-jsonapi/review/v5/desktop/product-reviews';
   const REVIEW_CAPTURE_CAP = 30;
@@ -2541,6 +2541,7 @@
     redactSensitiveJson,
     createShippingDebugCapture,
     installProductDataInterceptor,
+    installShippingCalculateInterceptor,
     installNativeReviewInterceptor,
     RUNTIME_REGISTRY_KEY,
     createProductPollingLifecycle,
