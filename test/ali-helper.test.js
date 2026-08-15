@@ -2488,6 +2488,122 @@ test('recursively finds nested productData without a hardcoded path', () => {
   assert.match(found.path, /widgets/);
 });
 
+test('productData binding accepts only explicit current item identity', () => {
+  assert.equal(core.isProductDataBoundToItem({ id: 'B' }, 'B'), true);
+  assert.equal(core.isProductDataBoundToItem({ id: 'A' }, 'B'), false);
+});
+
+test('identity-less network productData requires matching request-time item identity', () => {
+  const data = { skuInfo: { propertyList: [], priceList: [] } };
+  const snapshot = clone(data);
+
+  assert.equal(core.isProductDataBoundToItem(data, 'A', {
+    source: 'network:productData', requestItemId: 'A',
+  }), true);
+  assert.equal(core.isProductDataBoundToItem(data, 'B', {
+    source: 'network:productData', requestItemId: 'A',
+  }), false);
+  assert.equal(core.isProductDataBoundToItem(data, 'A', {
+    source: 'network:productData', requestItemId: null,
+  }), false);
+  assert.deepEqual(data, snapshot);
+});
+
+test('explicit productData identity takes precedence over request-time identity', () => {
+  assert.equal(core.isProductDataBoundToItem({ id: 'A' }, 'B', {
+    source: 'network:productData', requestItemId: 'A',
+  }), false);
+  assert.equal(core.isProductDataBoundToItem({ id: 'B' }, 'B', {
+    source: 'network:productData', requestItemId: 'A',
+  }), true);
+});
+
+test('SSR and React fallbacks keep explicit current-item binding and fail closed without it', () => {
+  const fixture = loadFixture('product-1005008195850531.json');
+
+  assert.equal(core.isProductDataBoundToItem(fixture.data, fixture.data.id, {
+    source: 'ssr:__AER_DATA__',
+  }), true);
+  assert.equal(core.isProductDataBoundToItem(fixture.data, fixture.data.id, {
+    source: 'react:__reactProps',
+  }), true);
+  assert.equal(core.isProductDataBoundToItem({ skuInfo: fixture.data.skuInfo }, fixture.data.id, {
+    source: 'ssr:__AER_DATA__',
+  }), false);
+});
+
+test('delayed fetch productData is bound at invocation and cannot become the next SPA product', async () => {
+  let resolveNative;
+  let currentItemId = 'A';
+  let product = null;
+  let capturedRequestItemId = null;
+  let calls = 0;
+  const nativePromise = new Promise((resolve) => { resolveNative = resolve; });
+  const originalFetch = (...args) => {
+    calls += 1;
+    assert.deepEqual(args, ['/api/productData?item=A', { method: 'POST' }]);
+    return nativePromise;
+  };
+  const pageWindow = {
+    fetch: originalFetch,
+    location: { href: 'https://aliexpress.ru/item/A.html' },
+  };
+  core.installProductDataInterceptor(pageWindow, (data, meta) => {
+    capturedRequestItemId = meta.requestItemId;
+    if (core.isProductDataBoundToItem(data, currentItemId, meta)) product = data;
+  }, () => currentItemId);
+
+  const returned = pageWindow.fetch('/api/productData?item=A', { method: 'POST' });
+  assert.equal(returned, nativePromise);
+  currentItemId = 'B';
+  pageWindow.location.href = 'https://aliexpress.ru/item/B.html';
+  resolveNative({
+    clone: () => ({ json: async () => ({ data: { skuInfo: { propertyList: [], priceList: [] } } }) }),
+  });
+  await returned;
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(calls, 1);
+  assert.equal(capturedRequestItemId, 'A');
+  assert.equal(product, null);
+});
+
+test('XHR productData captures request item identity at open time', () => {
+  let currentItemId = 'A';
+  let captured = null;
+  class FakeXHR {
+    constructor() {
+      this.listeners = {};
+      this.responseType = '';
+      this.responseText = '';
+    }
+
+    open(...args) { this.openArgs = args; }
+    send(...args) { this.sendArgs = args; }
+    addEventListener(type, listener) { this.listeners[type] = listener; }
+    finish(payload) {
+      this.responseText = JSON.stringify(payload);
+      this.listeners.loadend();
+    }
+  }
+  const pageWindow = {
+    location: { href: 'https://aliexpress.ru/item/A.html' },
+    XMLHttpRequest: FakeXHR,
+  };
+  core.installProductDataInterceptor(pageWindow, (data, meta) => { captured = { data, meta }; }, () => currentItemId);
+
+  const xhr = new pageWindow.XMLHttpRequest();
+  xhr.open('POST', '/api/productData?item=A', true);
+  currentItemId = 'B';
+  xhr.send('native-body');
+  xhr.finish({ data: { skuInfo: { propertyList: [], priceList: [] } } });
+
+  assert.deepEqual(xhr.openArgs, ['POST', '/api/productData?item=A', true]);
+  assert.deepEqual(xhr.sendArgs, ['native-body']);
+  assert.equal(captured.meta.requestItemId, 'A');
+  assert.equal(core.isProductDataBoundToItem(captured.data, currentItemId, captured.meta), false);
+});
+
 test('recognizes exact AliExpress reviews routes without changing PDP semantics', () => {
   const base = 'https://aliexpress.ru/item/1005009452926938/reviews';
   assert.equal(core.isReviewsPage(base), true);

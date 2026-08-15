@@ -787,10 +787,13 @@ Acceptance: известный tracking удаляется, неизвестно
       stack и intentional layering. Wrappers уже используют flags, а review
       fetch idempotence отдельно протестирован.
 - [x] Проверить отсутствие duplicate panel/listeners.
-- [ ] Закрыть late old-item response case без trustworthy payload item ID и
-      добавить asynchronous regression. Explicit mismatching product/SKU IDs уже
-      отклоняются; risk остаётся в fallback `acceptProductData()` к текущему
-      runtime item ID.
+- [x] Закрыть late old-item response case без trustworthy payload item ID и
+      добавить asynchronous regression. Explicit `productId` / `itemId` / `id`
+      authoritative: mismatch отклоняется. Identity-less `network:productData`
+      принимается только при совпадении request-time item ID с текущим runtime
+      item: fetch фиксирует ID синхронно при invocation, XHR — в matching
+      `open()`, поэтому late A не bind-ится к B. SSR/React без candidate ID не
+      наследует текущий item ID и fail closed как identity-less/unbound fallback.
 - [x] Не включать source URLs с tokens/tracking в diagnostics/export.
 
 Production DOM selectors используют semantic IDs, `data-testid` и class-name

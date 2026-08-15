@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ali Helper
 // @namespace    https://github.com/local/ali-helper
-// @version      0.1.15
+// @version      0.1.16
 // @description  Read-only AliExpress URL cleaner and product/variant exporter
 // @match        https://aliexpress.ru/item/*
 // @match        https://www.aliexpress.com/item/*
@@ -18,7 +18,7 @@
 (function factory(root) {
   'use strict';
 
-  const VERSION = '0.1.15';
+  const VERSION = '0.1.16';
   const SETTINGS_KEY = 'ali-helper:settings:v1';
   const NATIVE_REVIEW_PATHNAME = '/aer-jsonapi/review/v5/desktop/product-reviews';
   const REVIEW_CAPTURE_CAP = 30;
@@ -77,6 +77,16 @@
 
   function firstDefined(...values) {
     return values.find((value) => value !== undefined && value !== null && value !== '');
+  }
+
+  function isProductDataBoundToItem(data, currentItemId, meta = {}) {
+    const payloadItemId = asString(firstDefined(data?.productId, data?.itemId, data?.id));
+    const expectedItemId = asString(currentItemId);
+    if (!expectedItemId) return false;
+    if (payloadItemId) return payloadItemId === expectedItemId;
+    if (meta.source !== 'network:productData') return false;
+    const requestItemId = asString(meta.requestItemId);
+    return Boolean(requestItemId && requestItemId === expectedItemId);
   }
 
   function isItemPage(input) {
@@ -2423,6 +2433,7 @@
     updateDescription,
     isStaleDescription,
     findProductDataCandidate,
+    isProductDataBoundToItem,
     normalizeProduct,
     updateSelectedSku,
     exportProduct,
@@ -2442,6 +2453,7 @@
     isShippingCalculateUrl,
     redactSensitiveJson,
     createShippingDebugCapture,
+    installProductDataInterceptor,
     installNativeReviewInterceptor,
   };
 
@@ -2470,28 +2482,32 @@
     return navigator.clipboard.writeText(text);
   }
 
-  function installProductDataInterceptor(pageWindow, onData) {
+  function installProductDataInterceptor(pageWindow, onData, getRequestItemId = () => getItemId(pageWindow?.location?.href || location.href)) {
     const flag = '__aliHelperProductDataInterceptorV1__';
     if (!pageWindow || pageWindow[flag]) return;
     pageWindow[flag] = true;
     const matches = (input) => {
       try {
         const value = typeof input === 'string' ? input : input?.url;
-        return /\/productData(?:[/?]|$)/i.test(new URL(value, location.href).pathname);
+        return /\/productData(?:[/?]|$)/i.test(new URL(value, pageWindow?.location?.href || location.href).pathname);
       } catch (_) { return false; }
     };
-    const accept = (payload, sourceUrl) => {
+    const accept = (payload, sourceUrl, requestItemId) => {
       const found = findProductDataCandidate(payload);
-      if (found) onData(found.data, { source: 'network:productData', sourceUrl, path: found.path });
+      if (found) onData(found.data, {
+        source: 'network:productData', sourceUrl, path: found.path, requestItemId,
+      });
     };
 
     if (typeof pageWindow.fetch === 'function') {
       const originalFetch = pageWindow.fetch;
       pageWindow.fetch = function aliHelperFetch(...args) {
+        const matched = matches(args[0]);
+        const requestItemId = matched ? getRequestItemId() : null;
         const result = originalFetch.apply(this, args);
-        if (matches(args[0])) {
+        if (matched) {
           result.then((response) => response.clone().json())
-            .then((json) => accept(json, typeof args[0] === 'string' ? args[0] : args[0]?.url))
+            .then((json) => accept(json, typeof args[0] === 'string' ? args[0] : args[0]?.url, requestItemId))
             .catch(() => {});
         }
         return result;
@@ -2504,6 +2520,7 @@
       const originalSend = XHR.prototype.send;
       XHR.prototype.open = function aliHelperOpen(method, url, ...rest) {
         this.__aliHelperProductDataUrl = matches(url) ? String(url) : null;
+        this.__aliHelperProductDataItemId = this.__aliHelperProductDataUrl ? getRequestItemId() : null;
         return originalOpen.call(this, method, url, ...rest);
       };
       XHR.prototype.send = function aliHelperSend(...args) {
@@ -2511,7 +2528,7 @@
           this.addEventListener('loadend', () => {
             try {
               const json = this.responseType === 'json' ? this.response : JSON.parse(this.responseText);
-              accept(json, this.__aliHelperProductDataUrl);
+              accept(json, this.__aliHelperProductDataUrl, this.__aliHelperProductDataItemId);
             } catch (_) { /* non-JSON/blocked response */ }
           }, { once: true });
         }
@@ -2953,8 +2970,7 @@
       refreshProductEnrichment: null,
     };
     const acceptProductData = (data, meta) => {
-      const dataItemId = asString(firstDefined(data.productId, data.itemId, data.id, runtime.itemId));
-      if (dataItemId !== runtime.itemId) return;
+      if (!isProductDataBoundToItem(data, runtime.itemId, meta)) return;
       try {
         const normalized = normalizeProduct(data, location.href, { title: document.title.replace(/\s*\|\s*AliExpress.*$/i, ''), source: meta.source });
         const previousProduct = runtime.product;
