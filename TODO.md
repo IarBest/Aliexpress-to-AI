@@ -779,13 +779,20 @@ Acceptance: известный tracking удаляется, неизвестно
 - [ ] Унифицировать per-section source/missing/schema diagnostics; отдельные
       source fields и safe review diagnostics уже существуют.
 - [ ] Реализовать graceful partial model вместо молча неверного полного export.
-- [ ] Управлять lifecycle polling/observers: не оставлять бесконечные interval
-      leaks после SPA navigation или teardown.
-- [ ] Добавить runtime singleton/teardown guard для полной idempotence повторной
-      инициализации, включая polling lifecycle.
+- [x] Управлять runtime-owned timer/listener lifecycle. PDP владеет одним interval
+      handle и переиспользует его при SPA item/SKU changes; dispose очищает
+      interval и pending `DOMContentLoaded`. Reviews SSR discovery владеет не
+      более чем одним retry timeout; success, exhaustion и dispose не оставляют
+      pending timer. Captured timer callbacks после dispose inert.
+- [x] Добавить page-level runtime singleton/teardown guard. Registry
+      `__aliHelperRuntimeV1__` переиспользуется повторным `start()`: создаётся
+      только один product/reviews controller и один `pagehide` listener. Dispose
+      idempotent; disposed registration намеренно terminal для текущего document,
+      а fresh full document load естественно создаёт новый runtime.
 - [ ] Добавить regression proof idempotence для оставшегося fetch/XHR wrapper
       stack и intentional layering. Wrappers уже используют flags, а review
-      fetch idempotence отдельно протестирован.
+      fetch idempotence отдельно протестирован; runtime singleton не считается
+      доказательством полной wrapper-stack idempotence.
 - [x] Проверить отсутствие duplicate panel/listeners.
 - [x] Закрыть late old-item response case без trustworthy payload item ID и
       добавить asynchronous regression. Explicit `productId` / `itemId` / `id`

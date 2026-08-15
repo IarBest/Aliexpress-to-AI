@@ -15,6 +15,209 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function fakeTimers() {
+  let nextHandle = 1;
+  const intervals = new Map();
+  const timeouts = new Map();
+  const clearedIntervals = [];
+  const clearedTimeouts = [];
+  return {
+    intervals,
+    timeouts,
+    clearedIntervals,
+    clearedTimeouts,
+    setInterval(callback, delay) {
+      const handle = nextHandle++;
+      intervals.set(handle, { callback, delay });
+      return handle;
+    },
+    clearInterval(handle) {
+      clearedIntervals.push(handle);
+      intervals.delete(handle);
+    },
+    setTimeout(callback, delay) {
+      const handle = nextHandle++;
+      timeouts.set(handle, { callback, delay });
+      return handle;
+    },
+    clearTimeout(handle) {
+      clearedTimeouts.push(handle);
+      timeouts.delete(handle);
+    },
+    runTimeout(handle) {
+      const timer = timeouts.get(handle);
+      timeouts.delete(handle);
+      timer.callback();
+    },
+  };
+}
+
+function fakePageWindow() {
+  const listeners = new Map();
+  const added = [];
+  const removed = [];
+  return {
+    listeners,
+    added,
+    removed,
+    addEventListener(type, callback, options) {
+      added.push({ type, callback, options });
+      listeners.set(type, callback);
+    },
+    removeEventListener(type, callback) {
+      removed.push({ type, callback });
+      if (listeners.get(type) === callback) listeners.delete(type);
+    },
+    dispatch(type) {
+      listeners.get(type)?.();
+    },
+  };
+}
+
+test('product runtime singleton reuses one controller, polling interval, and pagehide listener', () => {
+  const pageWindow = fakePageWindow();
+  const timers = fakeTimers();
+  let controllers = 0;
+  let scans = 0;
+  let spaState = 'item-a';
+  const createController = () => {
+    controllers += 1;
+    const polling = core.createProductPollingLifecycle(() => {
+      scans += 1;
+      spaState = spaState === 'item-a' ? 'item-b' : 'item-a';
+    }, timers);
+    polling.start();
+    return { polling, dispose: () => polling.dispose() };
+  };
+
+  const first = core.startPageRuntimeSingleton(pageWindow, 'product', createController);
+  const capturedInterval = timers.intervals.get(first.controller.polling.intervalHandle).callback;
+  const second = core.startPageRuntimeSingleton(pageWindow, 'product', createController);
+  assert.equal(second, first);
+  assert.equal(first.mode, 'product');
+  assert.equal(pageWindow[core.RUNTIME_REGISTRY_KEY], first);
+  assert.equal(controllers, 1);
+  assert.equal(timers.intervals.size, 1);
+  assert.equal(timers.intervals.values().next().value.delay, 1000);
+  assert.equal(pageWindow.added.filter(({ type }) => type === 'pagehide').length, 1);
+  assert.equal(scans, 1);
+
+  capturedInterval();
+  assert.equal(scans, 2);
+  assert.equal(spaState, 'item-a');
+  assert.equal(timers.intervals.size, 1);
+  pageWindow.dispatch('pagehide');
+  assert.equal(first.active, false);
+  assert.equal(first.disposed, true);
+  assert.deepEqual(timers.clearedIntervals, [1]);
+  assert.equal(timers.intervals.size, 0);
+  assert.equal(pageWindow.listeners.has('pagehide'), false);
+  capturedInterval();
+  assert.equal(scans, 2);
+  assert.equal(core.startPageRuntimeSingleton(pageWindow, 'product', createController), first);
+  assert.equal(controllers, 1);
+});
+
+test('reviews runtime singleton starts only one SSR retry chain', () => {
+  const pageWindow = fakePageWindow();
+  const timers = fakeTimers();
+  let controllers = 0;
+  let inspections = 0;
+  const createController = () => {
+    controllers += 1;
+    const retry = core.createReviewsSsrRetryLifecycle(
+      () => { inspections += 1; return { reviewPage: null, diagnostic: 'missing' }; },
+      () => assert.fail('unexpected SSR seed'),
+      () => {},
+      timers,
+    );
+    retry.start();
+    return { retry, dispose: () => retry.dispose() };
+  };
+
+  const first = core.startPageRuntimeSingleton(pageWindow, 'reviews', createController);
+  const second = core.startPageRuntimeSingleton(pageWindow, 'reviews', createController);
+  assert.equal(second, first);
+  assert.equal(first.mode, 'reviews');
+  assert.equal(controllers, 1);
+  assert.equal(inspections, 1);
+  assert.equal(timers.timeouts.size, 1);
+  assert.equal(timers.timeouts.values().next().value.delay, 500);
+  assert.equal(pageWindow.added.filter(({ type }) => type === 'pagehide').length, 1);
+});
+
+test('reviews SSR retries advance one pending timer and stop after successful seeding', () => {
+  const timers = fakeTimers();
+  const results = [
+    { reviewPage: null, diagnostic: 'missing-1' },
+    { reviewPage: null, diagnostic: 'missing-2' },
+    { reviewPage: { itemId: '100' }, diagnostic: null },
+  ];
+  const seeded = [];
+  const exhausted = [];
+  const retry = core.createReviewsSsrRetryLifecycle(
+    () => results.shift(),
+    (reviewPage) => seeded.push(reviewPage),
+    (diagnostic) => exhausted.push(diagnostic),
+    timers,
+  );
+
+  retry.start();
+  assert.equal(retry.attempts, 1);
+  assert.equal(timers.timeouts.size, 1);
+  const firstHandle = retry.timeoutHandle;
+  timers.runTimeout(firstHandle);
+  assert.equal(retry.attempts, 2);
+  assert.equal(timers.timeouts.size, 1);
+  assert.notEqual(retry.timeoutHandle, firstHandle);
+  timers.runTimeout(retry.timeoutHandle);
+  assert.equal(retry.seeded, true);
+  assert.equal(retry.timeoutHandle, null);
+  assert.equal(timers.timeouts.size, 0);
+  assert.deepEqual(seeded, [{ itemId: '100' }]);
+  assert.deepEqual(exhausted, []);
+});
+
+test('reviews SSR retry exhaustion is terminal with no pending timer', () => {
+  const timers = fakeTimers();
+  const exhausted = [];
+  const retry = core.createReviewsSsrRetryLifecycle(
+    () => ({ reviewPage: null, diagnostic: 'still-missing' }),
+    () => assert.fail('unexpected SSR seed'),
+    (diagnostic) => exhausted.push(diagnostic),
+    timers,
+  );
+
+  retry.start();
+  while (retry.timeoutHandle !== null) timers.runTimeout(retry.timeoutHandle);
+  assert.equal(retry.attempts, 8);
+  assert.equal(timers.timeouts.size, 0);
+  assert.deepEqual(exhausted, ['still-missing']);
+});
+
+test('reviews SSR retry teardown clears its timeout and captured callback becomes inert', () => {
+  const timers = fakeTimers();
+  let inspections = 0;
+  const retry = core.createReviewsSsrRetryLifecycle(
+    () => { inspections += 1; return { reviewPage: null, diagnostic: 'missing' }; },
+    () => assert.fail('unexpected SSR seed'),
+    () => assert.fail('unexpected exhaustion'),
+    timers,
+  );
+
+  retry.start();
+  const handle = retry.timeoutHandle;
+  const capturedRetry = timers.timeouts.get(handle).callback;
+  retry.dispose();
+  assert.equal(retry.active, false);
+  assert.deepEqual(timers.clearedTimeouts, [handle]);
+  assert.equal(timers.timeouts.size, 0);
+  capturedRetry();
+  assert.equal(inspections, 1);
+  assert.equal(retry.attempts, 1);
+  assert.equal(retry.timeoutHandle, null);
+});
+
 function syntheticShippingProduct(skuId, buyerPrice, price) {
   return {
     itemId: 'synthetic-product',

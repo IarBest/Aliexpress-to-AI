@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ali Helper
 // @namespace    https://github.com/local/ali-helper
-// @version      0.1.16
+// @version      0.1.17
 // @description  Read-only AliExpress URL cleaner and product/variant exporter
 // @match        https://aliexpress.ru/item/*
 // @match        https://www.aliexpress.com/item/*
@@ -18,10 +18,11 @@
 (function factory(root) {
   'use strict';
 
-  const VERSION = '0.1.16';
+  const VERSION = '0.1.17';
   const SETTINGS_KEY = 'ali-helper:settings:v1';
   const NATIVE_REVIEW_PATHNAME = '/aer-jsonapi/review/v5/desktop/product-reviews';
   const REVIEW_CAPTURE_CAP = 30;
+  const RUNTIME_REGISTRY_KEY = '__aliHelperRuntimeV1__';
   const INITIAL_REVIEW_CONTEXT = Object.freeze({ sort: 1, filters: [], skuFilter: [], pageSize: 10 });
   const CHARACTERISTICS_BOUNDARY_SELECTOR = '[class*="HazeProductCharacteristics__groupsContainerForSku"]';
   const CHARACTERISTICS_ITEM_SELECTOR = '[class*="HazeProductCharacteristics__itemForSku"]';
@@ -126,6 +127,92 @@
     } catch (_) {
       return null;
     }
+  }
+
+  function createProductPollingLifecycle(scanFallbacks, timers = globalThis) {
+    let active = true;
+    let intervalHandle = null;
+    const run = () => {
+      if (!active) return;
+      scanFallbacks();
+    };
+    return {
+      get active() { return active; },
+      get intervalHandle() { return intervalHandle; },
+      start() {
+        if (!active || intervalHandle !== null) return;
+        intervalHandle = timers.setInterval(run, 1000);
+        run();
+      },
+      dispose() {
+        if (!active) return;
+        active = false;
+        if (intervalHandle !== null) {
+          timers.clearInterval(intervalHandle);
+          intervalHandle = null;
+        }
+      },
+    };
+  }
+
+  function createReviewsSsrRetryLifecycle(inspect, onSeed, onExhausted, timers = globalThis) {
+    let active = true;
+    let seeded = false;
+    let attempts = 0;
+    let timeoutHandle = null;
+    const readSsr = () => {
+      if (!active || seeded) return;
+      timeoutHandle = null;
+      const inspection = inspect();
+      if (inspection.reviewPage) {
+        seeded = true;
+        onSeed(inspection.reviewPage);
+        return;
+      }
+      attempts += 1;
+      if (attempts < 8) timeoutHandle = timers.setTimeout(readSsr, 500);
+      else onExhausted(inspection.diagnostic);
+    };
+    return {
+      get active() { return active; },
+      get seeded() { return seeded; },
+      get attempts() { return attempts; },
+      get timeoutHandle() { return timeoutHandle; },
+      start() {
+        if (!active || seeded || attempts > 0 || timeoutHandle !== null) return;
+        readSsr();
+      },
+      dispose() {
+        if (!active) return;
+        active = false;
+        if (timeoutHandle !== null) {
+          timers.clearTimeout(timeoutHandle);
+          timeoutHandle = null;
+        }
+      },
+    };
+  }
+
+  function startPageRuntimeSingleton(pageWindow, mode, createController) {
+    const existing = pageWindow?.[RUNTIME_REGISTRY_KEY];
+    if (existing) return existing;
+    const controller = createController();
+    const registration = {
+      mode,
+      controller,
+      get active() { return !registration.disposed && controller.active !== false; },
+      disposed: false,
+      dispose() {
+        if (registration.disposed) return;
+        registration.disposed = true;
+        pageWindow?.removeEventListener?.('pagehide', onPageHide);
+        controller.dispose();
+      },
+    };
+    const onPageHide = () => registration.dispose();
+    pageWindow[RUNTIME_REGISTRY_KEY] = registration;
+    pageWindow.addEventListener?.('pagehide', onPageHide, { once: true });
+    return registration;
   }
 
   function isTrackingParam(name) {
@@ -2455,6 +2542,10 @@
     createShippingDebugCapture,
     installProductDataInterceptor,
     installNativeReviewInterceptor,
+    RUNTIME_REGISTRY_KEY,
+    createProductPollingLifecycle,
+    createReviewsSsrRetryLifecycle,
+    startPageRuntimeSingleton,
   };
 
   if (typeof module === 'object' && module.exports) module.exports = AliHelperCore;
@@ -2874,18 +2965,28 @@
     };
   }
 
-  function startReviewsPage() {
+  function startReviewsPage(pageWindow) {
     const runtime = {
+      active: true,
       settings: loadSettings(),
       itemId: getReviewsItemId(location.href),
       reviewCache: null,
       reviewPage: null,
       ssrSeeded: false,
       ui: null,
+      domReadyHandler: null,
+      ssrRetryLifecycle: null,
+      dispose() {
+        if (!runtime.active) return;
+        runtime.active = false;
+        if (runtime.domReadyHandler) document.removeEventListener('DOMContentLoaded', runtime.domReadyHandler);
+        runtime.domReadyHandler = null;
+        runtime.ssrRetryLifecycle?.dispose();
+      },
     };
     runtime.reviewCache = createReviewCache(runtime.itemId);
-    const pageWindow = typeof unsafeWindow === 'object' && unsafeWindow ? unsafeWindow : window;
     installNativeReviewInterceptor(pageWindow, runtime.itemId, (batch, sequence) => {
+      if (!runtime.active) return;
       const nextCache = applyNativeReviewBatch(runtime.reviewCache, batch, sequence);
       if (nextCache === runtime.reviewCache) return;
       runtime.reviewCache = nextCache;
@@ -2893,44 +2994,37 @@
       if (runtime.reviewPage) runtime.ui?.setReviews(runtime.reviewPage);
     });
     const mount = () => {
-      if (!document.body || document.getElementById('ali-helper-host')) return;
+      if (!runtime.active || !document.body || document.getElementById('ali-helper-host')) return;
+      runtime.domReadyHandler = null;
       runtime.ui = createReviewsPanel(runtime);
       if (runtime.reviewPage) runtime.ui.setReviews(runtime.reviewPage);
     };
-    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount, { once: true });
+    if (document.readyState === 'loading') {
+      runtime.domReadyHandler = mount;
+      document.addEventListener('DOMContentLoaded', mount, { once: true });
+    }
     else mount();
 
-    let attempts = 0;
-    const readSsr = () => {
-      if (runtime.ssrSeeded) return;
-      const inspection = findReviewsPageInSsr(runtime.itemId);
-      if (inspection.reviewPage) {
-        runtime.reviewCache = seedReviewCacheFromSsr(runtime.reviewCache, inspection.reviewPage);
+    runtime.ssrRetryLifecycle = createReviewsSsrRetryLifecycle(
+      () => findReviewsPageInSsr(runtime.itemId),
+      (reviewPage) => {
+        if (!runtime.active) return;
+        runtime.reviewCache = seedReviewCacheFromSsr(runtime.reviewCache, reviewPage);
         runtime.ssrSeeded = true;
         runtime.reviewPage = getActiveReviewPage(runtime.reviewCache);
         runtime.ui?.setReviews(runtime.reviewPage);
-        return;
-      }
-      attempts += 1;
-      if (attempts < 8) setTimeout(readSsr, 500);
-      else runtime.ui?.setStatus(reviewsDiagnosticMessage(inspection.diagnostic), true);
-    };
-    readSsr();
+      },
+      (diagnostic) => {
+        if (runtime.active) runtime.ui?.setStatus(reviewsDiagnosticMessage(diagnostic), true);
+      },
+    );
+    runtime.ssrRetryLifecycle.start();
+    return runtime;
   }
 
-  function start() {
-    if (isReviewsPage(location.href)) {
-      startReviewsPage();
-      return;
-    }
-    if (!isItemPage(location.href)) return;
-    const settings = loadSettings();
-    if (settings.autoRedirectComToRu && /(^|\.)aliexpress\.com$/i.test(location.hostname)) {
-      location.replace(normalizeItemUrl(location.href, 'ru').href);
-      return;
-    }
-
+  function startProductPage(pageWindow, settings) {
     const runtime = {
+      active: true,
       settings,
       product: null,
       shippingCapture: null,
@@ -2968,8 +3062,18 @@
       staleStoreBoundary: null,
       staleStoreDom: null,
       refreshProductEnrichment: null,
+      domReadyHandler: null,
+      pollingLifecycle: null,
+      dispose() {
+        if (!runtime.active) return;
+        runtime.active = false;
+        if (runtime.domReadyHandler) document.removeEventListener('DOMContentLoaded', runtime.domReadyHandler);
+        runtime.domReadyHandler = null;
+        runtime.pollingLifecycle?.dispose();
+      },
     };
     const acceptProductData = (data, meta) => {
+      if (!runtime.active) return;
       if (!isProductDataBoundToItem(data, runtime.itemId, meta)) return;
       try {
         const normalized = normalizeProduct(data, location.href, { title: document.title.replace(/\s*\|\s*AliExpress.*$/i, ''), source: meta.source });
@@ -2986,9 +3090,9 @@
       }
     };
 
-    const pageWindow = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     installProductDataInterceptor(pageWindow, acceptProductData);
     installShippingCalculateInterceptor(pageWindow, (capture) => {
+      if (!runtime.active) return;
       const delivery = normalizeDelivery(capture.request, capture.response);
       if (delivery.productId !== runtime.itemId) return;
       runtime.shippingCapture = capture;
@@ -3004,15 +3108,20 @@
     });
 
     const mount = () => {
-      if (!document.body || document.getElementById('ali-helper-host')) return;
+      if (!runtime.active || !document.body || document.getElementById('ali-helper-host')) return;
+      runtime.domReadyHandler = null;
       runtime.ui = createPanel(runtime);
       if (runtime.product) runtime.ui.setProduct(runtime.product);
     };
-    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount, { once: true });
+    if (document.readyState === 'loading') {
+      runtime.domReadyHandler = mount;
+      document.addEventListener('DOMContentLoaded', mount, { once: true });
+    }
     else mount();
 
     let attempts = 0;
     const refreshProductEnrichment = () => {
+      if (!runtime.active) return runtime.product;
       if (!runtime.product) return runtime.product;
       const ssrScript = runtime.itemId === runtime.initialItemId
         ? document.querySelector('#__AER_DATA__')
@@ -3130,6 +3239,7 @@
     runtime.refreshProductEnrichment = refreshProductEnrichment;
 
     const scanFallbacks = () => {
+      if (!runtime.active) return;
       if (location.href !== runtime.lastUrl) {
         runtime.lastUrl = location.href;
         const nextItemId = getItemId(location.href);
@@ -3181,8 +3291,23 @@
       }
       refreshProductEnrichment();
     };
-    setInterval(scanFallbacks, 1000);
-    scanFallbacks();
+    runtime.pollingLifecycle = createProductPollingLifecycle(scanFallbacks);
+    runtime.pollingLifecycle.start();
+    return runtime;
+  }
+
+  function start() {
+    const pageWindow = typeof unsafeWindow === 'object' && unsafeWindow ? unsafeWindow : window;
+    if (isReviewsPage(location.href)) {
+      return startPageRuntimeSingleton(pageWindow, 'reviews', () => startReviewsPage(pageWindow));
+    }
+    if (!isItemPage(location.href)) return null;
+    const settings = loadSettings();
+    if (settings.autoRedirectComToRu && /(^|\.)aliexpress\.com$/i.test(location.hostname)) {
+      location.replace(normalizeItemUrl(location.href, 'ru').href);
+      return null;
+    }
+    return startPageRuntimeSingleton(pageWindow, 'product', () => startProductPage(pageWindow, settings));
   }
 
   start();
