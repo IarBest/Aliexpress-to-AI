@@ -773,9 +773,20 @@ Acceptance: известный tracking удаляется, неизвестно
 
 - [x] Аудировать selectors на полный CSS-module hash и заменить устойчивыми
       fragments/IDs/attributes.
-- [ ] Добавить systematic limit-reached regressions и explicit safe diagnostics
+- [x] Добавить systematic limit-reached regressions и explicit safe diagnostics
       для relevant bounded traversals beyond reviews; сами depth/visited limits
       уже применяются широко.
+  - Reconciliation: aggregate/gather-all scans fail closed при фактическом
+    `maxVisited` / `maxDepth` cutoff; candidate, найденный до cutoff, не считается
+    полным результатом. Контракт покрывает Size Guide, Gallery, Store, SSR review
+    summary и exported/core basic-rating helper.
+  - Store existence сохраняет доказанный early match как `true`, а truncated miss
+    как `traversal-limit` / UNKNOWN; trusted current-item chat binding остаётся
+    достаточным независимо от незавершённого analytics scan.
+  - ProductData сохраняет first-match semantics: доказанный early candidate —
+    success, complete miss — обычный `null`, truncated miss — `traversal-limit`.
+    Legacy/simple extractor APIs сохранены. Aggregate SSR bound равен 80 после
+    наблюдения live AliExpress SSR до depth 66; reviews-page scanner не расширялся.
 - [ ] Унифицировать per-section source/missing/schema diagnostics; отдельные
       source fields и safe review diagnostics уже существуют.
 - [ ] Реализовать graceful partial model вместо молча неверного полного export.

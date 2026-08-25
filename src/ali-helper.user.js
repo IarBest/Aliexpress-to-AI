@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ali Helper
 // @namespace    https://github.com/local/ali-helper
-// @version      0.1.18
+// @version      0.1.19
 // @description  Read-only AliExpress URL cleaner and product/variant exporter
 // @match        https://aliexpress.ru/item/*
 // @match        https://www.aliexpress.com/item/*
@@ -18,10 +18,11 @@
 (function factory(root) {
   'use strict';
 
-  const VERSION = '0.1.18';
+  const VERSION = '0.1.19';
   const SETTINGS_KEY = 'ali-helper:settings:v1';
   const NATIVE_REVIEW_PATHNAME = '/aer-jsonapi/review/v5/desktop/product-reviews';
   const REVIEW_CAPTURE_CAP = 30;
+  const AGGREGATE_SSR_MAX_DEPTH = 80;
   const RUNTIME_REGISTRY_KEY = '__aliHelperRuntimeV1__';
   const INITIAL_REVIEW_CONTEXT = Object.freeze({ sort: 1, filters: [], skuFilter: [], pageSize: 10 });
   const CHARACTERISTICS_BOUNDARY_SELECTOR = '[class*="HazeProductCharacteristics__groupsContainerForSku"]';
@@ -78,6 +79,20 @@
 
   function firstDefined(...values) {
     return values.find((value) => value !== undefined && value !== null && value !== '');
+  }
+
+  function hasUnvisitedDepthCutoff(depthCutoffs, seen) {
+    for (const value of depthCutoffs) {
+      if (!seen.has(value)) return true;
+    }
+    return false;
+  }
+
+  function boundedTraversalReachedLimit(stack, seen, visited, maxVisited, depthCutoffs) {
+    if (hasUnvisitedDepthCutoff(depthCutoffs, seen)) return true;
+    return visited >= maxVisited && stack.some(({ value }) => (
+      value && typeof value === 'object' && !seen.has(value)
+    ));
   }
 
   function isProductDataBoundToItem(data, currentItemId, meta = {}) {
@@ -565,12 +580,18 @@
     };
   }
 
-  function normalizeSizeGuide(sizeData) {
-    if (!sizeData) return null;
+  function inspectSizeGuide(sizeData, limits = {}) {
+    if (!sizeData) return { sizeGuide: null, diagnostic: null };
+    const maxDepth = limits.maxDepth || 12;
     const tables = [];
     const seen = new WeakSet();
+    const depthCutoffs = new Set();
     function walk(value, unit, depth) {
-      if (!value || typeof value !== 'object' || depth > 12 || seen.has(value)) return;
+      if (!value || typeof value !== 'object' || seen.has(value)) return;
+      if (depth > maxDepth) {
+        depthCutoffs.add(value);
+        return;
+      }
       seen.add(value);
       const nextUnit = firstDefined(value.unit, value.measurementUnit, unit);
       if (looksLikeTable(value)) tables.push(normalizeTable(value, nextUnit));
@@ -585,7 +606,14 @@
       }
     }
     walk(sizeData, null, 0);
-    return { tables, raw: sizeData };
+    if (hasUnvisitedDepthCutoff(depthCutoffs, seen)) {
+      return { sizeGuide: null, diagnostic: 'traversal-limit' };
+    }
+    return { sizeGuide: { tables, raw: sizeData }, diagnostic: null };
+  }
+
+  function normalizeSizeGuide(sizeData, limits = {}) {
+    return inspectSizeGuide(sizeData, limits).sizeGuide;
   }
 
   function normalizeHumanText(value) {
@@ -678,19 +706,24 @@
     });
   }
 
-  function extractGalleryFromSsrData(rootValue, expectedItemId, limits = {}) {
+  function inspectGalleryFromSsrData(rootValue, expectedItemId, limits = {}) {
     const itemId = asString(expectedItemId);
-    if (!itemId) return null;
-    const maxDepth = limits.maxDepth || 40;
+    if (!itemId) return { gallery: null, diagnostic: null };
+    const maxDepth = limits.maxDepth || AGGREGATE_SSR_MAX_DEPTH;
     const maxVisited = limits.maxVisited || 30000;
     const seen = new WeakSet();
+    const depthCutoffs = new Set();
     const stack = [{ value: rootValue, depth: 0 }];
     const candidates = [];
     let visited = 0;
     while (stack.length && visited < maxVisited) {
       const current = stack.pop();
       const value = current.value;
-      if (!value || typeof value !== 'object' || seen.has(value) || current.depth > maxDepth) continue;
+      if (!value || typeof value !== 'object' || seen.has(value)) continue;
+      if (current.depth > maxDepth) {
+        depthCutoffs.add(value);
+        continue;
+      }
       seen.add(value);
       visited += 1;
       if (!Array.isArray(value) && value.props && typeof value.props === 'object') {
@@ -703,9 +736,19 @@
         if (child && typeof child === 'object') stack.push({ value: child, depth: current.depth + 1 });
       }
     }
-    if (!candidates.length) return null;
+    if (boundedTraversalReachedLimit(stack, seen, visited, maxVisited, depthCutoffs)) {
+      return { gallery: null, diagnostic: 'traversal-limit' };
+    }
+    if (!candidates.length) return { gallery: null, diagnostic: null };
     const first = candidates[0];
-    return candidates.every((candidate) => galleriesEqual(first, candidate)) ? first : null;
+    return {
+      gallery: candidates.every((candidate) => galleriesEqual(first, candidate)) ? first : null,
+      diagnostic: null,
+    };
+  }
+
+  function extractGalleryFromSsrData(rootValue, expectedItemId, limits = {}) {
+    return inspectGalleryFromSsrData(rootValue, expectedItemId, limits).gallery;
   }
 
   function updateGallery(product, gallery) {
@@ -1360,26 +1403,39 @@
     }
   }
 
-  function containsExpectedStoreItem(rootValue, expectedItemId, limits = {}) {
+  function inspectExpectedStoreItem(rootValue, expectedItemId, limits = {}) {
     const itemId = asString(expectedItemId);
-    if (!rootValue || !itemId) return false;
+    if (!rootValue || !itemId) return { matched: false, diagnostic: null };
     const maxDepth = limits.maxDepth || 12;
     const maxVisited = limits.maxVisited || 3000;
     const seen = new WeakSet();
+    const depthCutoffs = new Set();
     const stack = [{ value: rootValue, depth: 0 }];
     let visited = 0;
     while (stack.length && visited < maxVisited) {
       const current = stack.pop();
       const value = current.value;
-      if (!value || typeof value !== 'object' || seen.has(value) || current.depth > maxDepth) continue;
+      if (!value || typeof value !== 'object' || seen.has(value)) continue;
+      if (current.depth > maxDepth) {
+        depthCutoffs.add(value);
+        continue;
+      }
       seen.add(value);
       visited += 1;
       for (const [key, child] of Object.entries(value)) {
-        if (/^item_?id$/i.test(key) && asString(child) === itemId) return true;
+        if (/^item_?id$/i.test(key) && asString(child) === itemId) {
+          return { matched: true, diagnostic: null };
+        }
         if (child && typeof child === 'object') stack.push({ value: child, depth: current.depth + 1 });
       }
     }
-    return false;
+    return boundedTraversalReachedLimit(stack, seen, visited, maxVisited, depthCutoffs)
+      ? { matched: false, diagnostic: 'traversal-limit' }
+      : { matched: false, diagnostic: null };
+  }
+
+  function containsExpectedStoreItem(rootValue, expectedItemId, limits = {}) {
+    return inspectExpectedStoreItem(rootValue, expectedItemId, limits).matched;
   }
 
   function subtitleValue(props, type) {
@@ -1390,26 +1446,28 @@
     return matches.length === 1 ? matches[0] : null;
   }
 
-  function storeFromSsrProps(props, expectedItemId) {
-    if (!props || typeof props !== 'object' || Array.isArray(props)) return null;
-    if (hasMismatchedStoreChatItem(props.chatLink, expectedItemId)) return null;
+  function inspectStoreFromSsrProps(props, expectedItemId, limits = {}) {
+    if (!props || typeof props !== 'object' || Array.isArray(props)) {
+      return { store: null, diagnostic: null };
+    }
+    if (hasMismatchedStoreChatItem(props.chatLink, expectedItemId)) {
+      return { store: null, diagnostic: null };
+    }
     const chat = parseStoreChatLink(props.chatLink, expectedItemId);
-    const analyticsMatched = containsExpectedStoreItem(props.analytics, expectedItemId);
-    if (!chat && !analyticsMatched) return null;
     const subtitles = Array.isArray(props.subtitles) ? props.subtitles : [];
     const hasStoreEvidence = Boolean(chat)
       || Boolean(storeIdFromUrl(props.url))
       || Object.prototype.hasOwnProperty.call(props, 'positiveReviews')
       || Object.prototype.hasOwnProperty.call(props, 'subscribersCount')
       || subtitles.some((subtitle) => subtitle?.type === 0 || subtitle?.type === 1);
-    if (!hasStoreEvidence) return null;
+    if (!hasStoreEvidence) return { store: null, diagnostic: null };
     const propsSellerId = decimalId(props.id);
     const sellerId = propsSellerId && chat?.sellerId && propsSellerId !== chat.sellerId
       ? null
       : propsSellerId || chat?.sellerId || null;
     const sellerDisplay = subtitleValue(props, 0);
     const subscriberDisplay = subtitleValue(props, 1);
-    return normalizeStore({
+    const store = normalizeStore({
       name: props.name,
       url: props.url,
       sellerId,
@@ -1422,6 +1480,17 @@
         display: /subscribers/i.test(subscriberDisplay || '') ? subscriberDisplay : null,
       },
     });
+    if (!store) return { store: null, diagnostic: null };
+    if (!chat) {
+      const analyticsInspection = inspectExpectedStoreItem(props.analytics, expectedItemId, limits);
+      if (analyticsInspection.diagnostic) return { store: null, diagnostic: analyticsInspection.diagnostic };
+      if (!analyticsInspection.matched) return { store: null, diagnostic: null };
+    }
+    return { store, diagnostic: null };
+  }
+
+  function storeFromSsrProps(props, expectedItemId, limits = {}) {
+    return inspectStoreFromSsrProps(props, expectedItemId, limits).store;
   }
 
   function storesEqual(left, right) {
@@ -1436,32 +1505,50 @@
       && left.subscribers?.display === right.subscribers?.display;
   }
 
-  function extractStoreFromSsrData(rootValue, expectedItemId, limits = {}) {
+  function inspectStoreFromSsrData(rootValue, expectedItemId, limits = {}) {
     const itemId = asString(expectedItemId);
-    if (!itemId) return null;
-    const maxDepth = limits.maxDepth || 40;
+    if (!itemId) return { store: null, diagnostic: null };
+    const maxDepth = limits.maxDepth || AGGREGATE_SSR_MAX_DEPTH;
     const maxVisited = limits.maxVisited || 30000;
     const seen = new WeakSet();
+    const depthCutoffs = new Set();
     const stack = [{ value: rootValue, depth: 0 }];
     const candidates = [];
+    let candidateTraversalLimited = false;
     let visited = 0;
     while (stack.length && visited < maxVisited) {
       const current = stack.pop();
       const value = current.value;
-      if (!value || typeof value !== 'object' || seen.has(value) || current.depth > maxDepth) continue;
+      if (!value || typeof value !== 'object' || seen.has(value)) continue;
+      if (current.depth > maxDepth) {
+        depthCutoffs.add(value);
+        continue;
+      }
       seen.add(value);
       visited += 1;
       if (!Array.isArray(value) && value.props && typeof value.props === 'object') {
-        const candidate = storeFromSsrProps(value.props, itemId);
-        if (candidate) candidates.push(candidate);
+        const inspection = inspectStoreFromSsrProps(value.props, itemId, limits.analytics || {});
+        if (inspection.diagnostic) candidateTraversalLimited = true;
+        else if (inspection.store) candidates.push(inspection.store);
       }
       for (const child of Object.values(value)) {
         if (child && typeof child === 'object') stack.push({ value: child, depth: current.depth + 1 });
       }
     }
-    if (!candidates.length) return null;
+    if (candidateTraversalLimited
+      || boundedTraversalReachedLimit(stack, seen, visited, maxVisited, depthCutoffs)) {
+      return { store: null, diagnostic: 'traversal-limit' };
+    }
+    if (!candidates.length) return { store: null, diagnostic: null };
     const first = candidates[0];
-    return candidates.every((candidate) => storesEqual(first, candidate)) ? first : null;
+    return {
+      store: candidates.every((candidate) => storesEqual(first, candidate)) ? first : null,
+      diagnostic: null,
+    };
+  }
+
+  function extractStoreFromSsrData(rootValue, expectedItemId, limits = {}) {
+    return inspectStoreFromSsrData(rootValue, expectedItemId, limits).store;
   }
 
   function findStoreBoundary(rootNode) {
@@ -1559,16 +1646,21 @@
   }
 
   function collectObjectDescendants(rootValue, predicate, limits = {}) {
-    const maxDepth = limits.maxDepth || 50;
+    const maxDepth = limits.maxDepth || AGGREGATE_SSR_MAX_DEPTH;
     const maxVisited = limits.maxVisited || 30000;
     const seen = new WeakSet();
+    const depthCutoffs = new Set();
     const stack = [{ value: rootValue, depth: 0 }];
     const results = [];
     let visited = 0;
     while (stack.length && visited < maxVisited) {
       const current = stack.pop();
       const value = current.value;
-      if (!value || typeof value !== 'object' || seen.has(value) || current.depth > maxDepth) continue;
+      if (!value || typeof value !== 'object' || seen.has(value)) continue;
+      if (current.depth > maxDepth) {
+        depthCutoffs.add(value);
+        continue;
+      }
       seen.add(value);
       visited += 1;
       if (!Array.isArray(value) && predicate(value)) results.push(value);
@@ -1576,7 +1668,13 @@
         if (child && typeof child === 'object') stack.push({ value: child, depth: current.depth + 1 });
       }
     }
-    return results;
+    return boundedTraversalReachedLimit(stack, seen, visited, maxVisited, depthCutoffs)
+      ? { values: null, diagnostic: 'traversal-limit' }
+      : { values: results, diagnostic: null };
+  }
+
+  function inspectObjectDescendants(rootValue, predicate, limits = {}) {
+    return collectObjectDescendants(rootValue, predicate, limits);
   }
 
   function boundReviewTabsCandidate(widget, expectedItemId) {
@@ -1605,29 +1703,34 @@
     return values.length === 1 ? values[0] : null;
   }
 
-  function extractReviewSummaryFromSsrData(rootValue, expectedItemId, limits = {}) {
-    const contexts = collectObjectDescendants(
+  function inspectReviewSummaryFromSsrData(rootValue, expectedItemId, limits = {}) {
+    const itemId = asString(expectedItemId);
+    if (!itemId) return { summary: null, diagnostic: null };
+    const contextInspection = inspectObjectDescendants(
       rootValue,
       (value) => widgetFamily(value, 'bx/RedReviewsContextWidget/'),
-      limits,
+      limits.contexts || limits,
     );
+    if (contextInspection.diagnostic) return { summary: null, diagnostic: 'traversal-limit' };
     const candidates = [];
-    for (const context of contexts) {
-      const tabsWidgets = collectObjectDescendants(
+    for (const context of contextInspection.values) {
+      const tabsInspection = inspectObjectDescendants(
         context,
         (value) => widgetFamily(value, 'bx/RedReviewsTabs/'),
-        limits,
+        limits.tabs || limits,
       );
-      for (const tabs of tabsWidgets) {
-        const binding = boundReviewTabsCandidate(tabs, expectedItemId);
+      if (tabsInspection.diagnostic) return { summary: null, diagnostic: 'traversal-limit' };
+      for (const tabs of tabsInspection.values) {
+        const binding = boundReviewTabsCandidate(tabs, itemId);
         if (!binding) continue;
-        const feedbackWidgets = collectObjectDescendants(
+        const feedbackInspection = inspectObjectDescendants(
           tabs,
           (value) => widgetFamily(value, 'bx/RedReviewsProductFeedbackList/')
             && value.props?.placement === 'PDP',
-          limits,
+          limits.feedback || limits,
         );
-        const totals = feedbackWidgets.map((widget) => {
+        if (feedbackInspection.diagnostic) return { summary: null, diagnostic: 'traversal-limit' };
+        const totals = feedbackInspection.values.map((widget) => {
           const params = widget.props?.resolveParams;
           const hasReviews = params && Object.prototype.hasOwnProperty.call(params, 'review.productReviewsCount');
           const hasFeedbacks = params && Object.prototype.hasOwnProperty.call(params, 'review.productFeedbacksCount');
@@ -1643,14 +1746,21 @@
         });
       }
     }
-    if (!candidates.length) return null;
+    if (!candidates.length) return { summary: null, diagnostic: null };
     const result = emptyRatingSummary();
     result.rating = resolveConsistentField(candidates, 'rating');
     result.reviewCount = resolveConsistentField(candidates, 'reviewCount');
     result.contentFeedbackCount = resolveConsistentField(candidates, 'contentFeedbackCount');
-    return result.rating === null && result.reviewCount === null && result.contentFeedbackCount === null
-      ? null
-      : withRatingDiagnostics(result);
+    return {
+      summary: result.rating === null && result.reviewCount === null && result.contentFeedbackCount === null
+        ? null
+        : withRatingDiagnostics(result),
+      diagnostic: null,
+    };
+  }
+
+  function extractReviewSummaryFromSsrData(rootValue, expectedItemId, limits = {}) {
+    return inspectReviewSummaryFromSsrData(rootValue, expectedItemId, limits).summary;
   }
 
   function primitiveRatingCandidate(props, expectedItemId) {
@@ -1676,17 +1786,22 @@
     };
   }
 
-  function extractBasicRatingFromSsrData(rootValue, expectedItemId, limits = {}) {
-    const maxDepth = limits.maxDepth || 40;
+  function inspectBasicRatingFromSsrData(rootValue, expectedItemId, limits = {}) {
+    const maxDepth = limits.maxDepth || AGGREGATE_SSR_MAX_DEPTH;
     const maxVisited = limits.maxVisited || 30000;
     const seen = new WeakSet();
+    const depthCutoffs = new Set();
     const stack = [{ value: rootValue, depth: 0 }];
     const candidates = [];
     let visited = 0;
     while (stack.length && visited < maxVisited) {
       const current = stack.pop();
       const value = current.value;
-      if (!value || typeof value !== 'object' || seen.has(value) || current.depth > maxDepth) continue;
+      if (!value || typeof value !== 'object' || seen.has(value)) continue;
+      if (current.depth > maxDepth) {
+        depthCutoffs.add(value);
+        continue;
+      }
       seen.add(value);
       visited += 1;
       if (!Array.isArray(value) && value.props && typeof value.props === 'object') {
@@ -1697,7 +1812,10 @@
         if (child && typeof child === 'object') stack.push({ value: child, depth: current.depth + 1 });
       }
     }
-    if (!candidates.length) return null;
+    if (boundedTraversalReachedLimit(stack, seen, visited, maxVisited, depthCutoffs)) {
+      return { summary: null, diagnostic: 'traversal-limit' };
+    }
+    if (!candidates.length) return { summary: null, diagnostic: null };
     const coherent = candidates.filter((candidate) => candidate.rating !== null && candidate.reviewCount !== null);
     const pool = coherent.length ? coherent : candidates;
     const resolveField = (field) => {
@@ -1707,7 +1825,14 @@
     const result = emptyRatingSummary();
     result.rating = resolveField('rating');
     result.reviewCount = resolveField('reviewCount');
-    return result.rating === null && result.reviewCount === null ? null : result;
+    return {
+      summary: result.rating === null && result.reviewCount === null ? null : result,
+      diagnostic: null,
+    };
+  }
+
+  function extractBasicRatingFromSsrData(rootValue, expectedItemId, limits = {}) {
+    return inspectBasicRatingFromSsrData(rootValue, expectedItemId, limits).summary;
   }
 
   function findProductHeaderBoundary(rootNode) {
@@ -2045,27 +2170,40 @@
     return Boolean(boundary && boundary === staleBoundary && descriptionsEqual(description, staleDescription));
   }
 
-  function findProductDataCandidate(rootValue, limits = {}) {
+  function inspectProductDataCandidate(rootValue, limits = {}) {
     const maxDepth = limits.maxDepth || 30;
     const maxVisited = limits.maxVisited || 30000;
     const seen = new WeakSet();
+    const depthCutoffs = new Set();
     const stack = [{ value: rootValue, depth: 0, path: '$' }];
     let visited = 0;
     while (stack.length && visited < maxVisited) {
       const current = stack.pop();
       const value = current.value;
-      if (!value || typeof value !== 'object' || seen.has(value) || current.depth > maxDepth) continue;
+      if (!value || typeof value !== 'object' || seen.has(value)) continue;
+      if (current.depth > maxDepth) {
+        depthCutoffs.add(value);
+        continue;
+      }
       seen.add(value);
       visited += 1;
       const skuInfo = value.skuInfo;
       if (skuInfo && Array.isArray(skuInfo.propertyList) && Array.isArray(skuInfo.priceList)) {
-        return { data: value, path: current.path };
+        return hasUnvisitedDepthCutoff(depthCutoffs, seen)
+          ? { candidate: null, diagnostic: 'traversal-limit' }
+          : { candidate: { data: value, path: current.path }, diagnostic: null };
       }
       for (const [key, child] of Object.entries(value)) {
         if (child && typeof child === 'object') stack.push({ value: child, depth: current.depth + 1, path: `${current.path}.${key}` });
       }
     }
-    return null;
+    return boundedTraversalReachedLimit(stack, seen, visited, maxVisited, depthCutoffs)
+      ? { candidate: null, diagnostic: 'traversal-limit' }
+      : { candidate: null, diagnostic: null };
+  }
+
+  function findProductDataCandidate(rootValue, limits = {}) {
+    return inspectProductDataCandidate(rootValue, limits).candidate;
   }
 
   function normalizeProduct(productData, pageUrl, fallbacks = {}) {
@@ -2453,12 +2591,14 @@
     applyCachedDelivery,
     normalizeVariantGroups,
     normalizeSkus,
+    inspectSizeGuide,
     normalizeSizeGuide,
     normalizeCharacteristics,
     extractCharacteristicsFromDom,
     updateCharacteristics,
     normalizeGallery,
     galleriesEqual,
+    inspectGalleryFromSsrData,
     extractGalleryFromSsrData,
     updateGallery,
     normalizeReviewRecord,
@@ -2487,8 +2627,11 @@
     storeIdFromUrl,
     normalizeStore,
     parseStoreChatLink,
+    inspectExpectedStoreItem,
     containsExpectedStoreItem,
+    inspectStoreFromSsrProps,
     storeFromSsrProps,
+    inspectStoreFromSsrData,
     extractStoreFromSsrData,
     findStoreBoundary,
     extractStoreFromDom,
@@ -2496,7 +2639,10 @@
     storesEqual,
     updateStore,
     isStaleStore,
+    inspectObjectDescendants,
+    inspectReviewSummaryFromSsrData,
     extractReviewSummaryFromSsrData,
+    inspectBasicRatingFromSsrData,
     extractBasicRatingFromSsrData,
     findProductHeaderBoundary,
     extractBasicRatingFromDom,
@@ -2519,6 +2665,7 @@
     descriptionsEqual,
     updateDescription,
     isStaleDescription,
+    inspectProductDataCandidate,
     findProductDataCandidate,
     isProductDataBoundToItem,
     normalizeProduct,
