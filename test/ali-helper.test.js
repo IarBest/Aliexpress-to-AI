@@ -1286,11 +1286,17 @@ test('rating summary merge prioritizes SSR numerics, DOM bought/display, and lat
   });
   const fixture = loadFixture('product-1005008195850531.json');
   const product = core.normalizeProduct(fixture.data, 'https://aliexpress.ru/item/1005008195850531.html');
-  const structuredProduct = core.updateRatingSummary(product, structured);
-  const enriched = core.updateRatingSummary(structuredProduct, merged);
+  const structuredProduct = core.updateRatingSummary(product, structured, ['ssr:__AER_DATA__']);
+  const enriched = core.updateRatingSummary(structuredProduct, merged, [
+    'ssr:__AER_DATA__', 'dom:product-header',
+  ]);
   assert.equal(enriched.ratingSummary.boughtCount, 13);
-  assert.equal(core.updateRatingSummary(enriched, merged), enriched);
-  assert.equal(core.updateRatingSummary(enriched, null), enriched);
+  assert.equal(core.updateRatingSummary(enriched, merged, [
+    'ssr:__AER_DATA__', 'dom:product-header',
+  ]), enriched);
+  assert.equal(core.updateRatingSummary(enriched, null, [
+    'ssr:__AER_DATA__', 'dom:product-header',
+  ]), enriched);
 });
 
 test('rating summary distinguishes real zero from unknown and remains reference-stable', () => {
@@ -1300,7 +1306,7 @@ test('rating summary distinguishes real zero from unknown and remains reference-
     rating: 0, reviewCount: 0, boughtCount: 0,
     display: { rating: '0', reviewCount: '0 reviews', boughtCount: '0 bought' },
   };
-  const updated = core.updateRatingSummary(product, zero);
+  const updated = core.updateRatingSummary(product, zero, ['dom:product-header']);
   assert.deepEqual(updated.ratingSummary, {
     ...zero,
     contentFeedbackCount: null,
@@ -1310,7 +1316,11 @@ test('rating summary distinguishes real zero from unknown and remains reference-
     diagnostics: { starDistributionTotal: null, starDistributionMatchesReviewCount: null },
     display: { ...zero.display, buyerPhotosCount: null },
   });
-  assert.equal(core.updateRatingSummary(updated, { rating: null, reviewCount: null, boughtCount: null, display: {} }), updated);
+  assert.equal(core.updateRatingSummary(
+    updated,
+    { rating: null, reviewCount: null, boughtCount: null, display: {} },
+    ['dom:product-header'],
+  ), updated);
 });
 
 test('same-item productData refresh and SKU switch preserve rating summary', () => {
@@ -1320,10 +1330,11 @@ test('same-item productData refresh and SKU switch preserve rating summary', () 
     rating: 4.6, reviewCount: 36, boughtCount: 413,
     display: { rating: '4.6', reviewCount: '36 reviews', boughtCount: '413 bought' },
   };
-  const enriched = core.updateRatingSummary(initial, summary);
+  const enriched = core.updateRatingSummary(initial, summary, ['dom:product-header']);
   const refreshed = core.updateRatingSummary(
     core.normalizeProduct(fixture.data, 'https://aliexpress.ru/item/1005009452926938.html'),
     enriched.ratingSummary,
+    ['dom:product-header'],
   );
   const switched = core.updateSelectedSku(enriched, 'https://aliexpress.ru/item/1005009452926938.html?sku_id=12000049151727530');
   assert.deepEqual(refreshed.ratingSummary, enriched.ratingSummary);
@@ -1680,7 +1691,11 @@ test('rating diagnostics are recomputed after merge and null patches preserve sa
 
   const productFixture = loadFixture('product-1005009452926938.json');
   const product = core.normalizeProduct(productFixture.data, fixture.sourceUrl);
-  const enriched = core.updateRatingSummary(product, core.mergeRatingSummary(structured, null, reviewDom));
+  const enriched = core.updateRatingSummary(
+    product,
+    core.mergeRatingSummary(structured, null, reviewDom),
+    ['ssr:__AER_DATA__', 'dom:review-section'],
+  );
   const unchanged = core.updateRatingSummary(enriched, {
     rating: null,
     reviewCount: null,
@@ -1689,7 +1704,7 @@ test('rating diagnostics are recomputed after merge and null patches preserve sa
     buyerPhotosCount: null,
     reviewTopics: null,
     display: {},
-  });
+  }, ['ssr:__AER_DATA__', 'dom:review-section']);
   assert.equal(unchanged, enriched);
 });
 
@@ -2036,11 +2051,11 @@ test('same-item productData refresh and SKU switch preserve store while stale ol
   const initial = core.updateStore(core.normalizeProduct(
     productFixture.data,
     'https://aliexpress.ru/item/1005009452926938.html?sku_id=12000049151727540',
-  ), store);
+  ), store, ['ssr:__AER_DATA__']);
   const refreshed = core.updateStore(core.normalizeProduct(
     productFixture.data,
     'https://aliexpress.ru/item/1005009452926938.html',
-  ), initial.store);
+  ), initial.store, ['ssr:__AER_DATA__']);
   const switched = core.updateSelectedSku(initial, 'https://aliexpress.ru/item/1005009452926938.html?sku_id=12000049151727530');
   const oldBoundary = { sentinel: 'old store boundary' };
 

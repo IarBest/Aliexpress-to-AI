@@ -122,7 +122,7 @@ test('Size Guide fails closed when depth hides a table after a plausible table',
   assert.equal(core.inspectSizeGuide(beforeOnlyCandidate, { maxDepth: 2 }).diagnostic, 'traversal-limit');
 
   const exactDepthMiss = core.inspectSizeGuide(nested({}, 2), { maxDepth: 2 });
-  assert.equal(exactDepthMiss.diagnostic, null);
+  assert.equal(exactDepthMiss.diagnostic, 'schema-mismatch');
   assert.deepEqual(exactDepthMiss.sizeGuide.tables, []);
   assert.deepEqual(input, snapshot);
 });
@@ -154,7 +154,7 @@ test('Gallery complete success, miss, and conflict keep their existing semantics
   });
   assert.deepEqual(core.inspectGalleryFromSsrData({ first, conflict }, 'item'), {
     gallery: null,
-    diagnostic: null,
+    diagnostic: 'conflict',
   });
   assert.deepEqual(input, snapshot);
 });
@@ -344,7 +344,7 @@ test('Outer Store scan fails closed at its own limits and keeps complete conflic
   });
   assert.deepEqual(core.inspectStoreFromSsrData({ first, second }, itemId), {
     store: null,
-    diagnostic: null,
+    diagnostic: 'conflict',
   });
   assert.deepEqual(depthInput, snapshot);
 });
@@ -496,7 +496,7 @@ test('Basic rating keeps complete success/conflict semantics and rejects visited
   assert.equal(complete.summary.reviewCount, 5);
   assert.deepEqual(core.inspectBasicRatingFromSsrData({ first, conflict }, itemId), {
     summary: null,
-    diagnostic: null,
+    diagnostic: 'conflict',
   });
 
   const before = { candidate: first };

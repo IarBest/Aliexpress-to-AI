@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ali Helper
 // @namespace    https://github.com/local/ali-helper
-// @version      0.1.19
+// @version      0.1.20
 // @description  Read-only AliExpress URL cleaner and product/variant exporter
 // @match        https://aliexpress.ru/item/*
 // @match        https://www.aliexpress.com/item/*
@@ -18,7 +18,7 @@
 (function factory(root) {
   'use strict';
 
-  const VERSION = '0.1.19';
+  const VERSION = '0.1.20';
   const SETTINGS_KEY = 'ali-helper:settings:v1';
   const NATIVE_REVIEW_PATHNAME = '/aer-jsonapi/review/v5/desktop/product-reviews';
   const REVIEW_CAPTURE_CAP = 30;
@@ -55,6 +55,7 @@
   const STORE_CHAT_BUTTON_SELECTOR = '[data-testid="seller_chat_btn"]';
   const DESCRIPTION_BOUNDARY_SELECTOR = '#content_anchor';
   const DESCRIPTION_IGNORED_TAGS = new Set(['script', 'style', 'noscript', 'template']);
+  const DESCRIPTION_RELEVANT_MEDIA_TAGS = new Set(['img', 'video', 'source', 'iframe']);
   const DESCRIPTION_BLOCK_TAGS = new Set([
     'address', 'article', 'aside', 'blockquote', 'details', 'div', 'dl', 'dt', 'dd',
     'fieldset', 'figcaption', 'figure', 'footer', 'header', 'hr', 'li', 'main', 'nav',
@@ -65,6 +66,23 @@
     autoRedirectComToRu: true,
     panelCollapsed: false,
   });
+  const SECTION_SOURCE_ORDER = Object.freeze([
+    'productData',
+    'ssr:__AER_DATA__',
+    'dom:product-header',
+    'dom:review-section',
+    'dom:store',
+    'dom:characteristics',
+    'dom:description',
+    'native:shipping-calculate',
+  ]);
+  const SECTION_SOURCE_LABELS = new Set(SECTION_SOURCE_ORDER);
+  const SECTION_STATES = new Set(['present', 'missing', 'not-observed', 'invalid']);
+  const SECTION_DIAGNOSTICS = new Set(['schema-mismatch', 'conflict', 'traversal-limit']);
+  const SECTION_DIAGNOSTIC_PRIORITY = Object.freeze(['traversal-limit', 'conflict', 'schema-mismatch']);
+
+  // For present sections, sources contributed accepted values. Otherwise they
+  // name the trusted sources that were checked for the current item context.
 
   const TRACKING_PARAM_NAMES = new Set([
     'spm', 'scm', 'pvid', 'algo_exp_id', 'pdp_npi', 'gps-id', 'ws_ab_test',
@@ -79,6 +97,139 @@
 
   function firstDefined(...values) {
     return values.find((value) => value !== undefined && value !== null && value !== '');
+  }
+
+  function normalizeSectionSources(sources) {
+    const requested = new Set((Array.isArray(sources) ? sources : [sources])
+      .filter((source) => SECTION_SOURCE_LABELS.has(source)));
+    return SECTION_SOURCE_ORDER.filter((source) => requested.has(source));
+  }
+
+  function createSectionDiagnostic(state, sources = [], diagnostic = null) {
+    if (!SECTION_STATES.has(state)) throw new Error(`Unknown section state: ${state}`);
+    const normalizedSources = normalizeSectionSources(sources);
+    if (state === 'present' && !normalizedSources.length) {
+      throw new Error('Present section diagnostics require a semantic source');
+    }
+    if (state === 'invalid') {
+      if (!SECTION_DIAGNOSTICS.has(diagnostic)) throw new Error(`Unknown section diagnostic: ${diagnostic}`);
+    } else if (diagnostic !== null) {
+      throw new Error(`Section state ${state} cannot carry a diagnostic`);
+    }
+    return { state, sources: normalizedSources, diagnostic };
+  }
+
+  function sectionDiagnosticsEqual(left, right) {
+    return Boolean(left && right
+      && left.state === right.state
+      && left.diagnostic === right.diagnostic
+      && Array.isArray(left.sources)
+      && Array.isArray(right.sources)
+      && left.sources.length === right.sources.length
+      && left.sources.every((source, index) => source === right.sources[index]));
+  }
+
+  function withSectionDiagnostic(product, section, diagnostic) {
+    if (!product) return product;
+    const previous = product._meta?.sections?.[section];
+    if (sectionDiagnosticsEqual(previous, diagnostic)) return product;
+    return {
+      ...product,
+      _meta: {
+        ...(product._meta || {}),
+        sections: { ...(product._meta?.sections || {}), [section]: diagnostic },
+      },
+    };
+  }
+
+  function withSectionValueAndDiagnostic(product, section, value, diagnostic, equal = (left, right) => left === right) {
+    if (!product) return product;
+    const sameValue = equal(product[section], value);
+    const sameDiagnostic = sectionDiagnosticsEqual(product._meta?.sections?.[section], diagnostic);
+    if (sameValue && sameDiagnostic) return product;
+    return {
+      ...product,
+      [section]: sameValue ? product[section] : value,
+      _meta: {
+        ...(product._meta || {}),
+        sections: { ...(product._meta?.sections || {}), [section]: diagnostic },
+      },
+    };
+  }
+
+  function presentSectionDiagnostic(product, section, sources, preservePreviousSources = false) {
+    const previousSources = preservePreviousSources && product?._meta?.sections?.[section]?.state === 'present'
+      ? product._meta.sections[section].sources
+      : [];
+    return createSectionDiagnostic('present', [...previousSources, ...sources]);
+  }
+
+  function createSectionObservation(source, value, diagnostic = null, observed = true) {
+    const wasObserved = Boolean(observed);
+    const normalizedDiagnostic = wasObserved && SECTION_DIAGNOSTICS.has(diagnostic) ? diagnostic : null;
+    return {
+      source: normalizeSectionSources([source])[0] || null,
+      value: wasObserved && !normalizedDiagnostic ? value : null,
+      diagnostic: normalizedDiagnostic,
+      observed: wasObserved,
+    };
+  }
+
+  function observationFromInput(inputs, inspectionKey, valueKey, source) {
+    if (Object.prototype.hasOwnProperty.call(inputs, inspectionKey)) {
+      const inspection = inputs[inspectionKey] || {};
+      return createSectionObservation(
+        source,
+        inspection.value ?? null,
+        inspection.diagnostic ?? null,
+        inspection.observed !== false,
+      );
+    }
+    if (Object.prototype.hasOwnProperty.call(inputs, valueKey)) {
+      return createSectionObservation(source, inputs[valueKey] ?? null);
+    }
+    return null;
+  }
+
+  function applyMissingSectionDiagnostic(product, section, observations) {
+    const diagnostic = sectionDiagnosticFromObservations(observations, false);
+    if (product?._meta?.sections?.[section]?.state === 'present' && diagnostic.state !== 'invalid') {
+      return product;
+    }
+    const emptyValue = section === 'characteristics' ? [] : null;
+    const equal = ({
+      gallery: galleriesEqual,
+      ratingSummary: ratingSummariesEqual,
+      store: storesEqual,
+      characteristics: characteristicsEqual,
+      description: descriptionsEqual,
+    })[section] || ((left, right) => left === right);
+    return withSectionValueAndDiagnostic(product, section, emptyValue, diagnostic, equal);
+  }
+
+  function firstSectionDiagnostic(observations) {
+    const diagnostics = new Set(observations
+      .filter((observation) => observation?.observed !== false)
+      .map((observation) => observation?.diagnostic)
+      .filter((diagnostic) => SECTION_DIAGNOSTICS.has(diagnostic)));
+    return SECTION_DIAGNOSTIC_PRIORITY.find((diagnostic) => diagnostics.has(diagnostic)) || null;
+  }
+
+  function sectionDiagnosticFromObservations(observations, hasValue) {
+    const usable = (observations || []).filter(Boolean);
+    const observed = usable.filter((observation) => observation.observed !== false);
+    if (hasValue) {
+      const contributingSources = observed
+        .filter((observation) => observation.value !== null && observation.value !== undefined)
+        .map((observation) => observation.source);
+      if (contributingSources.length) return createSectionDiagnostic('present', contributingSources);
+    }
+    const diagnostic = firstSectionDiagnostic(observed);
+    if (diagnostic) {
+      return createSectionDiagnostic('invalid', observed.map((observation) => observation.source), diagnostic);
+    }
+    if (observed.length) return createSectionDiagnostic('missing', observed.map((observation) => observation.source));
+    return createSectionDiagnostic('not-observed');
   }
 
   function hasUnvisitedDepthCutoff(depthCutoffs, seen) {
@@ -103,6 +254,24 @@
     if (meta.source !== 'network:productData') return false;
     const requestItemId = asString(meta.requestItemId);
     return Boolean(requestItemId && requestItemId === expectedItemId);
+  }
+
+  function productDataRequestItemId(input, baseUrl) {
+    try {
+      const value = typeof input === 'string' ? input : input?.url;
+      const url = new URL(value, baseUrl);
+      const candidates = [...url.searchParams.entries()]
+        .filter(([key]) => ['item', 'itemid', 'productid', 'productidv2']
+          .includes(key.toLowerCase().replace(/[_-]/g, '')))
+        .map(([, candidate]) => candidate.trim());
+      if (!candidates.length) return undefined;
+      if (candidates.some((candidate) => !/^\d+$/.test(candidate))) return null;
+      const ids = candidates;
+      const unique = [...new Set(ids)];
+      return unique.length === 1 ? unique[0] : null;
+    } catch (_) {
+      return undefined;
+    }
   }
 
   function isItemPage(input) {
@@ -353,47 +522,204 @@
     return value === undefined || value === null ? null : Boolean(value);
   }
 
-  function normalizeDelivery(request, response) {
-    const shippingRequest = request && typeof request === 'object' ? request : {};
-    const shippingResponse = response && typeof response === 'object' ? response : {};
-    const destination = shippingResponse.to && typeof shippingResponse.to === 'object' ? shippingResponse.to : {};
+  function isPlainRecord(value) {
+    return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+  }
+
+  function isSafeTextValue(value) {
+    return value === null || value === undefined || value === ''
+      || typeof value === 'string'
+      || (typeof value === 'number' && Number.isFinite(value));
+  }
+
+  function safeText(...values) {
+    if (values.length === 1) return isSafeTextValue(values[0]) ? asString(values[0]) : null;
+    const value = values.find((candidate) => candidate !== undefined && candidate !== null
+      && candidate !== '' && isSafeTextValue(candidate));
+    return asString(value);
+  }
+
+  const DELIVERY_MONEY_FIELDS = Object.freeze([
+    'value', 'amount', 'price', 'minAmount', 'minPrice',
+    'currency', 'currencyCode', 'tradeCurrency',
+    'formatted', 'display', 'text', 'formattedAmount',
+  ]);
+
+  function isSafeDeliveryMoney(value) {
+    if (value === null || value === undefined || value === '') return true;
+    if (typeof value === 'string') return true;
+    if (typeof value === 'number') return Number.isFinite(value);
+    if (!isPlainRecord(value)) return false;
+    const supplied = DELIVERY_MONEY_FIELDS.filter((field) => (
+      Object.prototype.hasOwnProperty.call(value, field)
+      && value[field] !== null && value[field] !== undefined && value[field] !== ''
+    ));
+    return supplied.length > 0 && supplied.every((field) => isSafeTextValue(value[field]));
+  }
+
+  function normalizeDeliveryMoney(value) {
+    if (value === null || value === undefined || value === '') return null;
+    if (typeof value === 'number' || typeof value === 'string') return normalizeMoney(value);
+    if (!isPlainRecord(value)) return null;
+    const amount = safeText(value.value, value.amount, value.price, value.minAmount, value.minPrice);
+    const currency = safeText(value.currency, value.currencyCode, value.tradeCurrency);
+    const formatted = safeText(value.formatted, value.display, value.text, value.formattedAmount);
+    const raw = Object.fromEntries(DELIVERY_MONEY_FIELDS
+      .filter((field) => Object.prototype.hasOwnProperty.call(value, field) && isSafeTextValue(value[field]))
+      .map((field) => [field, value[field]]));
     return {
-      productId: asString(firstDefined(shippingRequest.productIdV2, shippingRequest.productId)),
-      skuId: asString(shippingRequest.skuId),
+      value: amount,
+      currency,
+      formatted: formatted || [amount, currency].filter(Boolean).join(' '),
+      raw,
+    };
+  }
+
+  function normalizeDelivery(request, response) {
+    const shippingRequest = isPlainRecord(request) ? request : {};
+    const shippingResponse = isPlainRecord(response) ? response : {};
+    const destination = isPlainRecord(shippingResponse.to) ? shippingResponse.to : {};
+    return {
+      productId: safeText(shippingRequest.productIdV2, shippingRequest.productId),
+      skuId: safeText(shippingRequest.skuId),
       destination: {
-        countryCode: asString(firstDefined(destination.country, destination.countryCode, shippingRequest.country)),
-        countryName: asString(destination.countryName),
-        regionCode: asString(firstDefined(destination.region, destination.regionCode, shippingRequest.provinceCode)),
-        regionName: asString(destination.regionName),
-        cityCode: asString(firstDefined(destination.city, destination.cityCode, shippingRequest.cityCode)),
-        cityName: asString(destination.cityName),
+        countryCode: safeText(destination.country, destination.countryCode, shippingRequest.country),
+        countryName: safeText(destination.countryName),
+        regionCode: safeText(destination.region, destination.regionCode, shippingRequest.provinceCode),
+        regionName: safeText(destination.regionName),
+        cityCode: safeText(destination.city, destination.cityCode, shippingRequest.cityCode),
+        cityName: safeText(destination.cityName),
       },
       displayMultipleMethods: optionalBoolean(shippingResponse.displayMultipleMethods),
       methods: (Array.isArray(shippingResponse.methods) ? shippingResponse.methods : []).map((method) => ({
-        groupName: asString(method?.groupName),
-        serviceName: asString(method?.serviceName),
-        service: asString(method?.service),
-        cost: normalizeMoney(method?.amount),
-        etaStartDate: asString(method?.etaStartDeliveryDate),
-        etaEndDate: asString(method?.etaEndDeliveryDate),
-        dateDisplay: asString(method?.dateDisplay),
-        dateFormat: asString(method?.dateFormat),
+        groupName: safeText(method?.groupName),
+        serviceName: safeText(method?.serviceName),
+        service: safeText(method?.service),
+        cost: normalizeDeliveryMoney(method?.amount),
+        etaStartDate: safeText(method?.etaStartDeliveryDate),
+        etaEndDate: safeText(method?.etaEndDeliveryDate),
+        dateDisplay: safeText(method?.dateDisplay),
+        dateFormat: safeText(method?.dateFormat),
         tracking: optionalBoolean(method?.tracking),
-        serviceGroupType: asString(method?.serviceGroupType),
+        serviceGroupType: safeText(method?.serviceGroupType),
         passportRequired: optionalBoolean(method?.passportRequired),
       })),
     };
   }
 
+  function inspectDeliveryCapture(request, response, expectedItemId, expectedSkuId) {
+    const delivery = normalizeDelivery(request, response);
+    const requestProductIds = isPlainRecord(request)
+      ? [request.productIdV2, request.productId]
+        .filter((value) => value !== null && value !== undefined && value !== '')
+      : [];
+    const validRequest = isPlainRecord(request)
+      && requestProductIds.every(isSafeTextValue)
+      && [
+        'skuId', 'tradeCurrency', 'count', 'buyerPrice', 'minPrice', 'maxPrice',
+        'country', 'provinceCode', 'cityCode',
+      ].every((field) => !Object.prototype.hasOwnProperty.call(request, field)
+        || isSafeTextValue(request[field]));
+    const safeRequestProductIds = requestProductIds.filter(isSafeTextValue).map(asString);
+    const requestBindingConflict = validRequest
+      && new Set(safeRequestProductIds).size > 1;
+    const expectedProductId = asString(expectedItemId);
+    const boundProductId = expectedProductId && safeRequestProductIds.includes(expectedProductId)
+      ? expectedProductId
+      : delivery.productId;
+    const normalizedDelivery = boundProductId === delivery.productId
+      ? delivery
+      : { ...delivery, productId: boundProductId };
+    const hasBinding = Boolean(normalizedDelivery.productId && normalizedDelivery.skuId);
+    const matchesExpected = hasBinding
+      && (!expectedProductId || safeRequestProductIds.includes(expectedProductId))
+      && (!expectedSkuId || normalizedDelivery.skuId === asString(expectedSkuId));
+    if (!matchesExpected) {
+      return { delivery: null, normalized: normalizedDelivery, matched: false, diagnostic: null };
+    }
+    if (!validRequest || requestBindingConflict) {
+      return { delivery: null, normalized: normalizedDelivery, matched: true, diagnostic: 'schema-mismatch' };
+    }
+    const validResponse = isPlainRecord(response);
+    const responseCode = validResponse ? response.code : null;
+    const numericResponseCode = typeof responseCode === 'number'
+      ? responseCode
+      : (typeof responseCode === 'string' && /^\d+$/.test(responseCode.trim())
+        ? Number(responseCode)
+        : null);
+    const explicitFailure = validResponse && (
+      (Object.prototype.hasOwnProperty.call(response, 'error')
+        && response.error !== null && response.error !== undefined && response.error !== '' && response.error !== false)
+      || response.success === false
+      || response.ok === false
+      || (numericResponseCode !== null && numericResponseCode >= 400)
+      || (typeof responseCode === 'string' && /^(?:error|fail(?:ed|ure)?)\b/i.test(responseCode.trim()))
+    );
+    const validDestination = !validResponse || response.to === null || response.to === undefined
+      || (isPlainRecord(response.to) && [
+        'country', 'countryCode', 'countryName', 'region', 'regionCode', 'regionName', 'city', 'cityCode', 'cityName',
+      ].every((field) => !Object.prototype.hasOwnProperty.call(response.to, field)
+        || isSafeTextValue(response.to[field])));
+    const validDisplayMultipleMethods = !validResponse
+      || response.displayMultipleMethods === null || response.displayMultipleMethods === undefined
+      || typeof response.displayMultipleMethods === 'boolean';
+    const methodHasRecognizedValue = (method, index) => {
+      const normalized = normalizedDelivery.methods[index];
+      return [
+        normalized?.groupName,
+        normalized?.serviceName,
+        normalized?.service,
+        normalized?.etaStartDate,
+        normalized?.etaEndDate,
+        normalized?.dateDisplay,
+        normalized?.dateFormat,
+        normalized?.serviceGroupType,
+        normalized?.cost?.value,
+        normalized?.cost?.currency,
+        normalized?.cost?.formatted,
+      ].some((value) => value !== null && value !== undefined && value !== '');
+    };
+    const validMethods = !validResponse || response.methods === null || response.methods === undefined
+      || (Array.isArray(response.methods)
+        && response.methods.every((method, index) => isPlainRecord(method)
+          && [
+            'groupName', 'serviceName', 'service', 'etaStartDeliveryDate', 'etaEndDeliveryDate',
+            'dateDisplay', 'dateFormat', 'serviceGroupType',
+          ].every((field) => !Object.prototype.hasOwnProperty.call(method, field)
+            || isSafeTextValue(method[field]))
+          && (!Object.prototype.hasOwnProperty.call(method, 'tracking')
+            || method.tracking === null || method.tracking === undefined || typeof method.tracking === 'boolean')
+          && (!Object.prototype.hasOwnProperty.call(method, 'passportRequired')
+            || method.passportRequired === null || method.passportRequired === undefined
+            || typeof method.passportRequired === 'boolean')
+           && isSafeDeliveryMoney(method.amount)
+           && methodHasRecognizedValue(method, index)));
+    const hasResponseDestination = validResponse && isPlainRecord(response.to)
+      && [
+        'country', 'countryCode', 'countryName', 'region', 'regionCode', 'regionName', 'city', 'cityCode', 'cityName',
+      ].some((field) => Object.prototype.hasOwnProperty.call(response.to, field)
+        && safeText(response.to[field]));
+    const recognizedResponse = validResponse && (
+      hasResponseDestination
+      || typeof response.displayMultipleMethods === 'boolean'
+      || (Array.isArray(response.methods) && (response.methods.length === 0 || normalizedDelivery.methods.length > 0))
+    );
+    if (explicitFailure || !validResponse || !recognizedResponse || !validDestination
+      || !validDisplayMultipleMethods || !validMethods) {
+      return { delivery: null, normalized: normalizedDelivery, matched: true, diagnostic: 'schema-mismatch' };
+    }
+    return { delivery: normalizedDelivery, normalized: normalizedDelivery, matched: true, diagnostic: null };
+  }
+
   function shippingRequestContext(request = {}) {
     return {
-      productId: asString(firstDefined(request.productIdV2, request.productId)),
-      skuId: asString(request.skuId),
-      tradeCurrency: asString(request.tradeCurrency),
-      count: asString(request.count),
-      buyerPrice: asString(request.buyerPrice),
-      minPrice: asString(request.minPrice),
-      maxPrice: asString(request.maxPrice),
+      productId: safeText(request.productIdV2, request.productId),
+      skuId: safeText(request.skuId),
+      tradeCurrency: safeText(request.tradeCurrency),
+      count: safeText(request.count),
+      buyerPrice: safeText(request.buyerPrice),
+      minPrice: safeText(request.minPrice),
+      maxPrice: safeText(request.maxPrice),
     };
   }
 
@@ -441,37 +767,72 @@
     return JSON.stringify([asString(productId), asString(skuId)]);
   }
 
-  function cacheDelivery(cache, request, delivery) {
+  function cacheDeliveryEntry(cache, request, delivery, diagnostic = null) {
     if (!cache || !delivery?.productId || !delivery?.skuId) return null;
     const contextKey = createShippingContextKey(request, delivery);
     const skuKey = productSkuKey(delivery.productId, delivery.skuId);
+    const storageKey = JSON.stringify([skuKey, contextKey]);
     const contextKeys = cache.contextKeysBySku.get(skuKey) || [];
-    const previousIndex = contextKeys.indexOf(contextKey);
+    const previousIndex = contextKeys.indexOf(storageKey);
     if (previousIndex !== -1) contextKeys.splice(previousIndex, 1);
-    contextKeys.push(contextKey);
+    contextKeys.push(storageKey);
     cache.contextKeysBySku.set(skuKey, contextKeys);
-    cache.byContext.set(contextKey, {
-      delivery,
+    cache.byContext.set(storageKey, {
+      productId: asString(delivery.productId),
+      skuId: asString(delivery.skuId),
+      delivery: diagnostic ? null : delivery,
+      diagnostic,
+      matchAnyPrice: Boolean(diagnostic && ['buyerPrice', 'minPrice', 'maxPrice']
+        .some((field) => Object.prototype.hasOwnProperty.call(request || {}, field)
+          && !isSafeTextValue(request[field]))),
       environment: createShippingEnvironment(request, delivery),
       price: shippingPriceContext(request),
     });
-    return contextKey;
+    return storageKey;
+  }
+
+  function cacheDelivery(cache, request, delivery) {
+    return cacheDeliveryEntry(cache, request, delivery);
+  }
+
+  function cacheDeliveryCapture(cache, request, response, expectedItemId, expectedSkuId) {
+    const inspection = inspectDeliveryCapture(request, response, expectedItemId, expectedSkuId);
+    if (inspection.matched) {
+      cacheDeliveryEntry(cache, request, inspection.normalized, inspection.diagnostic);
+    }
+    return inspection;
+  }
+
+  function shippingCaptureMatchesProduct(capture, product) {
+    if (!capture || !product?.itemId || !product?.selectedSkuId) return false;
+    return inspectDeliveryCapture(
+      capture.request,
+      capture.response,
+      product.itemId,
+      product.selectedSkuId,
+    ).matched;
   }
 
   function contextsEqual(left, right) {
     return JSON.stringify(left) === JSON.stringify(right);
   }
 
-  function getCachedDelivery(cache, productId, skuId, environment, price) {
+  function getCachedDeliveryEntry(cache, productId, skuId, environment, price) {
     if (!cache || !productId || !skuId || !environment) return null;
     const contextKeys = cache.contextKeysBySku.get(productSkuKey(productId, skuId)) || [];
     for (let index = contextKeys.length - 1; index >= 0; index -= 1) {
       const entry = cache.byContext.get(contextKeys[index]);
       if (entry
+        && entry.productId === asString(productId)
+        && entry.skuId === asString(skuId)
         && contextsEqual(entry.environment, environment)
-        && contextsEqual(entry.price, price)) return entry.delivery;
+        && (entry.matchAnyPrice || contextsEqual(entry.price, price))) return entry;
     }
     return null;
+  }
+
+  function getCachedDelivery(cache, productId, skuId, environment, price) {
+    return getCachedDeliveryEntry(cache, productId, skuId, environment, price)?.delivery || null;
   }
 
   function selectedSkuShippingPriceContext(product) {
@@ -485,14 +846,21 @@
 
   function applyCachedDelivery(product, cache, environment) {
     if (!product) return product;
-    const delivery = getCachedDelivery(
+    const entry = getCachedDeliveryEntry(
       cache,
       product.itemId,
       product.selectedSkuId,
       environment,
       selectedSkuShippingPriceContext(product),
     );
-    return product.delivery === delivery ? product : { ...product, delivery };
+    const delivery = entry?.delivery || null;
+    const diagnostic = delivery
+      ? createSectionDiagnostic('present', ['native:shipping-calculate'])
+      : entry?.diagnostic
+        ? createSectionDiagnostic('invalid', ['native:shipping-calculate'], entry.diagnostic)
+        : createSectionDiagnostic('not-observed');
+    const updated = product.delivery === delivery ? product : { ...product, delivery };
+    return withSectionDiagnostic(updated, 'delivery', diagnostic);
   }
 
   function humanVariantName(value) {
@@ -581,7 +949,7 @@
   }
 
   function inspectSizeGuide(sizeData, limits = {}) {
-    if (!sizeData) return { sizeGuide: null, diagnostic: null };
+    if (sizeData === null || sizeData === undefined) return { sizeGuide: null, diagnostic: null };
     const maxDepth = limits.maxDepth || 12;
     const tables = [];
     const seen = new WeakSet();
@@ -609,7 +977,10 @@
     if (hasUnvisitedDepthCutoff(depthCutoffs, seen)) {
       return { sizeGuide: null, diagnostic: 'traversal-limit' };
     }
-    return { sizeGuide: { tables, raw: sizeData }, diagnostic: null };
+    return {
+      sizeGuide: { tables, raw: sizeData },
+      diagnostic: tables.length ? null : 'schema-mismatch',
+    };
   }
 
   function normalizeSizeGuide(sizeData, limits = {}) {
@@ -634,19 +1005,61 @@
     return typeof rootNode.querySelector === 'function' ? rootNode.querySelector(CHARACTERISTICS_BOUNDARY_SELECTOR) : null;
   }
 
-  function extractCharacteristicsFromDom(rootNode) {
-    if (!rootNode || typeof rootNode.querySelectorAll !== 'function') return [];
+  function inspectCharacteristicsFromDom(rootNode) {
+    if (!rootNode || typeof rootNode.querySelectorAll !== 'function') {
+      return { characteristics: [], boundary: null, diagnostic: null, observations: [] };
+    }
     const boundaries = Array.from(rootNode.querySelectorAll(CHARACTERISTICS_BOUNDARY_SELECTOR));
     if (typeof rootNode.matches === 'function' && rootNode.matches(CHARACTERISTICS_BOUNDARY_SELECTOR)) boundaries.unshift(rootNode);
-    const rows = boundaries.flatMap((boundary) => Array.from(boundary.querySelectorAll(CHARACTERISTICS_ITEM_SELECTOR)).map((item) => {
-      const nameElement = item.querySelector(CHARACTERISTICS_NAME_SELECTOR);
-      const valueElement = item.querySelector(CHARACTERISTICS_VALUE_SELECTOR);
+    const observations = boundaries.map((boundary) => {
+      const items = Array.from(boundary.querySelectorAll(CHARACTERISTICS_ITEM_SELECTOR));
+      const rows = items.map((item) => {
+        const nameElement = item.querySelector(CHARACTERISTICS_NAME_SELECTOR);
+        const valueElement = item.querySelector(CHARACTERISTICS_VALUE_SELECTOR);
+        return {
+          name: nameElement?.innerText ?? nameElement?.textContent,
+          value: valueElement?.innerText ?? valueElement?.textContent,
+        };
+      });
+      const characteristics = normalizeCharacteristics(rows);
       return {
-        name: nameElement?.innerText ?? nameElement?.textContent,
-        value: valueElement?.innerText ?? valueElement?.textContent,
+        boundary,
+        characteristics,
+        diagnostic: !characteristics.length && items.length ? 'schema-mismatch' : null,
       };
-    }));
-    return normalizeCharacteristics(rows);
+    });
+    if (observations.some((observation) => observation.diagnostic)) {
+      return {
+        characteristics: [],
+        boundary: observations[0].boundary,
+        diagnostic: 'schema-mismatch',
+        observations,
+      };
+    }
+    const contributing = observations.filter((observation) => observation.characteristics.length);
+    if (contributing.length > 1) {
+      const first = contributing[0].characteristics;
+      if (!contributing.every((observation) => characteristicsEqual(first, observation.characteristics))) {
+        return {
+          characteristics: [],
+          boundary: contributing[0].boundary,
+          diagnostic: 'conflict',
+          observations,
+        };
+      }
+    }
+    const accepted = contributing[0] || observations[0]
+      || { boundary: null, characteristics: [], diagnostic: null };
+    return {
+      characteristics: accepted.characteristics,
+      boundary: accepted.boundary,
+      diagnostic: accepted.diagnostic,
+      observations,
+    };
+  }
+
+  function extractCharacteristicsFromDom(rootNode) {
+    return inspectCharacteristicsFromDom(rootNode).characteristics;
   }
 
   function characteristicsEqual(left, right) {
@@ -655,11 +1068,17 @@
       && left.every((row, index) => row.name === right[index]?.name && row.value === right[index]?.value);
   }
 
-  function updateCharacteristics(product, rows) {
+  function updateCharacteristics(product, rows, sources = ['dom:characteristics']) {
     if (!product) return product;
     const characteristics = normalizeCharacteristics(rows);
-    if (!characteristics.length || characteristicsEqual(product.characteristics, characteristics)) return product;
-    return { ...product, characteristics };
+    if (!characteristics.length) return product;
+    return withSectionValueAndDiagnostic(
+      product,
+      'characteristics',
+      characteristics,
+      presentSectionDiagnostic(product, 'characteristics', sources),
+      characteristicsEqual,
+    );
   }
 
   function validGalleryUrl(value) {
@@ -715,6 +1134,8 @@
     const depthCutoffs = new Set();
     const stack = [{ value: rootValue, depth: 0 }];
     const candidates = [];
+    let sawEmptyCandidate = false;
+    let sawInvalidCandidate = false;
     let visited = 0;
     while (stack.length && visited < maxVisited) {
       const current = stack.pop();
@@ -728,8 +1149,16 @@
       visited += 1;
       if (!Array.isArray(value) && value.props && typeof value.props === 'object') {
         const props = value.props;
-        if (asString(props.id) === itemId && Array.isArray(props.gallery)) {
-          candidates.push(normalizeGallery(props.gallery, 'ssr:__AER_DATA__'));
+        if (asString(props.id) === itemId && Object.prototype.hasOwnProperty.call(props, 'gallery')) {
+          if (!Array.isArray(props.gallery)) {
+            sawInvalidCandidate = true;
+          } else if (!props.gallery.length) {
+            sawEmptyCandidate = true;
+          } else {
+            const gallery = normalizeGallery(props.gallery, 'ssr:__AER_DATA__');
+            if (gallery) candidates.push(gallery);
+            else sawInvalidCandidate = true;
+          }
         }
       }
       for (const child of Object.values(value)) {
@@ -739,11 +1168,14 @@
     if (boundedTraversalReachedLimit(stack, seen, visited, maxVisited, depthCutoffs)) {
       return { gallery: null, diagnostic: 'traversal-limit' };
     }
-    if (!candidates.length) return { gallery: null, diagnostic: null };
+    if (!candidates.length) {
+      return { gallery: null, diagnostic: sawInvalidCandidate ? 'schema-mismatch' : null };
+    }
     const first = candidates[0];
+    const conflict = sawEmptyCandidate || !candidates.every((candidate) => galleriesEqual(first, candidate));
     return {
-      gallery: candidates.every((candidate) => galleriesEqual(first, candidate)) ? first : null,
-      diagnostic: null,
+      gallery: conflict || sawInvalidCandidate ? null : first,
+      diagnostic: conflict ? 'conflict' : (sawInvalidCandidate ? 'schema-mismatch' : null),
     };
   }
 
@@ -751,9 +1183,15 @@
     return inspectGalleryFromSsrData(rootValue, expectedItemId, limits).gallery;
   }
 
-  function updateGallery(product, gallery) {
-    if (!product || !gallery || galleriesEqual(product.gallery, gallery)) return product;
-    return { ...product, gallery };
+  function updateGallery(product, gallery, sources = ['ssr:__AER_DATA__']) {
+    if (!product || !gallery) return product;
+    return withSectionValueAndDiagnostic(
+      product,
+      'gallery',
+      gallery,
+      presentSectionDiagnostic(product, 'gallery', sources),
+      galleriesEqual,
+    );
   }
 
   function nullableString(value) {
@@ -1480,7 +1918,14 @@
         display: /subscribers/i.test(subscriberDisplay || '') ? subscriberDisplay : null,
       },
     });
-    if (!store) return { store: null, diagnostic: null };
+    if (!store) {
+      if (chat) return { store: null, diagnostic: 'schema-mismatch' };
+      const bindingInspection = inspectExpectedStoreItem(props.analytics, expectedItemId, limits);
+      return {
+        store: null,
+        diagnostic: bindingInspection.matched ? 'schema-mismatch' : null,
+      };
+    }
     if (!chat) {
       const analyticsInspection = inspectExpectedStoreItem(props.analytics, expectedItemId, limits);
       if (analyticsInspection.diagnostic) return { store: null, diagnostic: analyticsInspection.diagnostic };
@@ -1515,6 +1960,7 @@
     const stack = [{ value: rootValue, depth: 0 }];
     const candidates = [];
     let candidateTraversalLimited = false;
+    let candidateSchemaMismatch = false;
     let visited = 0;
     while (stack.length && visited < maxVisited) {
       const current = stack.pop();
@@ -1528,7 +1974,8 @@
       visited += 1;
       if (!Array.isArray(value) && value.props && typeof value.props === 'object') {
         const inspection = inspectStoreFromSsrProps(value.props, itemId, limits.analytics || {});
-        if (inspection.diagnostic) candidateTraversalLimited = true;
+        if (inspection.diagnostic === 'traversal-limit') candidateTraversalLimited = true;
+        else if (inspection.diagnostic === 'schema-mismatch') candidateSchemaMismatch = true;
         else if (inspection.store) candidates.push(inspection.store);
       }
       for (const child of Object.values(value)) {
@@ -1539,11 +1986,11 @@
       || boundedTraversalReachedLimit(stack, seen, visited, maxVisited, depthCutoffs)) {
       return { store: null, diagnostic: 'traversal-limit' };
     }
-    if (!candidates.length) return { store: null, diagnostic: null };
-    const first = candidates[0];
+    const first = candidates[0] || null;
+    const conflict = first && !candidates.every((candidate) => storesEqual(first, candidate));
     return {
-      store: candidates.every((candidate) => storesEqual(first, candidate)) ? first : null,
-      diagnostic: null,
+      store: conflict || candidateSchemaMismatch ? null : first,
+      diagnostic: conflict ? 'conflict' : (candidateSchemaMismatch ? 'schema-mismatch' : null),
     };
   }
 
@@ -1557,15 +2004,20 @@
     return typeof rootNode.querySelector === 'function' ? rootNode.querySelector(STORE_BOUNDARY_SELECTOR) : null;
   }
 
-  function extractStoreFromDom(rootNode, expectedItemId, pageUrl) {
+  function inspectStoreFromDom(rootNode, expectedItemId, pageUrl) {
     const boundary = findStoreBoundary(rootNode);
-    if (!boundary) return null;
+    if (!boundary) return { store: null, boundary: null, diagnostic: null, itemMismatch: false };
     const header = boundary.querySelector?.(STORE_HEADER_SELECTOR);
     const chatButton = boundary.querySelector?.(STORE_CHAT_BUTTON_SELECTOR);
     const chatAnchor = chatButton?.closest?.('a[href]');
     const chatHref = chatAnchor?.getAttribute?.('href') || chatAnchor?.href || null;
-    if (chatHref && !parseStoreChatLink(chatHref, expectedItemId, pageUrl)) return null;
+    if (chatHref && hasMismatchedStoreChatItem(chatHref, expectedItemId, pageUrl)) {
+      return { store: null, boundary, diagnostic: null, itemMismatch: true };
+    }
     const chat = parseStoreChatLink(chatHref, expectedItemId, pageUrl);
+    if (chatHref && !chat) {
+      return { store: null, boundary, diagnostic: 'schema-mismatch', itemMismatch: false };
+    }
     const title = header?.querySelector?.(STORE_TITLE_SELECTOR);
     const storeAnchor = title?.closest?.('a[href]') || header?.querySelector?.(STORE_HEADER_LINK_SELECTOR);
     const statTexts = Array.from(header?.querySelectorAll?.(STORE_STAT_SELECTOR) || [])
@@ -1573,7 +2025,7 @@
       .filter(Boolean);
     const sellerRatingDisplay = statTexts.find((text) => /^\d+(?:[.,]\d+)?\s*%\s*seller's rating$/i.test(text)) || null;
     const subscribersDisplay = statTexts.find((text) => /^\d+(?:[.,]\d+)?\s*[Kk]?\+?\s+subscribers$/i.test(text)) || null;
-    return normalizeStore({
+    const store = normalizeStore({
       name: title?.innerText ?? title?.textContent,
       url: storeAnchor?.getAttribute?.('href') || storeAnchor?.href || null,
       sellerId: chat?.sellerId,
@@ -1586,6 +2038,16 @@
         display: subscribersDisplay,
       },
     });
+    return {
+      store,
+      boundary,
+      diagnostic: !store && (header || chatButton) ? 'schema-mismatch' : null,
+      itemMismatch: false,
+    };
+  }
+
+  function extractStoreFromDom(rootNode, expectedItemId, pageUrl) {
+    return inspectStoreFromDom(rootNode, expectedItemId, pageUrl).store;
   }
 
   function mergeStore(structured, dom) {
@@ -1613,15 +2075,42 @@
     });
   }
 
-  function updateStore(product, patch) {
-    if (!product || !patch) return product;
-    const next = mergeStore(patch, product.store);
-    if (storesEqual(product.store, next)) return product;
-    return { ...product, store: next };
+  function storeContributionSources(structured, dom) {
+    const sources = [];
+    const missing = (value) => value === null || value === undefined;
+    const supports = (primary, secondary) => !missing(secondary)
+      && (missing(primary) || primary === secondary);
+    if (structured) sources.push('ssr:__AER_DATA__');
+    if (dom && (!structured
+      || supports(structured.name, dom.name)
+      || supports(structured.url, dom.url)
+      || supports(structured.sellerId, dom.sellerId)
+      || supports(structured.sellerRating?.value, dom.sellerRating?.value)
+      || (supports(structured.sellerRating?.display, dom.sellerRating?.display)
+        && !(!missing(structured.sellerRating?.value) && !missing(dom.sellerRating?.value)
+          && structured.sellerRating.value !== dom.sellerRating.value))
+      || supports(structured.subscribers?.value, dom.subscribers?.value)
+      || supports(structured.subscribers?.display, dom.subscribers?.display))) {
+      sources.push('dom:store');
+    }
+    return sources;
   }
 
-  function isStaleStore(boundary, store, staleBoundary, staleStore) {
-    return Boolean(boundary && boundary === staleBoundary && storesEqual(store, staleStore));
+  function updateStore(product, patch, sources = [], replace = false) {
+    if (!product || !patch) return product;
+    const next = replace ? patch : mergeStore(patch, product.store);
+    return withSectionValueAndDiagnostic(
+      product,
+      'store',
+      next,
+      presentSectionDiagnostic(product, 'store', sources, !replace),
+      storesEqual,
+    );
+  }
+
+  function isStaleStore(boundary, store, staleBoundary, staleStore, diagnostic = null, staleDiagnostic = null) {
+    return Boolean(boundary && boundary === staleBoundary && storesEqual(store, staleStore)
+      && diagnostic === staleDiagnostic);
   }
 
   function emptyRatingSummary() {
@@ -1677,30 +2166,36 @@
     return collectObjectDescendants(rootValue, predicate, limits);
   }
 
-  function boundReviewTabsCandidate(widget, expectedItemId) {
-    if (!widgetFamily(widget, 'bx/RedReviewsTabs/')) return null;
+  function inspectBoundReviewTabsCandidate(widget, expectedItemId) {
+    if (!widgetFamily(widget, 'bx/RedReviewsTabs/')) return { binding: null, diagnostic: null };
     const expected = asString(expectedItemId);
-    if (!expected) return null;
+    if (!expected) return { binding: null, diagnostic: null };
     const events = widget.props?.analyticEvents;
     const trackingSignals = [
       events?.clickAllReviews?.trackingInfo,
       events?.viewWidgetReview?.trackingInfo,
     ].filter((signal) => signal && typeof signal === 'object');
     const itemIds = trackingSignals.map((signal) => asString(signal.itemId)).filter(Boolean);
-    if (!itemIds.length || !itemIds.includes(expected) || itemIds.some((itemId) => itemId !== expected)) return null;
+    if (!itemIds.length || !itemIds.includes(expected)) return { binding: null, diagnostic: null };
+    if (itemIds.some((itemId) => itemId !== expected)) return { binding: null, diagnostic: 'conflict' };
 
     const ratingInputs = trackingSignals
       .map((signal) => signal.overallRating)
       .filter((value) => value !== null && value !== undefined && value !== '');
     const ratings = ratingInputs.map(parseLocalizedRating);
     const uniqueRatings = [...new Set(ratings.filter((value) => value !== null))];
-    if (ratings.some((value) => value === null) || uniqueRatings.length > 1) return null;
-    return { rating: uniqueRatings[0] ?? null };
+    if (ratings.some((value) => value === null)) return { binding: null, diagnostic: 'schema-mismatch' };
+    if (uniqueRatings.length > 1) return { binding: null, diagnostic: 'conflict' };
+    return { binding: { rating: uniqueRatings[0] ?? null }, diagnostic: null };
   }
 
   function resolveConsistentField(candidates, field) {
     const values = [...new Set(candidates.map((candidate) => candidate[field]).filter((value) => value !== null))];
     return values.length === 1 ? values[0] : null;
+  }
+
+  function fieldHasConflict(candidates, field) {
+    return new Set(candidates.map((candidate) => candidate[field]).filter((value) => value !== null)).size > 1;
   }
 
   function inspectReviewSummaryFromSsrData(rootValue, expectedItemId, limits = {}) {
@@ -1713,6 +2208,10 @@
     );
     if (contextInspection.diagnostic) return { summary: null, diagnostic: 'traversal-limit' };
     const candidates = [];
+    const candidateDiagnostics = [];
+    let sawBoundCandidate = false;
+    let sawInvalidValue = false;
+    let sawFieldConflict = false;
     for (const context of contextInspection.values) {
       const tabsInspection = inspectObjectDescendants(
         context,
@@ -1721,8 +2220,11 @@
       );
       if (tabsInspection.diagnostic) return { summary: null, diagnostic: 'traversal-limit' };
       for (const tabs of tabsInspection.values) {
-        const binding = boundReviewTabsCandidate(tabs, itemId);
+        const bindingInspection = inspectBoundReviewTabsCandidate(tabs, itemId);
+        if (bindingInspection.diagnostic) candidateDiagnostics.push(bindingInspection.diagnostic);
+        const binding = bindingInspection.binding;
         if (!binding) continue;
+        sawBoundCandidate = true;
         const feedbackInspection = inspectObjectDescendants(
           tabs,
           (value) => widgetFamily(value, 'bx/RedReviewsProductFeedbackList/')
@@ -1734,11 +2236,19 @@
           const params = widget.props?.resolveParams;
           const hasReviews = params && Object.prototype.hasOwnProperty.call(params, 'review.productReviewsCount');
           const hasFeedbacks = params && Object.prototype.hasOwnProperty.call(params, 'review.productFeedbacksCount');
+          const reviewCount = hasReviews ? parseLocalizedCount(params['review.productReviewsCount']) : null;
+          const contentFeedbackCount = hasFeedbacks ? parseLocalizedCount(params['review.productFeedbacksCount']) : null;
+          if ((hasReviews && reviewCount === null) || (hasFeedbacks && contentFeedbackCount === null)) {
+            sawInvalidValue = true;
+          }
           return {
-            reviewCount: hasReviews ? parseLocalizedCount(params['review.productReviewsCount']) : null,
-            contentFeedbackCount: hasFeedbacks ? parseLocalizedCount(params['review.productFeedbacksCount']) : null,
+            reviewCount,
+            contentFeedbackCount,
           };
         });
+        if (['reviewCount', 'contentFeedbackCount'].some((field) => fieldHasConflict(totals, field))) {
+          sawFieldConflict = true;
+        }
         candidates.push({
           rating: binding.rating,
           reviewCount: resolveConsistentField(totals, 'reviewCount'),
@@ -1746,16 +2256,24 @@
         });
       }
     }
+    const candidateDiagnostic = firstSectionDiagnostic(candidateDiagnostics
+      .map((diagnostic) => ({ diagnostic })));
+    if (candidateDiagnostic) return { summary: null, diagnostic: candidateDiagnostic };
     if (!candidates.length) return { summary: null, diagnostic: null };
     const result = emptyRatingSummary();
     result.rating = resolveConsistentField(candidates, 'rating');
     result.reviewCount = resolveConsistentField(candidates, 'reviewCount');
     result.contentFeedbackCount = resolveConsistentField(candidates, 'contentFeedbackCount');
+    const summary = result.rating === null && result.reviewCount === null && result.contentFeedbackCount === null
+      ? null
+      : withRatingDiagnostics(result);
+    const conflict = ['rating', 'reviewCount', 'contentFeedbackCount']
+      .some((field) => fieldHasConflict(candidates, field));
     return {
-      summary: result.rating === null && result.reviewCount === null && result.contentFeedbackCount === null
+      summary,
+      diagnostic: summary
         ? null
-        : withRatingDiagnostics(result),
-      diagnostic: null,
+        : (conflict || sawFieldConflict ? 'conflict' : (sawInvalidValue || sawBoundCandidate ? 'schema-mismatch' : null)),
     };
   }
 
@@ -1763,12 +2281,18 @@
     return inspectReviewSummaryFromSsrData(rootValue, expectedItemId, limits).summary;
   }
 
-  function primitiveRatingCandidate(props, expectedItemId) {
-    if (!props || typeof props !== 'object') return null;
+  function inspectPrimitiveRatingCandidate(props, expectedItemId) {
+    if (!props || typeof props !== 'object') return { candidate: null, diagnostic: null };
     const clickInfo = props.analyticEvents?.clickAllReviews?.trackingInfo;
     const viewInfo = props.analyticEvents?.viewWidgetReview?.trackingInfo;
     const itemIds = [clickInfo?.itemId, viewInfo?.itemId].map(asString).filter(Boolean);
-    if (expectedItemId && itemIds.length && !itemIds.includes(asString(expectedItemId))) return null;
+    const expected = asString(expectedItemId);
+    if (expected) {
+      if (!itemIds.length || !itemIds.includes(expected)) return { candidate: null, diagnostic: null };
+      if (itemIds.some((itemId) => itemId !== expected)) {
+        return { candidate: null, diagnostic: 'conflict' };
+      }
+    }
 
     const ratingInputs = [clickInfo?.overallRating, viewInfo?.overallRating]
       .filter((value) => value !== null && value !== undefined && value !== '');
@@ -1780,9 +2304,17 @@
     const resolveParams = props.resolveParams;
     const hasReviewCount = resolveParams && typeof resolveParams === 'object'
       && Object.prototype.hasOwnProperty.call(resolveParams, 'review.productReviewsCount');
-    return {
+    const reviewCount = hasReviewCount ? parseLocalizedCount(resolveParams['review.productReviewsCount']) : null;
+    const candidate = {
       rating,
-      reviewCount: hasReviewCount ? parseLocalizedCount(resolveParams['review.productReviewsCount']) : null,
+      reviewCount,
+    };
+    if (candidate.rating !== null || candidate.reviewCount !== null) return { candidate, diagnostic: null };
+    const hasRelevantFields = ratingInputs.length || hasReviewCount;
+    const conflict = uniqueRatings.length > 1;
+    return {
+      candidate: null,
+      diagnostic: hasRelevantFields ? (conflict ? 'conflict' : 'schema-mismatch') : null,
     };
   }
 
@@ -1793,6 +2325,7 @@
     const depthCutoffs = new Set();
     const stack = [{ value: rootValue, depth: 0 }];
     const candidates = [];
+    const candidateDiagnostics = [];
     let visited = 0;
     while (stack.length && visited < maxVisited) {
       const current = stack.pop();
@@ -1805,7 +2338,9 @@
       seen.add(value);
       visited += 1;
       if (!Array.isArray(value) && value.props && typeof value.props === 'object') {
-        const candidate = primitiveRatingCandidate(value.props, expectedItemId);
+        const inspection = inspectPrimitiveRatingCandidate(value.props, expectedItemId);
+        const candidate = inspection.candidate;
+        if (inspection.diagnostic) candidateDiagnostics.push(inspection.diagnostic);
         if (candidate && (candidate.rating !== null || candidate.reviewCount !== null)) candidates.push(candidate);
       }
       for (const child of Object.values(value)) {
@@ -1815,6 +2350,9 @@
     if (boundedTraversalReachedLimit(stack, seen, visited, maxVisited, depthCutoffs)) {
       return { summary: null, diagnostic: 'traversal-limit' };
     }
+    const candidateDiagnostic = firstSectionDiagnostic(candidateDiagnostics
+      .map((diagnostic) => ({ diagnostic })));
+    if (candidateDiagnostic) return { summary: null, diagnostic: candidateDiagnostic };
     if (!candidates.length) return { summary: null, diagnostic: null };
     const coherent = candidates.filter((candidate) => candidate.rating !== null && candidate.reviewCount !== null);
     const pool = coherent.length ? coherent : candidates;
@@ -1825,9 +2363,11 @@
     const result = emptyRatingSummary();
     result.rating = resolveField('rating');
     result.reviewCount = resolveField('reviewCount');
+    const summary = result.rating === null && result.reviewCount === null ? null : result;
+    const conflict = ['rating', 'reviewCount'].some((field) => fieldHasConflict(pool, field));
     return {
-      summary: result.rating === null && result.reviewCount === null ? null : result,
-      diagnostic: null,
+      summary,
+      diagnostic: summary ? null : (conflict ? 'conflict' : null),
     };
   }
 
@@ -1843,10 +2383,10 @@
     return candidates.find((candidate) => typeof candidate.querySelector === 'function' && candidate.querySelector('h1')) || null;
   }
 
-  function extractBasicRatingFromDom(rootNode) {
+  function inspectBasicRatingFromDom(rootNode) {
     const boundary = findProductHeaderBoundary(rootNode);
     const extraInfo = boundary?.querySelector?.(PRODUCT_HEADER_INFO_SELECTOR);
-    if (!extraInfo) return null;
+    if (!extraInfo) return { summary: null, boundary, diagnostic: null };
     const readText = (selector) => {
       const element = extraInfo.querySelector?.(selector);
       return normalizeHumanText(element?.innerText ?? element?.textContent) || null;
@@ -1858,7 +2398,13 @@
     result.rating = parseLocalizedRating(result.display.rating);
     result.reviewCount = parseLocalizedCount(result.display.reviewCount);
     result.boughtCount = parseLocalizedCount(result.display.boughtCount);
-    return result.rating === null && result.reviewCount === null && result.boughtCount === null ? null : result;
+    const summary = result.rating === null && result.reviewCount === null && result.boughtCount === null ? null : result;
+    const hasUnparsedText = !summary && Object.values(result.display).some(Boolean);
+    return { summary, boundary, diagnostic: hasUnparsedText ? 'schema-mismatch' : null };
+  }
+
+  function extractBasicRatingFromDom(rootNode) {
+    return inspectBasicRatingFromDom(rootNode).summary;
   }
 
   function findReviewSummaryBoundary(rootNode) {
@@ -1938,18 +2484,31 @@
     return topics.length ? topics : null;
   }
 
-  function extractReviewSummaryFromDom(rootNode) {
+  function inspectReviewSummaryFromDom(rootNode) {
     const boundary = findReviewSummaryBoundary(rootNode);
-    if (!boundary) return null;
+    if (!boundary) {
+      const anchor = rootNode?.matches?.(REVIEW_ANCHOR_SELECTOR)
+        ? rootNode
+        : rootNode?.querySelector?.(REVIEW_ANCHOR_SELECTOR);
+      const candidate = anchor?.parentElement;
+      const hasRelevantStructure = Boolean(candidate?.querySelector?.(REVIEW_TABS_SELECTOR)
+        || candidate?.querySelector?.(REVIEW_RATING_ROOT_SELECTOR));
+      return { summary: null, boundary: candidate || null, diagnostic: hasRelevantStructure ? 'schema-mismatch' : null };
+    }
     const result = emptyRatingSummary();
     result.starDistribution = parseStarDistribution(boundary);
     const photos = extractBuyerPhotos(boundary);
     result.buyerPhotosCount = photos.value;
     result.display.buyerPhotosCount = photos.display;
     result.reviewTopics = extractReviewTopics(boundary);
-    return result.starDistribution || result.buyerPhotosCount !== null || result.reviewTopics
+    const summary = result.starDistribution || result.buyerPhotosCount !== null || result.reviewTopics
       ? withRatingDiagnostics(result)
       : null;
+    return { summary, boundary, diagnostic: summary ? null : 'schema-mismatch' };
+  }
+
+  function extractReviewSummaryFromDom(rootNode) {
+    return inspectReviewSummaryFromDom(rootNode).summary;
   }
 
   function withRatingDiagnostics(summary) {
@@ -1986,6 +2545,63 @@
     return withRatingDiagnostics(result);
   }
 
+  function ratingContributionSources(structured, dom, reviewDom) {
+    const sources = [];
+    const has = (value) => value !== null && value !== undefined;
+    const supports = (primary, secondary) => has(secondary)
+      && (!has(primary) || primary === secondary);
+    if (structured && (
+      has(structured.rating)
+      || has(structured.reviewCount)
+      || has(structured.contentFeedbackCount)
+      || supports(dom?.boughtCount, structured.boughtCount)
+      || supports(dom?.display?.rating, structured.display?.rating)
+      || supports(dom?.display?.reviewCount, structured.display?.reviewCount)
+      || supports(dom?.display?.boughtCount, structured.display?.boughtCount)
+    )) sources.push('ssr:__AER_DATA__');
+    if (dom && (
+      supports(structured?.rating, dom.rating)
+      || supports(structured?.reviewCount, dom.reviewCount)
+      || has(dom.boughtCount)
+      || has(dom.display?.rating)
+      || has(dom.display?.reviewCount)
+      || has(dom.display?.boughtCount)
+    )) sources.push('dom:product-header');
+    if (reviewDom && (
+      has(reviewDom.starDistribution)
+      || has(reviewDom.buyerPhotosCount)
+      || has(reviewDom.reviewTopics)
+      || has(reviewDom.display?.buyerPhotosCount)
+    )) sources.push('dom:review-section');
+    return sources;
+  }
+
+  function inspectRatingFromSsrData(rootValue, expectedItemId, limits = {}) {
+    const review = inspectReviewSummaryFromSsrData(rootValue, expectedItemId, limits.review || limits);
+    const basic = inspectBasicRatingFromSsrData(rootValue, expectedItemId, limits.basic || limits);
+    if (review.diagnostic === 'traversal-limit' || basic.diagnostic === 'traversal-limit') {
+      return { summary: null, diagnostic: 'traversal-limit' };
+    }
+    if (review.diagnostic === 'conflict' || basic.diagnostic === 'conflict') {
+      return { summary: null, diagnostic: 'conflict' };
+    }
+    const overlappingConflict = review.summary && basic.summary
+      && ['rating', 'reviewCount'].some((field) => review.summary[field] !== null
+        && review.summary[field] !== undefined
+        && basic.summary[field] !== null
+        && basic.summary[field] !== undefined
+        && review.summary[field] !== basic.summary[field]);
+    if (overlappingConflict) return { summary: null, diagnostic: 'conflict' };
+    const summary = mergeRatingSummary(review.summary, basic.summary, null);
+    return {
+      summary,
+      diagnostic: summary ? null : firstSectionDiagnostic([
+        { diagnostic: review.diagnostic },
+        { diagnostic: basic.diagnostic },
+      ]),
+    };
+  }
+
   function starDistributionsEqual(left, right) {
     if (left === right) return true;
     if (!left || !right) return false;
@@ -2013,9 +2629,19 @@
       && left.diagnostics?.starDistributionMatchesReviewCount === right.diagnostics?.starDistributionMatchesReviewCount;
   }
 
-  function updateRatingSummary(product, patch) {
+  function updateRatingSummary(product, patch, sources = [], replace = false) {
     if (!product || !patch) return product;
     const previous = product.ratingSummary;
+    if (replace) {
+      const diagnosed = withRatingDiagnostics(patch);
+      return withSectionValueAndDiagnostic(
+        product,
+        'ratingSummary',
+        diagnosed,
+        presentSectionDiagnostic(product, 'ratingSummary', sources),
+        ratingSummariesEqual,
+      );
+    }
     const next = emptyRatingSummary();
     for (const field of ['rating', 'reviewCount', 'contentFeedbackCount', 'boughtCount', 'buyerPhotosCount']) {
       next[field] = patch[field] ?? previous?.[field] ?? null;
@@ -2026,24 +2652,117 @@
     next.starDistribution = patch.starDistribution ?? previous?.starDistribution ?? null;
     next.reviewTopics = patch.reviewTopics ?? previous?.reviewTopics ?? null;
     const diagnosed = withRatingDiagnostics(next);
-    if (ratingSummariesEqual(previous, diagnosed)) return product;
-    return { ...product, ratingSummary: diagnosed };
+    return withSectionValueAndDiagnostic(
+      product,
+      'ratingSummary',
+      diagnosed,
+      presentSectionDiagnostic(product, 'ratingSummary', sources, true),
+      ratingSummariesEqual,
+    );
   }
 
-  function isStaleRatingSummary(boundary, summary, staleBoundary, staleSummary) {
-    return Boolean(boundary && boundary === staleBoundary && ratingSummariesEqual(summary, staleSummary));
+  function isStaleRatingSummary(boundary, summary, staleBoundary, staleSummary, diagnostic = null, staleDiagnostic = null) {
+    return Boolean(boundary && boundary === staleBoundary && ratingSummariesEqual(summary, staleSummary)
+      && diagnostic === staleDiagnostic);
   }
 
   function enrichProductFallbacks(product, sources = {}) {
     let updatedProduct = product;
-    updatedProduct = updateGallery(updatedProduct, sources.structuredGallery);
-    updatedProduct = updateRatingSummary(
-      updatedProduct,
-      mergeRatingSummary(sources.structuredRating, sources.domRating, sources.reviewDomSummary),
+
+    const gallery = observationFromInput(
+      sources,
+      'galleryInspection',
+      'structuredGallery',
+      'ssr:__AER_DATA__',
     );
-    updatedProduct = updateStore(updatedProduct, mergeStore(sources.structuredStore, sources.domStore));
-    updatedProduct = updateCharacteristics(updatedProduct, sources.characteristics);
-    updatedProduct = updateDescription(updatedProduct, sources.description);
+    if (gallery?.value) updatedProduct = updateGallery(updatedProduct, gallery.value, [gallery.source]);
+    else if (gallery) updatedProduct = applyMissingSectionDiagnostic(updatedProduct, 'gallery', [gallery]);
+
+    const structuredRating = observationFromInput(
+      sources,
+      'structuredRatingInspection',
+      'structuredRating',
+      'ssr:__AER_DATA__',
+    );
+    const domRating = observationFromInput(
+      sources,
+      'domRatingInspection',
+      'domRating',
+      'dom:product-header',
+    );
+    const reviewDomSummary = observationFromInput(
+      sources,
+      'reviewDomSummaryInspection',
+      'reviewDomSummary',
+      'dom:review-section',
+    );
+    const ratingObservations = [structuredRating, domRating, reviewDomSummary].filter(Boolean);
+    if (ratingObservations.length) {
+      const ratingSummary = mergeRatingSummary(
+        structuredRating?.value,
+        domRating?.value,
+        reviewDomSummary?.value,
+      );
+      if (ratingSummary) {
+        updatedProduct = updateRatingSummary(
+          updatedProduct,
+          ratingSummary,
+          ratingContributionSources(
+            structuredRating?.value,
+            domRating?.value,
+            reviewDomSummary?.value,
+          ),
+          true,
+        );
+      } else {
+        updatedProduct = applyMissingSectionDiagnostic(updatedProduct, 'ratingSummary', ratingObservations);
+      }
+    }
+
+    const structuredStore = observationFromInput(
+      sources,
+      'structuredStoreInspection',
+      'structuredStore',
+      'ssr:__AER_DATA__',
+    );
+    const domStore = observationFromInput(sources, 'domStoreInspection', 'domStore', 'dom:store');
+    const storeObservations = [structuredStore, domStore].filter(Boolean);
+    if (storeObservations.length) {
+      const store = mergeStore(structuredStore?.value, domStore?.value);
+      if (store) {
+        updatedProduct = updateStore(
+          updatedProduct,
+          store,
+          storeContributionSources(structuredStore?.value, domStore?.value),
+          true,
+        );
+      } else {
+        updatedProduct = applyMissingSectionDiagnostic(updatedProduct, 'store', storeObservations);
+      }
+    }
+
+    const characteristics = observationFromInput(
+      sources,
+      'characteristicsInspection',
+      'characteristics',
+      'dom:characteristics',
+    );
+    if (characteristics) {
+      if (Array.isArray(characteristics.value) && characteristics.value.length) {
+        updatedProduct = updateCharacteristics(updatedProduct, characteristics.value, [characteristics.source]);
+      } else {
+        updatedProduct = applyMissingSectionDiagnostic(updatedProduct, 'characteristics', [characteristics]);
+      }
+    }
+
+    const description = observationFromInput(
+      sources,
+      'descriptionInspection',
+      'description',
+      'dom:description',
+    );
+    if (description?.value) updatedProduct = updateDescription(updatedProduct, description.value, [description.source]);
+    else if (description) updatedProduct = applyMissingSectionDiagnostic(updatedProduct, 'description', [description]);
     return updatedProduct;
   }
 
@@ -2150,24 +2869,61 @@
     return { source, rawHtml, blocks, text, images };
   }
 
-  function extractDescriptionFromDom(rootNode, pageUrl) {
+  function descriptionBoundaryHasRelevantContent(boundary) {
+    const visit = (node) => {
+      if (!node) return false;
+      if (node.nodeType === 3) return Boolean(normalizeHumanText(node.nodeValue ?? node.textContent));
+      if (node.nodeType !== 1) return false;
+      const tag = String(node.tagName || '').toLowerCase();
+      if (DESCRIPTION_IGNORED_TAGS.has(tag)) return false;
+      if (DESCRIPTION_RELEVANT_MEDIA_TAGS.has(tag) && normalizeHumanText(node.getAttribute?.('src'))) return true;
+      return Array.from(node.childNodes || []).some(visit);
+    };
+    return Array.from(boundary?.childNodes || []).some(visit);
+  }
+
+  function inspectDescriptionFromDom(rootNode, pageUrl) {
     const boundary = findDescriptionBoundary(rootNode);
-    if (!boundary) return null;
+    if (!boundary) return { description: null, boundary: null, diagnostic: null };
     const rawHtml = typeof boundary.innerHTML === 'string' ? boundary.innerHTML : '';
-    return buildDescription('dom', rawHtml, parseDescriptionBlocks(boundary, pageUrl));
+    const description = buildDescription('dom', rawHtml, parseDescriptionBlocks(boundary, pageUrl));
+    return {
+      description,
+      boundary,
+      diagnostic: !description && descriptionBoundaryHasRelevantContent(boundary) ? 'schema-mismatch' : null,
+    };
+  }
+
+  function extractDescriptionFromDom(rootNode, pageUrl) {
+    return inspectDescriptionFromDom(rootNode, pageUrl).description;
   }
 
   function descriptionsEqual(left, right) {
+    if (left === right) return true;
     return Boolean(left && right && left.source === right.source && left.rawHtml === right.rawHtml);
   }
 
-  function updateDescription(product, description) {
-    if (!product || !description || descriptionsEqual(product.description, description)) return product;
-    return { ...product, description };
+  function updateDescription(product, description, sources = ['dom:description']) {
+    if (!product || !description) return product;
+    return withSectionValueAndDiagnostic(
+      product,
+      'description',
+      description,
+      presentSectionDiagnostic(product, 'description', sources),
+      descriptionsEqual,
+    );
   }
 
-  function isStaleDescription(boundary, description, staleBoundary, staleDescription) {
-    return Boolean(boundary && boundary === staleBoundary && descriptionsEqual(description, staleDescription));
+  function isStaleDescription(
+    boundary,
+    description,
+    staleBoundary,
+    staleDescription,
+    diagnostic = null,
+    staleDiagnostic = null,
+  ) {
+    return Boolean(boundary && boundary === staleBoundary && descriptionsEqual(description, staleDescription)
+      && diagnostic === staleDiagnostic);
   }
 
   function inspectProductDataCandidate(rootValue, limits = {}) {
@@ -2219,6 +2975,14 @@
       || skus.find((sku) => sku.skuId === activeSkuId)
       || null;
     const selectedSkuId = selectedSku?.skuId || requestedSkuId;
+    const sizeGuideInspection = inspectSizeGuide(productData.skuInfo.sizeData);
+    const sizeGuidePresent = Boolean(sizeGuideInspection.sizeGuide?.tables?.length);
+    const characteristics = normalizeCharacteristics(fallbacks.characteristics);
+    const characteristicsObserved = Object.prototype.hasOwnProperty.call(fallbacks, 'characteristics');
+    const characteristicsDiagnostic = characteristicsObserved && Array.isArray(fallbacks.characteristics)
+      && fallbacks.characteristics.length && !characteristics.length
+      ? 'schema-mismatch'
+      : null;
     return {
       itemId,
       title: asString(firstDefined(productData.title, productData.name, productData.productInfo?.title, fallbacks.title)),
@@ -2230,8 +2994,8 @@
       variantGroups,
       skus,
       selectedSku,
-      sizeGuide: normalizeSizeGuide(productData.skuInfo.sizeData),
-      characteristics: normalizeCharacteristics(fallbacks.characteristics),
+      sizeGuide: sizeGuideInspection.sizeGuide,
+      characteristics,
       description: null,
       delivery: null,
       store: null,
@@ -2240,8 +3004,53 @@
         source: fallbacks.source || 'productData',
         activeSkuId,
         selectedSkuResolved: Boolean(selectedSku),
+        sections: {
+          sizeGuide: sectionDiagnosticFromObservations([createSectionObservation(
+            'productData',
+            sizeGuidePresent ? sizeGuideInspection.sizeGuide : null,
+            sizeGuideInspection.diagnostic,
+          )], sizeGuidePresent),
+          gallery: createSectionDiagnostic('not-observed'),
+          ratingSummary: createSectionDiagnostic('not-observed'),
+          store: createSectionDiagnostic('not-observed'),
+          characteristics: characteristicsObserved
+            ? sectionDiagnosticFromObservations([createSectionObservation(
+              'dom:characteristics',
+              characteristics.length ? characteristics : null,
+              characteristicsDiagnostic,
+            )], Boolean(characteristics.length))
+            : createSectionDiagnostic('not-observed'),
+          description: createSectionDiagnostic('not-observed'),
+          delivery: createSectionDiagnostic('not-observed'),
+        },
       },
     };
+  }
+
+  function carryProductSections(product, previousProduct) {
+    if (!product || !previousProduct || product.itemId !== previousProduct.itemId) return product;
+    const sectionNames = ['gallery', 'ratingSummary', 'store', 'characteristics', 'description'];
+    const nextSections = { ...(product._meta?.sections || {}) };
+    let changed = false;
+    const next = { ...product };
+    for (const section of sectionNames) {
+      const previousValue = previousProduct[section];
+      const hasValue = section === 'characteristics'
+        ? Array.isArray(previousValue) && previousValue.length > 0
+        : Boolean(previousValue);
+      if (hasValue && product[section] !== previousValue) {
+        next[section] = previousValue;
+        changed = true;
+      }
+      const previousDiagnostic = previousProduct._meta?.sections?.[section];
+      if (previousDiagnostic && !sectionDiagnosticsEqual(nextSections[section], previousDiagnostic)) {
+        nextSections[section] = previousDiagnostic;
+        changed = true;
+      }
+    }
+    if (!changed) return product;
+    next._meta = { ...(product._meta || {}), sections: nextSections };
+    return next;
   }
 
   // Once a product is normalized, an absent or unknown URL sku_id keeps the
@@ -2268,7 +3077,209 @@
       _meta: {
         ...product._meta,
         selectedSkuResolved: true,
+        sections: {
+          ...(product._meta?.sections || {}),
+          delivery: createSectionDiagnostic('not-observed'),
+        },
       },
+    };
+  }
+
+  function synchronizeProductPageContext(product, pageUrl, deliveryCache, shippingEnvironment) {
+    if (!product || getItemId(pageUrl) !== product.itemId) return null;
+    const selected = updateSelectedSku(product, pageUrl);
+    return selected === product
+      ? product
+      : applyCachedDelivery(selected, deliveryCache, shippingEnvironment);
+  }
+
+  function refreshSsrInspectionCache(previous, itemId, script, inspectors) {
+    const text = typeof script?.textContent === 'string' ? script.textContent : '';
+    if (previous && previous.itemId === itemId && previous.script === script && previous.text === text) {
+      return previous;
+    }
+    const inspections = {};
+    for (const [name, inspect] of Object.entries(inspectors || {})) {
+      inspections[name] = inspect(itemId, script);
+    }
+    return { itemId, script, text, inspections };
+  }
+
+  function preserveStaleSectionObservation(previous, boundary, value, diagnostic = null) {
+    return boundary ? { boundary, value, diagnostic } : previous;
+  }
+
+  const STALE_SECTION_HISTORY_LIMIT = 24;
+
+  function appendStaleSectionObservation(history, boundary, value, diagnostic = null, equal = Object.is) {
+    const previous = (Array.isArray(history) ? history : [])
+      .filter((observation) => observation?.boundary);
+    if (!boundary) return previous.slice(-STALE_SECTION_HISTORY_LIMIT);
+    const withoutDuplicate = previous.filter((observation) => !(
+      observation.boundary === boundary
+      && equal(observation.value, value)
+      && observation.diagnostic === diagnostic
+    ));
+    return [...withoutDuplicate, { boundary, value, diagnostic }].slice(-STALE_SECTION_HISTORY_LIMIT);
+  }
+
+  function matchesStaleSectionObservation(
+    history,
+    boundary,
+    value,
+    diagnostic = null,
+    equal = Object.is,
+  ) {
+    if (!boundary || !Array.isArray(history)) return false;
+    return history.some((observation) => observation?.boundary === boundary
+      && equal(observation.value, value)
+      && observation.diagnostic === diagnostic);
+  }
+
+  function staleSectionObservationHistory(state, historyKey, boundaryKey, valueKey, diagnosticKey) {
+    const history = (Array.isArray(state?.[historyKey]) ? state[historyKey] : [])
+      .filter((observation) => observation?.boundary);
+    if (history.length) return history.slice(-STALE_SECTION_HISTORY_LIMIT);
+    return state?.[boundaryKey]
+      ? [{
+        boundary: state[boundaryKey],
+        value: state[valueKey],
+        diagnostic: state[diagnosticKey] ?? null,
+      }]
+      : [];
+  }
+
+  function snapshotSectionObservation(history, recorded, live, equal) {
+    let nextHistory = appendStaleSectionObservation(
+      history,
+      recorded?.boundary,
+      recorded?.value,
+      recorded?.diagnostic,
+      equal,
+    );
+    for (const observation of (Array.isArray(live) ? live : [live])) {
+      nextHistory = appendStaleSectionObservation(
+        nextHistory,
+        observation?.boundary,
+        observation?.value,
+        observation?.diagnostic,
+        equal,
+      );
+    }
+    const latest = nextHistory[nextHistory.length - 1] || {
+      boundary: null,
+      value: null,
+      diagnostic: null,
+    };
+    return { ...latest, history: nextHistory };
+  }
+
+  function snapshotStaleDomObservations(state, rootNode, itemId, pageUrl) {
+    // Every currently mounted unbound DOM observation is phase-ambiguous at an
+    // item transition, so retain it alongside prior observations. A later item
+    // may accept only a boundary/value fingerprint that is not quarantined.
+    const ratingInspection = inspectBasicRatingFromDom(rootNode);
+    const reviewInspection = inspectReviewSummaryFromDom(rootNode);
+    const storeInspection = inspectStoreFromDom(rootNode, itemId, pageUrl);
+    const characteristicsInspection = inspectCharacteristicsFromDom(rootNode);
+    const descriptionInspection = inspectDescriptionFromDom(rootNode, pageUrl);
+    const characteristicsSnapshots = [
+      ...(Array.isArray(characteristicsInspection.observations)
+        ? characteristicsInspection.observations.map((observation) => ({
+          boundary: observation.boundary,
+          value: observation.characteristics,
+          diagnostic: observation.diagnostic,
+        }))
+        : []),
+      characteristicsInspection.boundary
+        ? {
+          boundary: characteristicsInspection.boundary,
+          value: characteristicsInspection.characteristics,
+          diagnostic: characteristicsInspection.diagnostic,
+        }
+        : null,
+    ].filter(Boolean);
+    return {
+      rating: snapshotSectionObservation(
+        staleSectionObservationHistory(
+          state,
+          'staleRatingObservations',
+          'staleRatingBoundary',
+          'staleRatingDomSummary',
+          'staleRatingDomDiagnostic',
+        ),
+        { boundary: state.ratingBoundary, value: state.ratingDomSummary, diagnostic: state.ratingDomDiagnostic },
+        ratingInspection.boundary
+          ? { boundary: ratingInspection.boundary, value: ratingInspection.summary, diagnostic: ratingInspection.diagnostic }
+          : null,
+        ratingSummariesEqual,
+      ),
+      review: snapshotSectionObservation(
+        staleSectionObservationHistory(
+          state,
+          'staleReviewSummaryObservations',
+          'staleReviewSummaryBoundary',
+          'staleReviewDomSummary',
+          'staleReviewDomDiagnostic',
+        ),
+        {
+          boundary: state.reviewSummaryBoundary,
+          value: state.reviewDomSummary,
+          diagnostic: state.reviewDomDiagnostic,
+        },
+        reviewInspection.boundary
+          ? { boundary: reviewInspection.boundary, value: reviewInspection.summary, diagnostic: reviewInspection.diagnostic }
+          : null,
+        ratingSummariesEqual,
+      ),
+      store: snapshotSectionObservation(
+        staleSectionObservationHistory(
+          state,
+          'staleStoreObservations',
+          'staleStoreBoundary',
+          'staleStoreDom',
+          'staleStoreDomDiagnostic',
+        ),
+        { boundary: state.storeBoundary, value: state.storeDom, diagnostic: state.storeDomDiagnostic },
+        storeInspection.boundary && !storeInspection.itemMismatch
+          ? { boundary: storeInspection.boundary, value: storeInspection.store, diagnostic: storeInspection.diagnostic }
+          : null,
+        storesEqual,
+      ),
+      characteristics: snapshotSectionObservation(
+        staleSectionObservationHistory(
+          state,
+          'staleCharacteristicsObservations',
+          'staleCharacteristicsBoundary',
+          'staleCharacteristics',
+          'staleCharacteristicsDiagnostic',
+        ),
+        {
+          boundary: state.characteristicsBoundary,
+          value: state.characteristics,
+          diagnostic: state.characteristicsDiagnostic,
+        },
+        characteristicsSnapshots,
+        characteristicsEqual,
+      ),
+      description: snapshotSectionObservation(
+        staleSectionObservationHistory(
+          state,
+          'staleDescriptionObservations',
+          'staleDescriptionBoundary',
+          'staleDescription',
+          'staleDescriptionDiagnostic',
+        ),
+        { boundary: state.descriptionBoundary, value: state.description, diagnostic: state.descriptionDiagnostic },
+        descriptionInspection.boundary
+          ? {
+            boundary: descriptionInspection.boundary,
+            value: descriptionInspection.description,
+            diagnostic: descriptionInspection.diagnostic,
+          }
+          : null,
+        descriptionsEqual,
+      ),
     };
   }
 
@@ -2573,6 +3584,11 @@
   const AliHelperCore = {
     VERSION,
     DEFAULT_SETTINGS,
+    SECTION_SOURCE_ORDER,
+    normalizeSectionSources,
+    createSectionDiagnostic,
+    createSectionObservation,
+    sectionDiagnosticFromObservations,
     isItemPage,
     getItemId,
     isReviewsPage,
@@ -2583,10 +3599,13 @@
     splitSkuPropIds,
     normalizeMoney,
     normalizeDelivery,
+    inspectDeliveryCapture,
     createShippingContextKey,
     createShippingEnvironment,
     createDeliveryCache,
     cacheDelivery,
+    cacheDeliveryCapture,
+    shippingCaptureMatchesProduct,
     getCachedDelivery,
     applyCachedDelivery,
     normalizeVariantGroups,
@@ -2594,6 +3613,7 @@
     inspectSizeGuide,
     normalizeSizeGuide,
     normalizeCharacteristics,
+    inspectCharacteristicsFromDom,
     extractCharacteristicsFromDom,
     updateCharacteristics,
     normalizeGallery,
@@ -2634,6 +3654,7 @@
     inspectStoreFromSsrData,
     extractStoreFromSsrData,
     findStoreBoundary,
+    inspectStoreFromDom,
     extractStoreFromDom,
     mergeStore,
     storesEqual,
@@ -2644,12 +3665,15 @@
     extractReviewSummaryFromSsrData,
     inspectBasicRatingFromSsrData,
     extractBasicRatingFromSsrData,
+    inspectRatingFromSsrData,
     findProductHeaderBoundary,
+    inspectBasicRatingFromDom,
     extractBasicRatingFromDom,
     findReviewSummaryBoundary,
     parseStarDistribution,
     extractBuyerPhotos,
     extractReviewTopics,
+    inspectReviewSummaryFromDom,
     extractReviewSummaryFromDom,
     withRatingDiagnostics,
     mergeRatingSummary,
@@ -2661,6 +3685,7 @@
     findDescriptionBoundary,
     parseDescriptionBlocks,
     buildDescription,
+    inspectDescriptionFromDom,
     extractDescriptionFromDom,
     descriptionsEqual,
     updateDescription,
@@ -2668,8 +3693,16 @@
     inspectProductDataCandidate,
     findProductDataCandidate,
     isProductDataBoundToItem,
+    productDataRequestItemId,
     normalizeProduct,
+    carryProductSections,
     updateSelectedSku,
+    synchronizeProductPageContext,
+    refreshSsrInspectionCache,
+    preserveStaleSectionObservation,
+    appendStaleSectionObservation,
+    matchesStaleSectionObservation,
+    snapshotStaleDomObservations,
     exportProduct,
     exportVariants,
     exportDescription,
@@ -2694,6 +3727,7 @@
     createProductPollingLifecycle,
     createReviewsSsrRetryLifecycle,
     startPageRuntimeSingleton,
+    startProductPage,
   };
 
   if (typeof module === 'object' && module.exports) module.exports = AliHelperCore;
@@ -2721,7 +3755,19 @@
     return navigator.clipboard.writeText(text);
   }
 
-  function installProductDataInterceptor(pageWindow, onData, getRequestItemId = () => getItemId(pageWindow?.location?.href || location.href)) {
+  function installProductDataInterceptor(
+    pageWindow,
+    onData,
+    getRequestItemId = (input) => {
+      const explicitItemId = productDataRequestItemId(
+        input,
+        pageWindow?.location?.href || location.href,
+      );
+      return explicitItemId === undefined
+        ? getItemId(pageWindow?.location?.href || location.href)
+        : explicitItemId;
+    },
+  ) {
     const flag = '__aliHelperProductDataInterceptorV1__';
     if (!pageWindow || pageWindow[flag]) return;
     pageWindow[flag] = true;
@@ -2742,7 +3788,7 @@
       const originalFetch = pageWindow.fetch;
       pageWindow.fetch = function aliHelperFetch(...args) {
         const matched = matches(args[0]);
-        const requestItemId = matched ? getRequestItemId() : null;
+        const requestItemId = matched ? getRequestItemId(args[0]) : null;
         const result = originalFetch.apply(this, args);
         if (matched) {
           result.then((response) => response.clone().json())
@@ -2759,7 +3805,7 @@
       const originalSend = XHR.prototype.send;
       XHR.prototype.open = function aliHelperOpen(method, url, ...rest) {
         this.__aliHelperProductDataUrl = matches(url) ? String(url) : null;
-        this.__aliHelperProductDataItemId = this.__aliHelperProductDataUrl ? getRequestItemId() : null;
+        this.__aliHelperProductDataItemId = this.__aliHelperProductDataUrl ? getRequestItemId(url) : null;
         return originalOpen.call(this, method, url, ...rest);
       };
       XHR.prototype.send = function aliHelperSend(...args) {
@@ -2871,30 +3917,33 @@
     return null;
   }
 
-  function findReviewSummaryInSsr(expectedItemId, script = document.querySelector('#__AER_DATA__')) {
-    if (!script) return null;
+  function inspectRatingInSsr(expectedItemId, script = document.querySelector('#__AER_DATA__')) {
+    if (!script) return { value: null, diagnostic: null, observed: true };
     try {
-      return extractReviewSummaryFromSsrData(JSON.parse(script.textContent || ''), expectedItemId);
+      const inspection = inspectRatingFromSsrData(JSON.parse(script.textContent || ''), expectedItemId);
+      return { value: inspection.summary, diagnostic: inspection.diagnostic, observed: true };
     } catch (_) {
-      return null;
+      return { value: null, diagnostic: 'schema-mismatch', observed: true };
     }
   }
 
-  function findGalleryInSsr(expectedItemId, script = document.querySelector('#__AER_DATA__')) {
-    if (!script) return null;
+  function inspectGalleryInSsr(expectedItemId, script = document.querySelector('#__AER_DATA__')) {
+    if (!script) return { value: null, diagnostic: null, observed: true };
     try {
-      return extractGalleryFromSsrData(JSON.parse(script.textContent || ''), expectedItemId);
+      const inspection = inspectGalleryFromSsrData(JSON.parse(script.textContent || ''), expectedItemId);
+      return { value: inspection.gallery, diagnostic: inspection.diagnostic, observed: true };
     } catch (_) {
-      return null;
+      return { value: null, diagnostic: 'schema-mismatch', observed: true };
     }
   }
 
-  function findStoreInSsr(expectedItemId, script = document.querySelector('#__AER_DATA__')) {
-    if (!script) return null;
+  function inspectStoreInSsr(expectedItemId, script = document.querySelector('#__AER_DATA__')) {
+    if (!script) return { value: null, diagnostic: null, observed: true };
     try {
-      return extractStoreFromSsrData(JSON.parse(script.textContent || ''), expectedItemId);
+      const inspection = inspectStoreFromSsrData(JSON.parse(script.textContent || ''), expectedItemId);
+      return { value: inspection.store, diagnostic: inspection.diagnostic, observed: true };
     } catch (_) {
-      return null;
+      return { value: null, diagnostic: 'schema-mismatch', observed: true };
     }
   }
 
@@ -3007,18 +4056,25 @@
       } else if (action === 'market') {
         location.assign(toggleMarketUrl(location.href).href);
       } else if (action === 'product' && runtime.product) {
-        runtime.refreshProductEnrichment?.();
-        copyWithFeedback(exportProduct(runtime.product), 'Product JSON');
+        const product = runtime.refreshProductEnrichment?.();
+        if (product) copyWithFeedback(exportProduct(product), 'Product JSON');
       } else if (action === 'variants' && runtime.product) {
-        copyWithFeedback(exportVariants(runtime.product), 'Variants');
+        const product = runtime.refreshProductEnrichment?.();
+        if (product) copyWithFeedback(exportVariants(product), 'Variants');
       } else if (action === 'chatgpt' && runtime.product) {
-        runtime.refreshProductEnrichment?.();
-        copyWithFeedback(exportForChatGPT(runtime.product), 'Product');
+        const product = runtime.refreshProductEnrichment?.();
+        if (product) copyWithFeedback(exportForChatGPT(product), 'Product');
       } else if (action === 'description' && runtime.product) {
-        runtime.refreshProductEnrichment?.();
-        copyWithFeedback(exportDescription(runtime.product), 'Description');
+        const product = runtime.refreshProductEnrichment?.();
+        if (product) copyWithFeedback(exportDescription(product), 'Description');
       } else if (action === 'shipping-debug' && runtime.shippingCapture) {
-        copyWithFeedback(JSON.stringify(runtime.shippingCapture, null, 2), 'Shipping debug');
+        const product = runtime.refreshProductEnrichment?.();
+        if (shippingCaptureMatchesProduct(runtime.shippingCapture, product)) {
+          copyWithFeedback(JSON.stringify(runtime.shippingCapture, null, 2), 'Shipping debug');
+        } else {
+          runtime.shippingCapture = null;
+          runtime.ui?.setShippingCapture(null);
+        }
       }
     });
     autoRedirect.addEventListener('change', () => {
@@ -3183,32 +4239,44 @@
       ui: null,
       lastUrl: location.href,
       characteristicsBoundary: null,
+      characteristics: [],
+      characteristicsDiagnostic: null,
       staleCharacteristicsBoundary: null,
       staleCharacteristics: [],
+      staleCharacteristicsDiagnostic: null,
+      staleCharacteristicsObservations: [],
       descriptionBoundary: null,
+      description: null,
+      descriptionDiagnostic: null,
       staleDescriptionBoundary: null,
       staleDescription: null,
-      gallerySsrScript: null,
-      gallerySsrItemId: null,
-      gallerySsr: null,
-      ratingSsrScript: null,
-      ratingSsrItemId: null,
-      ratingSsrSummary: null,
+      staleDescriptionDiagnostic: null,
+      staleDescriptionObservations: [],
+      ssrInspectionCache: null,
+      gallerySsrInspection: null,
+      ratingSsrInspection: null,
       ratingBoundary: null,
       ratingDomSummary: null,
+      ratingDomDiagnostic: null,
       staleRatingBoundary: null,
       staleRatingDomSummary: null,
+      staleRatingDomDiagnostic: null,
+      staleRatingObservations: [],
       reviewSummaryBoundary: null,
       reviewDomSummary: null,
+      reviewDomDiagnostic: null,
       staleReviewSummaryBoundary: null,
       staleReviewDomSummary: null,
-      storeSsrScript: null,
-      storeSsrItemId: null,
-      storeSsr: null,
+      staleReviewDomDiagnostic: null,
+      staleReviewSummaryObservations: [],
+      storeSsrInspection: null,
       storeBoundary: null,
       storeDom: null,
+      storeDomDiagnostic: null,
       staleStoreBoundary: null,
       staleStoreDom: null,
+      staleStoreDomDiagnostic: null,
+      staleStoreObservations: [],
       refreshProductEnrichment: null,
       domReadyHandler: null,
       pollingLifecycle: null,
@@ -3220,18 +4288,20 @@
         runtime.pollingLifecycle?.dispose();
       },
     };
+    let synchronizeRuntimeLocation = () => runtime.product;
     const acceptProductData = (data, meta) => {
       if (!runtime.active) return;
+      synchronizeRuntimeLocation();
       if (!isProductDataBoundToItem(data, runtime.itemId, meta)) return;
       try {
         const normalized = normalizeProduct(data, location.href, { title: document.title.replace(/\s*\|\s*AliExpress.*$/i, ''), source: meta.source });
         const previousProduct = runtime.product;
-        runtime.product = updateGallery(normalized, previousProduct?.gallery);
-        runtime.product = updateCharacteristics(runtime.product, previousProduct?.characteristics);
-        runtime.product = updateDescription(runtime.product, previousProduct?.description);
-        runtime.product = updateRatingSummary(runtime.product, previousProduct?.ratingSummary);
-        runtime.product = updateStore(runtime.product, previousProduct?.store);
+        runtime.product = carryProductSections(normalized, previousProduct);
         runtime.product = applyCachedDelivery(runtime.product, runtime.deliveryCache, runtime.shippingEnvironment);
+        if (runtime.shippingCapture && !shippingCaptureMatchesProduct(runtime.shippingCapture, runtime.product)) {
+          runtime.shippingCapture = null;
+          runtime.ui?.setShippingCapture(null);
+        }
         runtime.ui?.setProduct(runtime.product);
       } catch (error) {
         runtime.ui?.setStatus(`productData found but normalization failed: ${error.message}`, true);
@@ -3241,15 +4311,21 @@
     installProductDataInterceptor(pageWindow, acceptProductData);
     installShippingCalculateInterceptor(pageWindow, (capture) => {
       if (!runtime.active) return;
-      const delivery = normalizeDelivery(capture.request, capture.response);
+      synchronizeRuntimeLocation();
+      const inspection = inspectDeliveryCapture(capture.request, capture.response, runtime.itemId);
+      const delivery = inspection.normalized;
       if (delivery.productId !== runtime.itemId) return;
-      runtime.shippingCapture = capture;
-      runtime.ui?.setShippingCapture(capture);
-      runtime.shippingEnvironment = createShippingEnvironment(capture.request, delivery);
-      cacheDelivery(runtime.deliveryCache, capture.request, delivery);
-      if (runtime.product
-        && delivery.productId === runtime.product.itemId
-        && delivery.skuId === runtime.product.selectedSkuId) {
+      if (inspection.matched) {
+        cacheDeliveryEntry(runtime.deliveryCache, capture.request, delivery, inspection.diagnostic);
+      }
+      const matchesSelectedSku = inspection.matched
+        && (!runtime.product || delivery.skuId === runtime.product.selectedSkuId);
+      if (matchesSelectedSku) {
+        runtime.shippingCapture = capture;
+        runtime.ui?.setShippingCapture(capture);
+        runtime.shippingEnvironment = createShippingEnvironment(capture.request, delivery);
+      }
+      if (runtime.product && matchesSelectedSku) {
         runtime.product = applyCachedDelivery(runtime.product, runtime.deliveryCache, runtime.shippingEnvironment);
         runtime.ui?.setProduct(runtime.product);
       }
@@ -3268,115 +4344,256 @@
     else mount();
 
     let attempts = 0;
+    synchronizeRuntimeLocation = () => {
+      if (location.href === runtime.lastUrl) return runtime.product;
+      const previousUrl = runtime.lastUrl;
+      runtime.lastUrl = location.href;
+      const nextItemId = getItemId(location.href);
+      if (nextItemId !== runtime.itemId) {
+        const staleDom = snapshotStaleDomObservations(runtime, document, runtime.itemId, previousUrl);
+        runtime.staleCharacteristicsBoundary = staleDom.characteristics.boundary;
+        runtime.staleCharacteristics = staleDom.characteristics.value;
+        runtime.staleCharacteristicsDiagnostic = staleDom.characteristics.diagnostic;
+        runtime.staleCharacteristicsObservations = staleDom.characteristics.history;
+        runtime.characteristicsBoundary = null;
+        runtime.characteristics = [];
+        runtime.characteristicsDiagnostic = null;
+        runtime.staleDescriptionBoundary = staleDom.description.boundary;
+        runtime.staleDescription = staleDom.description.value;
+        runtime.staleDescriptionDiagnostic = staleDom.description.diagnostic;
+        runtime.staleDescriptionObservations = staleDom.description.history;
+        runtime.descriptionBoundary = null;
+        runtime.description = null;
+        runtime.descriptionDiagnostic = null;
+        runtime.ssrInspectionCache = null;
+        runtime.gallerySsrInspection = null;
+        runtime.staleRatingBoundary = staleDom.rating.boundary;
+        runtime.staleRatingDomSummary = staleDom.rating.value;
+        runtime.staleRatingDomDiagnostic = staleDom.rating.diagnostic;
+        runtime.staleRatingObservations = staleDom.rating.history;
+        runtime.ratingBoundary = null;
+        runtime.ratingDomSummary = null;
+        runtime.ratingDomDiagnostic = null;
+        runtime.ratingSsrInspection = null;
+        runtime.staleReviewSummaryBoundary = staleDom.review.boundary;
+        runtime.staleReviewDomSummary = staleDom.review.value;
+        runtime.staleReviewDomDiagnostic = staleDom.review.diagnostic;
+        runtime.staleReviewSummaryObservations = staleDom.review.history;
+        runtime.reviewSummaryBoundary = null;
+        runtime.reviewDomSummary = null;
+        runtime.reviewDomDiagnostic = null;
+        runtime.storeSsrInspection = null;
+        runtime.staleStoreBoundary = staleDom.store.boundary;
+        runtime.staleStoreDom = staleDom.store.value;
+        runtime.staleStoreDomDiagnostic = staleDom.store.diagnostic;
+        runtime.staleStoreObservations = staleDom.store.history;
+        runtime.storeBoundary = null;
+        runtime.storeDom = null;
+        runtime.storeDomDiagnostic = null;
+        runtime.itemId = nextItemId;
+        runtime.product = null;
+        runtime.shippingCapture = null;
+        runtime.ui?.setShippingCapture(null);
+        runtime.ui?.setStatus('Product changed; waiting for productData…');
+        return runtime.product;
+      }
+      if (runtime.product) {
+        const updatedProduct = synchronizeProductPageContext(
+          runtime.product,
+          location.href,
+          runtime.deliveryCache,
+          runtime.shippingEnvironment,
+        );
+        if (updatedProduct !== runtime.product) {
+          runtime.product = updatedProduct;
+          if (runtime.shippingCapture && !shippingCaptureMatchesProduct(runtime.shippingCapture, runtime.product)) {
+            runtime.shippingCapture = null;
+            runtime.ui?.setShippingCapture(null);
+          }
+          runtime.ui?.setProduct(runtime.product);
+        }
+      }
+      return runtime.product;
+    };
+
     const refreshProductEnrichment = () => {
       if (!runtime.active) return runtime.product;
+      synchronizeRuntimeLocation();
       if (!runtime.product) return runtime.product;
       const ssrScript = runtime.itemId === runtime.initialItemId
         ? document.querySelector('#__AER_DATA__')
         : null;
-      if (runtime.itemId === runtime.initialItemId
-        && (runtime.ratingSsrItemId !== runtime.itemId || runtime.ratingSsrScript !== ssrScript)) {
-        runtime.ratingSsrScript = ssrScript;
-        runtime.ratingSsrItemId = runtime.itemId;
-        runtime.ratingSsrSummary = findReviewSummaryInSsr(runtime.itemId, ssrScript);
-      }
-      if (runtime.itemId === runtime.initialItemId
-        && (runtime.gallerySsrItemId !== runtime.itemId || runtime.gallerySsrScript !== ssrScript)) {
-        runtime.gallerySsrScript = ssrScript;
-        runtime.gallerySsrItemId = runtime.itemId;
-        runtime.gallerySsr = findGalleryInSsr(runtime.itemId, ssrScript);
-      }
-      if (runtime.itemId === runtime.initialItemId
-        && (runtime.storeSsrItemId !== runtime.itemId || runtime.storeSsrScript !== ssrScript)) {
-        runtime.storeSsrScript = ssrScript;
-        runtime.storeSsrItemId = runtime.itemId;
-        runtime.storeSsr = findStoreInSsr(runtime.itemId, ssrScript);
+      if (runtime.itemId === runtime.initialItemId) {
+        runtime.ssrInspectionCache = refreshSsrInspectionCache(
+          runtime.ssrInspectionCache,
+          runtime.itemId,
+          ssrScript,
+          {
+            rating: inspectRatingInSsr,
+            gallery: inspectGalleryInSsr,
+            store: inspectStoreInSsr,
+          },
+        );
+        runtime.ratingSsrInspection = runtime.ssrInspectionCache.inspections.rating;
+        runtime.gallerySsrInspection = runtime.ssrInspectionCache.inspections.gallery;
+        runtime.storeSsrInspection = runtime.ssrInspectionCache.inspections.store;
       }
 
-      const ratingBoundary = findProductHeaderBoundary(document);
-      const domRating = extractBasicRatingFromDom(document);
-      const staleRating = isStaleRatingSummary(
+      const domRatingInspection = inspectBasicRatingFromDom(document);
+      const ratingBoundary = domRatingInspection.boundary;
+      const domRating = domRatingInspection.summary;
+      const staleRating = matchesStaleSectionObservation(
+        staleSectionObservationHistory(
+          runtime,
+          'staleRatingObservations',
+          'staleRatingBoundary',
+          'staleRatingDomSummary',
+          'staleRatingDomDiagnostic',
+        ),
         ratingBoundary,
         domRating,
-        runtime.staleRatingBoundary,
-        runtime.staleRatingDomSummary,
+        domRatingInspection.diagnostic,
+        ratingSummariesEqual,
       );
       const currentDomRating = staleRating ? null : domRating;
-      if (currentDomRating) {
+      if (!staleRating && ratingBoundary) {
         runtime.ratingBoundary = ratingBoundary;
         runtime.ratingDomSummary = currentDomRating;
+        runtime.ratingDomDiagnostic = domRatingInspection.diagnostic;
         runtime.staleRatingBoundary = null;
         runtime.staleRatingDomSummary = null;
+        runtime.staleRatingDomDiagnostic = null;
       }
 
-      const reviewSummaryBoundary = findReviewSummaryBoundary(document);
-      const reviewDomSummary = extractReviewSummaryFromDom(document);
-      const staleReviewSummary = isStaleRatingSummary(
+      const reviewDomInspection = inspectReviewSummaryFromDom(document);
+      const reviewSummaryBoundary = reviewDomInspection.boundary;
+      const reviewDomSummary = reviewDomInspection.summary;
+      const staleReviewSummary = matchesStaleSectionObservation(
+        staleSectionObservationHistory(
+          runtime,
+          'staleReviewSummaryObservations',
+          'staleReviewSummaryBoundary',
+          'staleReviewDomSummary',
+          'staleReviewDomDiagnostic',
+        ),
         reviewSummaryBoundary,
         reviewDomSummary,
-        runtime.staleReviewSummaryBoundary,
-        runtime.staleReviewDomSummary,
+        reviewDomInspection.diagnostic,
+        ratingSummariesEqual,
       );
       const currentReviewDomSummary = staleReviewSummary ? null : reviewDomSummary;
-      if (currentReviewDomSummary) {
+      if (!staleReviewSummary && reviewSummaryBoundary) {
         runtime.reviewSummaryBoundary = reviewSummaryBoundary;
         runtime.reviewDomSummary = currentReviewDomSummary;
+        runtime.reviewDomDiagnostic = reviewDomInspection.diagnostic;
         runtime.staleReviewSummaryBoundary = null;
         runtime.staleReviewDomSummary = null;
+        runtime.staleReviewDomDiagnostic = null;
       }
 
-      const storeBoundary = findStoreBoundary(document);
-      const domStore = extractStoreFromDom(document, runtime.itemId, location.href);
-      const staleStore = isStaleStore(
+      const domStoreInspection = inspectStoreFromDom(document, runtime.itemId, location.href);
+      const storeBoundary = domStoreInspection.boundary;
+      const domStore = domStoreInspection.store;
+      const staleStore = matchesStaleSectionObservation(
+        staleSectionObservationHistory(
+          runtime,
+          'staleStoreObservations',
+          'staleStoreBoundary',
+          'staleStoreDom',
+          'staleStoreDomDiagnostic',
+        ),
         storeBoundary,
         domStore,
-        runtime.staleStoreBoundary,
-        runtime.staleStoreDom,
+        domStoreInspection.diagnostic,
+        storesEqual,
       );
-      const currentDomStore = staleStore ? null : domStore;
-      if (currentDomStore) {
+      const currentDomStore = staleStore || domStoreInspection.itemMismatch ? null : domStore;
+      if (!staleStore && !domStoreInspection.itemMismatch && storeBoundary) {
         runtime.storeBoundary = storeBoundary;
         runtime.storeDom = currentDomStore;
+        runtime.storeDomDiagnostic = domStoreInspection.diagnostic;
         runtime.staleStoreBoundary = null;
         runtime.staleStoreDom = null;
+        runtime.staleStoreDomDiagnostic = null;
       }
 
-      const characteristicsBoundary = findCharacteristicsBoundary(document);
-      const characteristics = extractCharacteristicsFromDom(document);
-      const staleCharacteristics = characteristicsBoundary
-        && characteristicsBoundary === runtime.staleCharacteristicsBoundary
-        && characteristicsEqual(characteristics, runtime.staleCharacteristics);
+      const characteristicsInspection = inspectCharacteristicsFromDom(document);
+      const characteristicsBoundary = characteristicsInspection.boundary;
+      const characteristics = characteristicsInspection.characteristics;
+      const staleCharacteristics = matchesStaleSectionObservation(
+        staleSectionObservationHistory(
+          runtime,
+          'staleCharacteristicsObservations',
+          'staleCharacteristicsBoundary',
+          'staleCharacteristics',
+          'staleCharacteristicsDiagnostic',
+        ),
+        characteristicsBoundary,
+        characteristics,
+        characteristicsInspection.diagnostic,
+        characteristicsEqual,
+      );
       const currentCharacteristics = staleCharacteristics ? [] : characteristics;
-      if (currentCharacteristics.length) {
+      if (!staleCharacteristics && characteristicsBoundary) {
         runtime.characteristicsBoundary = characteristicsBoundary;
+        runtime.characteristics = currentCharacteristics;
+        runtime.characteristicsDiagnostic = characteristicsInspection.diagnostic;
         runtime.staleCharacteristicsBoundary = null;
         runtime.staleCharacteristics = [];
+        runtime.staleCharacteristicsDiagnostic = null;
       }
 
-      const descriptionBoundary = findDescriptionBoundary(document);
-      const description = extractDescriptionFromDom(document, location.href);
-      const staleDescription = isStaleDescription(
+      const descriptionInspection = inspectDescriptionFromDom(document, location.href);
+      const descriptionBoundary = descriptionInspection.boundary;
+      const description = descriptionInspection.description;
+      const staleDescription = matchesStaleSectionObservation(
+        staleSectionObservationHistory(
+          runtime,
+          'staleDescriptionObservations',
+          'staleDescriptionBoundary',
+          'staleDescription',
+          'staleDescriptionDiagnostic',
+        ),
         descriptionBoundary,
         description,
-        runtime.staleDescriptionBoundary,
-        runtime.staleDescription,
+        descriptionInspection.diagnostic,
+        descriptionsEqual,
       );
       const currentDescription = staleDescription ? null : description;
-      if (currentDescription) {
+      if (!staleDescription && descriptionBoundary) {
         runtime.descriptionBoundary = descriptionBoundary;
+        runtime.description = currentDescription;
+        runtime.descriptionDiagnostic = descriptionInspection.diagnostic;
         runtime.staleDescriptionBoundary = null;
         runtime.staleDescription = null;
+        runtime.staleDescriptionDiagnostic = null;
       }
 
       const updatedProduct = enrichProductFallbacks(runtime.product, {
-        structuredGallery: runtime.gallerySsr,
-        structuredRating: runtime.ratingSsrSummary,
-        domRating: currentDomRating,
-        reviewDomSummary: currentReviewDomSummary,
-        structuredStore: runtime.storeSsr,
-        domStore: currentDomStore,
-        characteristics: currentCharacteristics,
-        description: currentDescription,
+        galleryInspection: runtime.itemId === runtime.initialItemId
+          ? runtime.gallerySsrInspection
+          : { value: null, diagnostic: null, observed: false },
+        structuredRatingInspection: runtime.itemId === runtime.initialItemId
+          ? runtime.ratingSsrInspection
+          : { value: null, diagnostic: null, observed: false },
+        domRatingInspection: staleRating
+          ? { value: null, diagnostic: null, observed: false }
+          : { value: runtime.ratingDomSummary, diagnostic: runtime.ratingDomDiagnostic, observed: true },
+        reviewDomSummaryInspection: staleReviewSummary
+          ? { value: null, diagnostic: null, observed: false }
+          : { value: runtime.reviewDomSummary, diagnostic: runtime.reviewDomDiagnostic, observed: true },
+        structuredStoreInspection: runtime.itemId === runtime.initialItemId
+          ? runtime.storeSsrInspection
+          : { value: null, diagnostic: null, observed: false },
+        domStoreInspection: staleStore || domStoreInspection.itemMismatch
+          ? { value: null, diagnostic: null, observed: false }
+          : { value: runtime.storeDom, diagnostic: runtime.storeDomDiagnostic, observed: true },
+        characteristicsInspection: staleCharacteristics
+          ? { value: null, diagnostic: null, observed: false }
+          : { value: runtime.characteristics, diagnostic: runtime.characteristicsDiagnostic, observed: true },
+        descriptionInspection: staleDescription
+          ? { value: null, diagnostic: null, observed: false }
+          : { value: runtime.description, diagnostic: runtime.descriptionDiagnostic, observed: true },
       });
       if (updatedProduct !== runtime.product) {
         runtime.product = updatedProduct;
@@ -3388,54 +4605,13 @@
 
     const scanFallbacks = () => {
       if (!runtime.active) return;
-      if (location.href !== runtime.lastUrl) {
-        runtime.lastUrl = location.href;
-        const nextItemId = getItemId(location.href);
-        if (nextItemId !== runtime.itemId) {
-          runtime.staleCharacteristicsBoundary = runtime.characteristicsBoundary;
-          runtime.staleCharacteristics = runtime.product?.characteristics || [];
-          runtime.characteristicsBoundary = null;
-          runtime.staleDescriptionBoundary = runtime.descriptionBoundary;
-          runtime.staleDescription = runtime.product?.description || null;
-          runtime.descriptionBoundary = null;
-          runtime.gallerySsrScript = null;
-          runtime.gallerySsrItemId = null;
-          runtime.gallerySsr = null;
-          runtime.staleRatingBoundary = runtime.ratingBoundary;
-          runtime.staleRatingDomSummary = runtime.ratingDomSummary;
-          runtime.ratingBoundary = null;
-          runtime.ratingDomSummary = null;
-          runtime.ratingSsrScript = null;
-          runtime.ratingSsrItemId = null;
-          runtime.ratingSsrSummary = null;
-          runtime.staleReviewSummaryBoundary = runtime.reviewSummaryBoundary;
-          runtime.staleReviewDomSummary = runtime.reviewDomSummary;
-          runtime.reviewSummaryBoundary = null;
-          runtime.reviewDomSummary = null;
-          runtime.storeSsrScript = null;
-          runtime.storeSsrItemId = null;
-          runtime.storeSsr = null;
-          runtime.staleStoreBoundary = runtime.storeBoundary;
-          runtime.staleStoreDom = runtime.storeDom;
-          runtime.storeBoundary = null;
-          runtime.storeDom = null;
-          runtime.itemId = nextItemId;
-          runtime.product = null;
-          runtime.shippingCapture = null;
-          runtime.ui?.setShippingCapture(null);
-          runtime.ui?.setStatus('Product changed; waiting for productData…');
-        } else if (runtime.product) {
-          const updatedProduct = updateSelectedSku(runtime.product, location.href);
-          if (updatedProduct !== runtime.product) {
-            runtime.product = applyCachedDelivery(updatedProduct, runtime.deliveryCache, runtime.shippingEnvironment);
-            runtime.ui?.setProduct(runtime.product);
-          }
-        }
-      }
+      synchronizeRuntimeLocation();
       if (!runtime.product) {
         const found = findInSsrScripts() || findInReact();
         if (found) acceptProductData(found.data, found);
-        else if (++attempts === 8) runtime.ui?.setStatus('productData not found yet. Reload the page with Ali Helper enabled; SSR contains no SKU data.', true);
+        else if (++attempts === 8) {
+          runtime.ui?.setStatus('productData not found yet. Reload the page with Ali Helper enabled; SSR contains no SKU data.', true);
+        }
       }
       refreshProductEnrichment();
     };

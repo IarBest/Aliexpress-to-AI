@@ -787,8 +787,16 @@ Acceptance: известный tracking удаляется, неизвестно
     success, complete miss — обычный `null`, truncated miss — `traversal-limit`.
     Legacy/simple extractor APIs сохранены. Aggregate SSR bound равен 80 после
     наблюдения live AliExpress SSR до depth 66; reviews-page scanner не расширялся.
-- [ ] Унифицировать per-section source/missing/schema diagnostics; отдельные
-      source fields и safe review diagnostics уже существуют.
+- [x] Унифицировать per-section source/missing/schema diagnostics. Контракт
+      находится в `product._meta.sections` для `sizeGuide`, `gallery`,
+      `ratingSummary`, `store`, `characteristics`, `description` и `delivery`:
+      states — `present` / `missing` / `not-observed` / `invalid`, а invalid
+      diagnostics — `traversal-limit` / `conflict` / `schema-mismatch`.
+      Provenance использует только фиксированные semantic labels; Delivery до
+      matching passive native observation остаётся `not-observed`. Эти
+      diagnostics сами по себе не определяют whole-product completeness,
+      blocking sections или export gating; graceful partial model остаётся
+      отдельной незавершённой задачей.
 - [ ] Реализовать graceful partial model вместо молча неверного полного export.
 - [x] Управлять runtime-owned timer/listener lifecycle. PDP владеет одним interval
       handle и переиспользует его при SPA item/SKU changes; dispose очищает
