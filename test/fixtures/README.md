@@ -1,11 +1,11 @@
 # AliExpress captured fixtures
 
 The `product-*.json` files are automatically minimized, account-free fragments
-of two captured AliExpress `productData` responses used as project regression
-references. Their
-captured structural values are unchanged: the `{ "data": ... }` API wrapper,
-variant IDs/names, every retained SKU ID and `priceList` combination, prices,
-stocks, and the real `byCountryTables -> byUnitTables` size-table shape.
+of captured AliExpress `productData` responses used as project regression
+references. They preserve the captured structural values relevant to each
+observation: the `{ "data": ... }` API wrapper, retained SKU/price/stock data,
+and, where present and retained, variant IDs/names, real `priceList`
+combinations, and the `byCountryTables -> byUnitTables` size-table shape.
 
 Unrelated gallery, description, analytics, tracking, authentication, and account
 data were omitted during automatic minimization. Captured price and stock values
@@ -17,6 +17,18 @@ to suit parser code. Synthetic objects remain acceptable only for isolated
 generic unit tests and must not be described as captured data. When AliExpress
 changes its schema, capture and minimize a new response, document the difference,
 and update the regression expectations deliberately.
+
+`product-1005004235856766.json` is a minimized capture of live `productData`
+for item `1005004235856766`, observed on `aliexpress.ru` on 2026-08-27 in the
+current Moldova session. It is the no-variant P7 reference: captured
+`skuInfo.propertyList` contains 0 groups and `skuInfo.priceList` contains the
+single real SKU `12000029375203557`. Captured `activeSkuId`, the sole SKU ID,
+and the hydrated page URL `sku_id` all matched, so the selected-SKU binding is
+explicit rather than inferred from row count. Retained price and stock values
+are historical. Unrelated analytics, tracking, request/query data, headers,
+cookies, authentication/session/account data, personalized state, and
+nonessential transport fields were removed. Locale, region, session, and time
+can change live availability and values.
 
 `shipping-calculate-1005008195850531.json` is a minimized capture of the real
 AliExpress `freight/calculate` request and response observed through the passive

@@ -852,7 +852,16 @@ handlers.
 Не требуется немедленно искать все товары. По мере реализации вести
 обезличенную matrix fixtures/live references для следующих случаев:
 
-- [ ] товар без вариантов;
+- [x] товар без вариантов;
+
+  Reconciliation: real `productData` capture item `1005004235856766`, observed
+  2026-08-27 on `aliexpress.ru` in the current Moldova session:
+  `propertyList = 0`, `priceList = 1`, and `activeSkuId = sole skuId = observed
+  URL sku_id`. The normalized product has zero variant groups, one real SKU,
+  and empty selections; UI/export use a neutral no-variant representation, not
+  synthetic Default/Single/Standard. The captured fixture and regression live
+  in the P7 matrix test. Historical price/stock are regression evidence, not
+  current-offer assertions.
 - [x] одна variant dimension;
 - [x] две и более variant dimensions;
 - [ ] реально captured отсутствующие/sparse Cartesian combinations; synthetic

@@ -1,0 +1,29 @@
+{
+  "data": {
+    "id": "1005004235856766",
+    "name": "50PCS Lot IRF3205 Original Mosfet 100% Real New IRF3205PBF 50 unidades TO220",
+    "activeSkuId": "12000029375203557",
+    "skuInfo": {
+      "propertyList": [],
+      "priceList": [
+        {
+          "discount": "0",
+          "availQuantity": 11566,
+          "skuId": "12000029375203557",
+          "activityAmount": {
+            "value": 23.94,
+            "currency": "USD",
+            "formatted": "$ 23.94",
+            "cents": "2394"
+          },
+          "amount": {
+            "value": 23.94,
+            "currency": "USD",
+            "formatted": "$ 23.94",
+            "cents": "2394"
+          }
+        }
+      ]
+    }
+  }
+}
