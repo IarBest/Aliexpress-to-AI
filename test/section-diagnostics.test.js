@@ -1448,7 +1448,15 @@ test('pre-export page synchronization switches Relay SKU immediately and handles
   const clearedMeta = clone(cleared._meta);
   delete initialMeta.sections.delivery;
   delete clearedMeta.sections.delivery;
+  delete initialMeta.completeness;
+  delete clearedMeta.completeness;
   assert.deepEqual(clearedMeta, initialMeta);
+  assert.deepEqual(initial._meta.completeness.notObservedSections, [
+    'gallery', 'ratingSummary', 'store', 'characteristics', 'description',
+  ]);
+  assert.deepEqual(cleared._meta.completeness.notObservedSections, [
+    'gallery', 'ratingSummary', 'store', 'characteristics', 'description', 'delivery',
+  ]);
 
   const chatgpt = core.exportForChatGPT(cleared);
   assert.match(chatgpt, new RegExp(`Selected SKU: ${skuB}`));
@@ -2057,7 +2065,7 @@ test('same-item ProductData refresh carries section values and diagnostics while
   assertSection(newBase._meta.sections.sizeGuide, 'present', ['productData']);
 });
 
-test('enrichment updates values and diagnostics atomically, remains refresh-stable, and does not alter ChatGPT format', () => {
+test('enrichment updates values and diagnostics atomically and exposes only concise ChatGPT quality status', () => {
   const fixture = loadFixture('product-1005008195850531.json');
   const galleryFixture = loadFixture('gallery-1005008195850531.json');
   const base = core.normalizeProduct(fixture.data, 'https://aliexpress.ru/item/1005008195850531.html');
@@ -2092,12 +2100,12 @@ test('enrichment updates values and diagnostics atomically, remains refresh-stab
   }
 
   const withMetadata = core.exportForChatGPT(present);
-  const withoutMetadataProduct = { ...present, _meta: { ...present._meta } };
-  delete withoutMetadataProduct._meta.sections;
-  assert.equal(withMetadata, core.exportForChatGPT(withoutMetadataProduct));
-  assert.doesNotMatch(withMetadata, /section diagnostics|schema-mismatch|traversal-limit|not-observed/i);
+  assert.match(withMetadata, /Data status: PARTIAL/);
+  assert.match(withMetadata, /Not observed: Rating Summary, Store, Characteristics, Description, Delivery/);
+  assert.doesNotMatch(withMetadata, /section diagnostics|schema-mismatch|traversal-limit|"sources"|_meta/i);
   const fullJson = JSON.parse(core.exportProduct(present));
   assert.deepEqual(fullJson._meta.sections.gallery, present._meta.sections.gallery);
+  assert.deepEqual(fullJson._meta.completeness, present._meta.completeness);
 });
 
 test('reviews-page diagnostics and safe export contract remain independent from PDP section metadata', () => {

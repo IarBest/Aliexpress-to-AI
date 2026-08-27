@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ali Helper
 // @namespace    https://github.com/local/ali-helper
-// @version      0.1.20
+// @version      0.1.21
 // @description  Read-only AliExpress URL cleaner and product/variant exporter
 // @match        https://aliexpress.ru/item/*
 // @match        https://www.aliexpress.com/item/*
@@ -18,7 +18,7 @@
 (function factory(root) {
   'use strict';
 
-  const VERSION = '0.1.20';
+  const VERSION = '0.1.21';
   const SETTINGS_KEY = 'ali-helper:settings:v1';
   const NATIVE_REVIEW_PATHNAME = '/aer-jsonapi/review/v5/desktop/product-reviews';
   const REVIEW_CAPTURE_CAP = 30;
@@ -80,6 +80,16 @@
   const SECTION_STATES = new Set(['present', 'missing', 'not-observed', 'invalid']);
   const SECTION_DIAGNOSTICS = new Set(['schema-mismatch', 'conflict', 'traversal-limit']);
   const SECTION_DIAGNOSTIC_PRIORITY = Object.freeze(['traversal-limit', 'conflict', 'schema-mismatch']);
+  const PRODUCT_SECTION_ORDER = Object.freeze([
+    'sizeGuide',
+    'gallery',
+    'ratingSummary',
+    'store',
+    'characteristics',
+    'description',
+    'delivery',
+  ]);
+  const PRODUCT_CORE_ISSUE_ORDER = Object.freeze(['selected-sku-unresolved']);
 
   // For present sections, sources contributed accepted values. Otherwise they
   // name the trusted sources that were checked for the current item context.
@@ -129,32 +139,83 @@
       && left.sources.every((source, index) => source === right.sources[index]));
   }
 
+  function assessProductCompleteness(product) {
+    const sections = product?._meta?.sections || {};
+    const notObservedSections = PRODUCT_SECTION_ORDER.filter((section) => (
+      sections[section]?.state === 'not-observed'
+    ));
+    const hasInvalidSection = PRODUCT_SECTION_ORDER.some((section) => sections[section]?.state === 'invalid');
+    const invalidSections = PRODUCT_SECTION_ORDER.flatMap((section) => {
+      const entry = sections[section];
+      return entry?.state === 'invalid' && SECTION_DIAGNOSTICS.has(entry.diagnostic)
+        ? [{ section, diagnostic: entry.diagnostic }]
+        : [];
+    });
+    const observedCoreIssues = new Set();
+    if (product?._meta?.selectedSkuResolved === false) observedCoreIssues.add('selected-sku-unresolved');
+    const coreIssues = PRODUCT_CORE_ISSUE_ORDER.filter((issue) => observedCoreIssues.has(issue));
+    const state = hasInvalidSection
+      ? 'invalid'
+      : notObservedSections.length || coreIssues.length
+        ? 'partial'
+        : 'complete';
+    return { state, notObservedSections, invalidSections, coreIssues };
+  }
+
+  function productCompletenessEqual(left, right) {
+    return Boolean(left && right
+      && left.state === right.state
+      && Array.isArray(left.notObservedSections)
+      && Array.isArray(right.notObservedSections)
+      && left.notObservedSections.length === right.notObservedSections.length
+      && left.notObservedSections.every((section, index) => section === right.notObservedSections[index])
+      && Array.isArray(left.invalidSections)
+      && Array.isArray(right.invalidSections)
+      && left.invalidSections.length === right.invalidSections.length
+      && left.invalidSections.every((entry, index) => entry.section === right.invalidSections[index]?.section
+        && entry.diagnostic === right.invalidSections[index]?.diagnostic)
+      && Array.isArray(left.coreIssues)
+      && Array.isArray(right.coreIssues)
+      && left.coreIssues.length === right.coreIssues.length
+      && left.coreIssues.every((issue, index) => issue === right.coreIssues[index]));
+  }
+
+  function withProductCompleteness(product) {
+    if (!product) return product;
+    const completeness = assessProductCompleteness(product);
+    if (productCompletenessEqual(product._meta?.completeness, completeness)) return product;
+    return {
+      ...product,
+      _meta: { ...(product._meta || {}), completeness },
+    };
+  }
+
   function withSectionDiagnostic(product, section, diagnostic) {
     if (!product) return product;
     const previous = product._meta?.sections?.[section];
-    if (sectionDiagnosticsEqual(previous, diagnostic)) return product;
-    return {
+    if (sectionDiagnosticsEqual(previous, diagnostic)) return withProductCompleteness(product);
+    return withProductCompleteness({
       ...product,
       _meta: {
         ...(product._meta || {}),
         sections: { ...(product._meta?.sections || {}), [section]: diagnostic },
       },
-    };
+    });
   }
 
   function withSectionValueAndDiagnostic(product, section, value, diagnostic, equal = (left, right) => left === right) {
     if (!product) return product;
     const sameValue = equal(product[section], value);
     const sameDiagnostic = sectionDiagnosticsEqual(product._meta?.sections?.[section], diagnostic);
-    if (sameValue && sameDiagnostic) return product;
-    return {
+    if (sameValue && sameDiagnostic) return withProductCompleteness(product);
+    return withProductCompleteness({
       ...product,
       [section]: sameValue ? product[section] : value,
       _meta: {
         ...(product._meta || {}),
         sections: { ...(product._meta?.sections || {}), [section]: diagnostic },
       },
-    };
+    });
   }
 
   function presentSectionDiagnostic(product, section, sources, preservePreviousSources = false) {
@@ -2983,7 +3044,7 @@
       && fallbacks.characteristics.length && !characteristics.length
       ? 'schema-mismatch'
       : null;
-    return {
+    const product = {
       itemId,
       title: asString(firstDefined(productData.title, productData.name, productData.productInfo?.title, fallbacks.title)),
       url: url.href,
@@ -3025,6 +3086,7 @@
         },
       },
     };
+    return withProductCompleteness(product);
   }
 
   function carryProductSections(product, previousProduct) {
@@ -3048,9 +3110,9 @@
         changed = true;
       }
     }
-    if (!changed) return product;
+    if (!changed) return withProductCompleteness(product);
     next._meta = { ...(product._meta || {}), sections: nextSections };
-    return next;
+    return withProductCompleteness(next);
   }
 
   // Once a product is normalized, an absent or unknown URL sku_id keeps the
@@ -3063,11 +3125,11 @@
     } catch (_) {
       return product;
     }
-    if (!requestedSkuId || requestedSkuId === product.selectedSkuId) return product;
+    if (!requestedSkuId || requestedSkuId === product.selectedSkuId) return withProductCompleteness(product);
     const selectedSku = product.skus.find((sku) => sku.skuId === requestedSkuId);
-    if (!selectedSku) return product;
+    if (!selectedSku) return withProductCompleteness(product);
     // Delivery is SKU-specific; runtime may reapply only the new SKU's cache entry.
-    return {
+    return withProductCompleteness({
       ...product,
       url: normalizeItemUrl(pageUrl).href,
       selectedSkuId: requestedSkuId,
@@ -3082,7 +3144,7 @@
           delivery: createSectionDiagnostic('not-observed'),
         },
       },
-    };
+    });
   }
 
   function synchronizeProductPageContext(product, pageUrl, deliveryCache, shippingEnvironment) {
@@ -3318,11 +3380,66 @@
     return value;
   }
 
+  function formatProductSectionLabel(section) {
+    return ({
+      sizeGuide: 'Size Guide',
+      gallery: 'Gallery',
+      ratingSummary: 'Rating Summary',
+      store: 'Store',
+      characteristics: 'Characteristics',
+      description: 'Description',
+      delivery: 'Delivery',
+    })[section] || section;
+  }
+
+  function formatProductCoreIssue(issue) {
+    return ({
+      'selected-sku-unresolved': 'selected SKU unresolved',
+    })[issue] || issue;
+  }
+
+  function formatProductQualityLines(product) {
+    const completeness = assessProductCompleteness(product);
+    const lines = [`Data status: ${completeness.state.toUpperCase()}`];
+    if (completeness.invalidSections.length) {
+      lines.push(`Invalid sections: ${completeness.invalidSections
+        .map(({ section, diagnostic }) => `${formatProductSectionLabel(section)} (${diagnostic})`)
+        .join(', ')}`);
+    }
+    if (completeness.notObservedSections.length) {
+      lines.push(`Not observed: ${completeness.notObservedSections.map(formatProductSectionLabel).join(', ')}`);
+    }
+    if (completeness.coreIssues.length) {
+      lines.push(`Core issues: ${completeness.coreIssues.map(formatProductCoreIssue).join(', ')}`);
+    }
+    return lines;
+  }
+
   function formatProductStatus(product) {
     const combinationCount = product.skus.length;
     const combinationLabel = combinationCount === 1 ? 'combination' : 'combinations';
     const groups = product.variantGroups.map((group) => `${group.name}: ${group.values.length}`).join(', ');
-    return `Ready · ${combinationCount} ${combinationLabel} · ${groups || 'no variant groups'} · source: ${formatSourceLabel(product._meta.source)}`;
+    const completeness = assessProductCompleteness(product);
+    const stateLabel = `${completeness.state[0].toUpperCase()}${completeness.state.slice(1)}`;
+    const issues = [];
+    if (completeness.invalidSections.length) {
+      issues.push(completeness.invalidSections
+        .map(({ section, diagnostic }) => `${formatProductSectionLabel(section)}: ${diagnostic}`)
+        .join(', '));
+    }
+    if (completeness.notObservedSections.length) {
+      issues.push(`not observed: ${completeness.notObservedSections.map(formatProductSectionLabel).join(', ')}`);
+    }
+    if (completeness.coreIssues.length) {
+      issues.push(`core issues: ${completeness.coreIssues.map(formatProductCoreIssue).join(', ')}`);
+    }
+    return [
+      stateLabel,
+      `${combinationCount} ${combinationLabel}`,
+      groups || 'no variant groups',
+      ...issues,
+      `source: ${formatSourceLabel(product._meta.source)}`,
+    ].join(' · ');
   }
 
   function formatDeliveryDestination(destination) {
@@ -3512,7 +3629,7 @@
   }
 
   function exportProduct(product) {
-    return JSON.stringify(product, null, 2);
+    return JSON.stringify(withProductCompleteness(product), null, 2);
   }
 
   function exportDescription(product) {
@@ -3544,6 +3661,8 @@
       `Title: ${product.title || '—'}`,
       `URL: ${product.url}`,
       `Item ID: ${product.itemId}`,
+      '',
+      ...formatProductQualityLines(product),
       '',
       `Selected SKU: ${product.selectedSkuId || '—'}${selected ? '' : ' (not resolved)'}`,
       `Selected variants: ${formatSelections(selected)}`,
@@ -3585,10 +3704,12 @@
     VERSION,
     DEFAULT_SETTINGS,
     SECTION_SOURCE_ORDER,
+    PRODUCT_SECTION_ORDER,
     normalizeSectionSources,
     createSectionDiagnostic,
     createSectionObservation,
     sectionDiagnosticFromObservations,
+    assessProductCompleteness,
     isItemPage,
     getItemId,
     isReviewsPage,
@@ -3710,6 +3831,7 @@
     formatUnresolvedSkuPriceSummary,
     formatSelections,
     formatSourceLabel,
+    formatProductQualityLines,
     formatProductStatus,
     formatDelivery,
     formatRatingSummary,
@@ -4085,7 +4207,7 @@
     return {
       setProduct(product) {
         productButtons.forEach((button) => { button.disabled = false; });
-        flash(formatProductStatus(product));
+        flash(formatProductStatus(product), assessProductCompleteness(product).state === 'invalid');
       },
       setShippingCapture(capture) {
         shippingDebug.disabled = !capture;

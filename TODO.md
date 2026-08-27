@@ -795,9 +795,17 @@ Acceptance: известный tracking удаляется, неизвестно
       Provenance использует только фиксированные semantic labels; Delivery до
       matching passive native observation остаётся `not-observed`. Эти
       diagnostics сами по себе не определяют whole-product completeness,
-      blocking sections или export gating; graceful partial model остаётся
-      отдельной незавершённой задачей.
-- [ ] Реализовать graceful partial model вместо молча неверного полного export.
+      blocking sections или export gating; graceful partial model оформлен
+      отдельным пунктом ниже.
+- [x] Реализовать graceful partial model вместо молча неверного полного export.
+      `_meta.completeness` публикует `complete` / `partial` / `invalid`: `present`
+      и `missing` считаются resolved, `not-observed` делает product partial, а
+      любой invalid section — whole product invalid. `selected-sku-unresolved`
+      является core issue и даёт partial при отсутствии invalid. Списки
+      `notObservedSections`, `invalidSections` и `coreIssues` deterministic.
+      `Copy product` сохраняет machine-readable completeness; panel и `Copy for
+      ChatGPT` показывают compact status, не блокируя export при partial/invalid.
+      Reviews model не получает PDP completeness.
 - [x] Управлять runtime-owned timer/listener lifecycle. PDP владеет одним interval
       handle и переиспользует его при SPA item/SKU changes; dispose очищает
       interval и pending `DOMContentLoaded`. Reviews SSR discovery владеет не

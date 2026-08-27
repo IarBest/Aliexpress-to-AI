@@ -930,7 +930,10 @@ test('formats product status with real combinations and a human-facing source', 
     { source: 'network:productData' },
   );
 
-  assert.equal(core.formatProductStatus(product), 'Ready · 7 combinations · Bundle: 7 · source: API');
+  assert.equal(
+    core.formatProductStatus(product),
+    'Partial · 7 combinations · Bundle: 7 · not observed: Gallery, Rating Summary, Store, Characteristics, Description, Delivery · source: API',
+  );
   assert.equal(core.formatSourceLabel('ssr:__AER_DATA__'), 'SSR');
   assert.equal(core.formatSourceLabel('react:__reactProps'), 'React');
   assert.equal(core.formatSourceLabel('custom-source'), 'custom-source');
@@ -3693,6 +3696,8 @@ test('normalized reviews JSON export remains full fidelity while ChatGPT export 
   assert.equal(aiText.includes(active.reviews[0].id), false);
   assert.equal(aiText.includes(active.reviews[0].reviewer.displayName), false);
   assert.equal(aiText.includes(active.reviews[0].initial.images[0].url), false);
+  assert.equal(Object.hasOwn(exported, '_meta'), false);
+  assert.doesNotMatch(aiText, /Data status:|completeness/i);
 });
 
 test('review status humanizes only confirmed sort/filter codes and reports passive capture', () => {
