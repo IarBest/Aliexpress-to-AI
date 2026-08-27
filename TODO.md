@@ -864,8 +864,21 @@ handlers.
   current-offer assertions.
 - [x] одна variant dimension;
 - [x] две и более variant dimensions;
-- [ ] реально captured отсутствующие/sparse Cartesian combinations; synthetic
+- [x] реально captured отсутствующие/sparse Cartesian combinations; synthetic
       удаление priceList row доказывает parser behavior, но не закрывает matrix;
+
+  Reconciliation: real `productData` capture item `1005010146755036`, observed
+  2026-08-27 on `aliexpress.ru` in the current Moldova session, has `Color 2 ×
+  Shoe Size 7`: theoretical Cartesian 14 versus a complete captured `priceList`
+  of 9 unique actual rows. Exact gaps are Wine Red `338038` + 39 `380598`, Wine
+  Red `338038` + 40 `380590`, Black `337907` + 36 `380593`, Black `337907` + 37
+  `380587`, and Black `337907` + 38 `380599`. Every accepted value occurs in an
+  actual SKU, so orphan values are zero; raw `disabled=false`, while live
+  impossible cross-selections used `optionPartial`. Parser and exports retain
+  only the 9 real `priceList` combinations and synthesize no missing SKU rows.
+  The minimized fixture is `test/fixtures/product-1005010146755036.json`; its
+  proof lives in `test/product-matrix.test.js`. Historical price/stock are
+  regression evidence, not current-offer assertions.
 - [x] большое число SKU;
 - [x] size guide CM/IN;
 - [x] отсутствие size guide;

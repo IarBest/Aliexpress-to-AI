@@ -1,0 +1,281 @@
+{
+  "data": {
+    "id": "1005010146755036",
+    "name": "Women's Summer New Two-color PU Waterproof Lightweight Shallow Mouth High Heels 2025 Elegant Dress Party Shoes 35--42 Size",
+    "activeSkuId": "12000051314391886",
+    "skuInfo": {
+      "propertyList": [
+        {
+          "name": "Color",
+          "id": "4",
+          "order": 1,
+          "hasSizeInfo": false,
+          "values": [
+            {
+              "name": "Wine Red",
+              "displayName": "Wine Red",
+              "id": "338038",
+              "order": 0,
+              "disabled": false,
+              "colorValue": null
+            },
+            {
+              "name": "black",
+              "displayName": "Black",
+              "id": "337907",
+              "order": 0,
+              "disabled": false,
+              "colorValue": "#000000"
+            }
+          ]
+        },
+        {
+          "name": "Shoe Size",
+          "id": "1071",
+          "order": 2,
+          "hasSizeInfo": false,
+          "values": [
+            {
+              "name": "35",
+              "displayName": "35",
+              "id": "380592",
+              "order": 0,
+              "disabled": false,
+              "colorValue": null
+            },
+            {
+              "name": "36",
+              "displayName": "36",
+              "id": "380593",
+              "order": 0,
+              "disabled": false,
+              "colorValue": null
+            },
+            {
+              "name": "37",
+              "displayName": "37",
+              "id": "380587",
+              "order": 0,
+              "disabled": false,
+              "colorValue": null
+            },
+            {
+              "name": "38",
+              "displayName": "38",
+              "id": "380599",
+              "order": 0,
+              "disabled": false,
+              "colorValue": null
+            },
+            {
+              "name": "39",
+              "displayName": "39",
+              "id": "380598",
+              "order": 0,
+              "disabled": false,
+              "colorValue": null
+            },
+            {
+              "name": "40",
+              "displayName": "40",
+              "id": "380590",
+              "order": 0,
+              "disabled": false,
+              "colorValue": null
+            },
+            {
+              "name": "42",
+              "displayName": "42",
+              "id": "380596",
+              "order": 0,
+              "disabled": false,
+              "colorValue": null
+            }
+          ]
+        }
+      ],
+      "priceList": [
+        {
+          "skuPropIds": "338038,380592",
+          "discount": "50",
+          "availQuantity": 20,
+          "skuAttr": "14:200006158;200000124:200000333",
+          "skuId": "12000051314391877",
+          "buyerPriceForLogistic": "3022",
+          "activityAmount": {
+            "value": 30.22,
+            "currency": "USD",
+            "formatted": "$ 30.22",
+            "cents": "3022"
+          },
+          "amount": {
+            "value": 60.45,
+            "currency": "USD",
+            "formatted": "$ 60.45",
+            "cents": "6045"
+          }
+        },
+        {
+          "skuPropIds": "337907,380592",
+          "discount": "50",
+          "availQuantity": 20,
+          "skuAttr": "14:193;200000124:200000333",
+          "skuId": "12000051314391881",
+          "buyerPriceForLogistic": "3022",
+          "activityAmount": {
+            "value": 30.22,
+            "currency": "USD",
+            "formatted": "$ 30.22",
+            "cents": "3022"
+          },
+          "amount": {
+            "value": 60.45,
+            "currency": "USD",
+            "formatted": "$ 60.45",
+            "cents": "6045"
+          }
+        },
+        {
+          "skuPropIds": "338038,380593",
+          "discount": "50",
+          "availQuantity": 20,
+          "skuAttr": "14:200006158;200000124:200000334",
+          "skuId": "12000051314391879",
+          "buyerPriceForLogistic": "2604",
+          "activityAmount": {
+            "value": 26.04,
+            "currency": "USD",
+            "formatted": "$ 26.04",
+            "cents": "2604"
+          },
+          "amount": {
+            "value": 52.07,
+            "currency": "USD",
+            "formatted": "$ 52.07",
+            "cents": "5207"
+          }
+        },
+        {
+          "skuPropIds": "338038,380587",
+          "discount": "50",
+          "availQuantity": 20,
+          "skuAttr": "14:200006158;200000124:100010482",
+          "skuId": "12000051314391873",
+          "buyerPriceForLogistic": "3022",
+          "activityAmount": {
+            "value": 30.22,
+            "currency": "USD",
+            "formatted": "$ 30.22",
+            "cents": "3022"
+          },
+          "amount": {
+            "value": 60.45,
+            "currency": "USD",
+            "formatted": "$ 60.45",
+            "cents": "6045"
+          }
+        },
+        {
+          "skuPropIds": "338038,380599",
+          "discount": "50",
+          "availQuantity": 20,
+          "skuAttr": "14:200006158;200000124:200000898",
+          "skuId": "12000051314391875",
+          "buyerPriceForLogistic": "3022",
+          "activityAmount": {
+            "value": 30.22,
+            "currency": "USD",
+            "formatted": "$ 30.22",
+            "cents": "3022"
+          },
+          "amount": {
+            "value": 60.45,
+            "currency": "USD",
+            "formatted": "$ 60.45",
+            "cents": "6045"
+          }
+        },
+        {
+          "skuPropIds": "337907,380598",
+          "discount": "50",
+          "availQuantity": 20,
+          "skuAttr": "14:193;200000124:200000364",
+          "skuId": "12000051314391876",
+          "buyerPriceForLogistic": "3022",
+          "activityAmount": {
+            "value": 30.22,
+            "currency": "USD",
+            "formatted": "$ 30.22",
+            "cents": "3022"
+          },
+          "amount": {
+            "value": 60.45,
+            "currency": "USD",
+            "formatted": "$ 60.45",
+            "cents": "6045"
+          }
+        },
+        {
+          "skuPropIds": "337907,380590",
+          "discount": "50",
+          "availQuantity": 20,
+          "skuAttr": "14:193;200000124:100013888",
+          "skuId": "12000051314391886",
+          "buyerPriceForLogistic": "3022",
+          "activityAmount": {
+            "value": 30.22,
+            "currency": "USD",
+            "formatted": "$ 30.22",
+            "cents": "3022"
+          },
+          "amount": {
+            "value": 60.45,
+            "currency": "USD",
+            "formatted": "$ 60.45",
+            "cents": "6045"
+          }
+        },
+        {
+          "skuPropIds": "337907,380596",
+          "discount": "50",
+          "availQuantity": 20,
+          "skuAttr": "14:193;200000124:200000337",
+          "skuId": "12000051314391883",
+          "buyerPriceForLogistic": "3022",
+          "activityAmount": {
+            "value": 30.22,
+            "currency": "USD",
+            "formatted": "$ 30.22",
+            "cents": "3022"
+          },
+          "amount": {
+            "value": 60.45,
+            "currency": "USD",
+            "formatted": "$ 60.45",
+            "cents": "6045"
+          }
+        },
+        {
+          "skuPropIds": "338038,380596",
+          "discount": "50",
+          "availQuantity": 20,
+          "skuAttr": "14:200006158;200000124:200000337",
+          "skuId": "12000051314391884",
+          "buyerPriceForLogistic": "3022",
+          "activityAmount": {
+            "value": 30.22,
+            "currency": "USD",
+            "formatted": "$ 30.22",
+            "cents": "3022"
+          },
+          "amount": {
+            "value": 60.45,
+            "currency": "USD",
+            "formatted": "$ 60.45",
+            "cents": "6045"
+          }
+        }
+      ]
+    }
+  }
+}

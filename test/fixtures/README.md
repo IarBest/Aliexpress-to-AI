@@ -30,6 +30,27 @@ cookies, authentication/session/account data, personalized state, and
 nonessential transport fields were removed. Locale, region, session, and time
 can change live availability and values.
 
+`product-1005010146755036.json` is a minimized capture of live `productData`
+for item `1005010146755036`, observed on `aliexpress.ru` on 2026-08-27 in the
+current Moldova session. It is the sparse Cartesian P7 reference: captured
+Color `4` has Wine Red `338038` and Black `337907`; Shoe Size `1071` has 35
+`380592`, 36 `380593`, 37 `380587`, 38 `380599`, 39 `380598`, 40 `380590`,
+and 42 `380596`. The theoretical 2 × 7 matrix has 14 keys, while the complete
+captured `priceList` has 9 unique real rows. The exact five missing keys are
+Wine Red `338038` + 39 `380598`, Wine Red `338038` + 40 `380590`, Black
+`337907` + 36 `380593`, Black `337907` + 37 `380587`, and Black `337907` +
+38 `380599`. Every value participating in this accepted sparse proof occurs in
+at least one actual captured SKU; there are no orphan values. All raw value-level
+`disabled` flags were false. The hydrated UI instead marked impossible
+cross-selections with its observed `optionPartial` state: Black + 40 made Wine
+Red and sizes 36/37/38 partial, while selecting Wine Red moved to a real size-35
+SKU and made sizes 39/40 partial. Captured `activeSkuId`, URL `sku_id`, and the
+real Black + 40 control row all matched SKU `12000051314391886`. Price and
+stock values are historical. The fixture retains all property values and all
+9 price rows, while unrelated offer/transport fields, request/query data,
+headers, cookies, authentication/session/account data, personalized state,
+analytics, and tracking data were excluded during minimization.
+
 `shipping-calculate-1005008195850531.json` is a minimized capture of the real
 AliExpress `freight/calculate` request and response observed through the passive
 Tampermonkey probe. Its retained request, destination, method, price, and ETA
