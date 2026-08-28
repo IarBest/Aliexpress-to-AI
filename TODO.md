@@ -884,7 +884,23 @@ handlers.
 - [x] отсутствие size guide;
 - [x] description преимущественно text;
 - [x] description преимущественно images;
-- [ ] реально captured free shipping; synthetic zero-cost test недостаточен;
+- [x] реально captured free shipping; synthetic zero-cost test недостаточен;
+
+  Reconciliation: real natural `freight/calculate` capture for item
+  `1005007275021771`, SKU `12000040029370608`, observed 2026-08-28 on
+  `aliexpress.ru` in the Moldova/current session for destination Moldova /
+  Kishinev Region / Kishinev. One real method, Post office /
+  `CAINIAO_FULFILLMENT_STD`, has raw `amount.value = 0`, currency USD, and
+  formatted `US $0`; `freeMethods=[]` and request `freeDelivery=null` prove
+  that the free state comes from the real method amount rather than hints.
+  ProductData displays USD 11.45 while the freight request identity is
+  `logisticAmount` CNY 76.51 (`buyerPriceForLogistic=1145`). The production
+  cache uses cross-currency `logisticAmount` only when both currencies are
+  explicitly known, the logistic currency matches the request currency, the
+  display currency differs, and a logistic value is present; missing display
+  currency fails closed to `Delivery not-observed`. Delivery remains `present`
+  with source `native:shipping-calculate`, the existing paid case remains paid,
+  and fixtures/tests document historical region/session-dependent evidence.
 - [x] paid shipping;
 - [ ] реально captured несколько shipping methods; synthetic multi-method test
       недостаточен;

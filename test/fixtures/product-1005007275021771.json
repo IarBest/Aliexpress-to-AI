@@ -1,0 +1,49 @@
+{
+  "data": {
+    "id": "1005007275021771",
+    "name": "16A works with Tuya WiFi Smart Switch Module 2-way Control Mini Switch Breaker Smart Life Work With Alexa Google Alice",
+    "activeSkuId": "12000040029370608",
+    "skuInfo": {
+      "propertyList": [
+        {
+          "id": "4",
+          "name": "Color",
+          "values": [
+            {
+              "id": "337904",
+              "name": "White",
+              "displayName": "1 piece"
+            }
+          ]
+        }
+      ],
+      "priceList": [
+        {
+          "discount": "50",
+          "availQuantity": 204,
+          "skuId": "12000040029370608",
+          "skuPropIds": "337904",
+          "activityAmount": {
+            "value": 11.45,
+            "currency": "USD",
+            "formatted": "$ 11.45",
+            "cents": "1145"
+          },
+          "amount": {
+            "value": 22.89,
+            "currency": "USD",
+            "formatted": "$ 22.89",
+            "cents": "2289"
+          },
+          "buyerPriceForLogistic": "1145",
+          "logisticAmount": {
+            "value": 76.51,
+            "currency": "CNY",
+            "formatted": "CN¥ 76.51",
+            "cents": "7651"
+          }
+        }
+      ]
+    }
+  }
+}

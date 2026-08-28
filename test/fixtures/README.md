@@ -51,6 +51,19 @@ stock values are historical. The fixture retains all property values and all
 headers, cookies, authentication/session/account data, personalized state,
 analytics, and tracking data were excluded during minimization.
 
+`product-1005007275021771.json` is a narrowly scoped minimized capture of the
+natural `productData` response observed on `aliexpress.ru` on 2026-08-28 in the
+current Moldova session. It was added only to bind the free-shipping functional
+regression to the exact current product/SKU price context: item
+`1005007275021771`, selected and active SKU `12000040029370608`, selling price
+`USD 11.45`, `buyerPriceForLogistic` `1145`, and `logisticAmount` `CNY 76.51`.
+That `logisticAmount` exactly matches the native freight request's CNY
+`minPrice`/`maxPrice`; it is request identity data, not a shipping charge. The
+single real property value and selected price row were retained. Price and
+availability are historical and may drift. Other SKUs, freight extensions,
+warehouse/seller IDs, analytics/tracking, request/query data, headers, cookies,
+authentication/session/account data, and personalized state were excluded.
+
 `shipping-calculate-1005008195850531.json` is a minimized capture of the real
 AliExpress `freight/calculate` request and response observed through the passive
 Tampermonkey probe. Its retained request, destination, method, price, and ETA
@@ -60,6 +73,25 @@ unrelated tracking noise, irrelevant null fields, and account-sensitive data
 were omitted.
 Shipping price, dates, ETA, availability, and destination-dependent results are
 historical and can vary by region, session, and time.
+
+`shipping-calculate-1005007275021771.json` is a minimized capture of a natural
+AliExpress `freight/calculate` request/response observed on `aliexpress.ru` on
+2026-08-28 in the current Moldova session for item `1005007275021771` and
+selected SKU `12000040029370608`. The retained request binds that product and
+SKU, count 1, CNY price context, and country `MD` to the response destination
+Moldova / Kishinev Region / Kishinev. The response contained exactly one method
+in captured order. `Post office` / `CAINIAO_FULFILLMENT_STD` was structurally
+free: raw `amount.value` was exactly numeric `0`, currency `USD`, and formatted
+text `US $0`. `normalizeDelivery()` preserves this as cost value `"0"`, currency
+`USD`, and formatted text `US $0`. The native AliExpress UI corroborated `Free`
+for the same selected SKU, session, and destination.
+
+Free status, shipping availability, price, and ETA are historical evidence and
+can drift by destination, session, and time. The request and response were
+minimized: endpoint query, headers, cookies, authentication/session/account
+data, buyer/contact/address data, warehouse and seller IDs, and unrelated
+analytics/tracking were excluded. Only safe coarse destination names/codes and
+public product/SKU binding data required by the regression were retained.
 
 `characteristics-1005009452926938.json` records a minimal live DOM observation
 from the AliExpress product page on 2026-08-11. The retained class fragments,

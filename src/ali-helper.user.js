@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ali Helper
 // @namespace    https://github.com/local/ali-helper
-// @version      0.1.21
+// @version      0.1.22
 // @description  Read-only AliExpress URL cleaner and product/variant exporter
 // @match        https://aliexpress.ru/item/*
 // @match        https://www.aliexpress.com/item/*
@@ -18,7 +18,7 @@
 (function factory(root) {
   'use strict';
 
-  const VERSION = '0.1.21';
+  const VERSION = '0.1.22';
   const SETTINGS_KEY = 'ali-helper:settings:v1';
   const NATIVE_REVIEW_PATHNAME = '/aer-jsonapi/review/v5/desktop/product-reviews';
   const REVIEW_CAPTURE_CAP = 30;
@@ -896,8 +896,25 @@
     return getCachedDeliveryEntry(cache, productId, skuId, environment, price)?.delivery || null;
   }
 
-  function selectedSkuShippingPriceContext(product) {
-    const currentPrice = asString(product?.selectedSku?.price?.current?.value);
+  function selectedSkuShippingPriceContext(product, environment) {
+    const logisticAmount = product?.selectedSku?.logisticAmount;
+    const requestCurrency = asString(environment?.tradeCurrency);
+    const logisticCurrency = asString(logisticAmount?.currency);
+    const currentCurrency = asString(product?.selectedSku?.price?.current?.currency);
+    const hasLogisticPrice = logisticAmount?.value !== null
+      && logisticAmount?.value !== undefined
+      && logisticAmount?.value !== '';
+    // logisticAmount is not a shipping charge. AliExpress can use it as minPrice/maxPrice
+    // request identity when freight currency explicitly differs from displayed SKU currency.
+    const useLogisticPrice = requestCurrency
+      && currentCurrency
+      && logisticCurrency === requestCurrency
+      && currentCurrency !== requestCurrency
+      && hasLogisticPrice;
+    const selectedPrice = useLogisticPrice
+      ? logisticAmount.value
+      : product?.selectedSku?.price?.current?.value;
+    const currentPrice = asString(selectedPrice);
     return {
       buyerPrice: asString(product?.selectedSku?.buyerPriceForLogistic),
       minPrice: currentPrice,
@@ -912,7 +929,7 @@
       product.itemId,
       product.selectedSkuId,
       environment,
-      selectedSkuShippingPriceContext(product),
+      selectedSkuShippingPriceContext(product, environment),
     );
     const delivery = entry?.delivery || null;
     const diagnostic = delivery

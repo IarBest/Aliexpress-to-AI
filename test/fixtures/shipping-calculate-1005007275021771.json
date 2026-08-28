@@ -1,0 +1,53 @@
+{
+  "sourceUrl": "https://aliexpress.ru/aer-api/v1/pdp/web/freight/calculate",
+  "transport": "fetch",
+  "request": {
+    "productId": 1005007275021771,
+    "productIdV2": "1005007275021771",
+    "country": "MD",
+    "provinceCode": null,
+    "cityCode": null,
+    "skuId": "12000040029370608",
+    "count": 1,
+    "maxPrice": 76.51,
+    "minPrice": 76.51,
+    "tradeCurrency": "CNY",
+    "buyerPrice": "1145",
+    "freeDelivery": null
+  },
+  "response": {
+    "to": {
+      "country": "MD",
+      "city": "924500010001000000",
+      "region": "924500010000000000",
+      "countryName": "Moldova",
+      "cityName": "Kishinev",
+      "regionName": "Kishinev Region"
+    },
+    "displayMultipleMethods": false,
+    "methods": [
+      {
+        "service": "",
+        "groupName": "Post office",
+        "dateDisplay": "2026-09-12",
+        "dateEstimated": "",
+        "dateFormat": "9–12 September",
+        "amount": {
+          "value": 0,
+          "currency": "USD",
+          "formatted": "US $0"
+        },
+        "discount": 0,
+        "tracking": false,
+        "commitDay": 75,
+        "serviceGroupType": "rupost_self_pickup_point",
+        "serviceName": "CAINIAO_FULFILLMENT_STD",
+        "deliveryBy": 0,
+        "passportRequired": false,
+        "etaStartDeliveryDate": "2026-09-09",
+        "etaEndDeliveryDate": "2026-09-12"
+      }
+    ],
+    "freeMethods": []
+  }
+}
