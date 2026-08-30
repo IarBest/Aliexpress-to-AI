@@ -546,8 +546,10 @@ capture cap, gaps/conflicts, follow-ups и active-context export реализо�
 - [x] Показывать loaded count/pages/context/cap в reviews-page status/export.
 - [x] Не угадывать неизвестные sort/filter codes: human labels только для
       wire-confirmed values, остальные generic.
-- [ ] Сделать passive capture cap configurable; текущий production cap
-      фиксирован на 30 reviews на context.
+- [ ] Сделать bounded passive retained-review cap configurable с default 30
+      reviews на context. Настройка влияет только на сохранение passive
+      observations в page-session memory и не создаёт, не повторяет, не
+      подавляет и иначе не управляет native AliExpress review requests.
 
 #### Optional active-loading research — deferred
 
@@ -715,20 +717,29 @@ Acceptance: основной export остаётся читаемым и огр�
 
 ### Panel states and actions
 
-- [ ] Ввести явные loading/ready/partial/error states вместо одного status text.
-- [ ] Показывать найденные sources и отсутствующие optional sections.
-- [ ] Ввести unified product/per-section source/schema diagnostic contract без
-      чувствительных данных. Reviews уже имеют safe enumerated SSR diagnostics;
-      product-side и cross-section diagnostics ещё не унифицированы.
+- [x] **Superseded by P6:** старую модель loading/ready/partial/error заменил
+      contract `complete` / `partial` / `invalid`; waiting/error presentation
+      уже существует, а принятый UI остаётся compact status surface.
+- [ ] Добавить в panel compact disclosure безопасных per-section semantic
+      sources и подтверждённых `missing` optional sections. Underlying P6
+      metadata уже существует; UI должен сохранять различие `missing` /
+      `not-observed` и не показывать raw metadata или raw URLs.
+- [x] **Superseded and generalized by P6:** product-side contract реализован
+      через `product._meta.sections`; reviews сохраняют отдельный safe
+      diagnostics contract.
 - [x] Сохранить collapsible panel и settings через Tampermonkey storage.
 - [ ] Проверить layout на desktop и узком viewport без перекрытия основных
-      AliExpress controls.
+      AliExpress controls. Текущий v0.1.22 не проходит narrow check при
+      390×844: fixed panel перекрывает product content и нижнюю область purchase
+      controls. После будущего layout fix повторить desktop + narrow verification.
 - [x] Корректно обновлять panel после SPA item/SKU changes.
-- [ ] Переработать organization/layout существующих actions без перегрузки
-      панели; будущие active `Load reviews` / `Refresh shipping` добавлять только
-      после прохождения соответствующих research gates.
-- [ ] При росте действий использовать sections/menu вместо постоянной сетки всех
-      кнопок.
+- [ ] Завершить responsive organization/layout существующих actions без
+      перегрузки панели. Текущие Settings/reviews separation являются partial
+      groundwork; primary product actions всё ещё требуют organization pass.
+      Active `Load reviews` / `Refresh shipping` не добавлять без research gates.
+- [ ] **Conditional:** если будет одобрено ещё одно persistent action и action
+      set вырастет, рассмотреть sections/menu или equivalent grouping в рамках
+      соответствующего UI pass; отдельная реализация сейчас не требуется.
 
 Collapse/settings persistence и SPA SKU update подтверждены существующими tests
 и P0 live smoke history; при item change runtime очищает текущий product и ждёт
