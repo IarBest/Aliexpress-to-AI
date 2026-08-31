@@ -195,15 +195,47 @@ test('shared narrow shell contract drives clearance, bounds, and internal body s
   assert.deepEqual(core.PANEL_SHELL_CONTRACT, {
     id: 'responsive-panel-v1',
     narrowMaxWidth: 480,
-    narrowLowerClearance: 72,
+    narrowLowerClearance: 120,
     narrowExpandedMaxViewportHeight: 50,
     narrowCollapsedMaxWidth: 180,
     narrowCollapsedMaxHeight: 52,
   });
   assert.match(source, /bottom:calc\(\$\{PANEL_SHELL_CONTRACT\.narrowLowerClearance\}px \+ env\(safe-area-inset-bottom, 0px\)\)/);
+  assert.doesNotMatch(source, /narrowLowerClearance:\s*72\b/);
   assert.match(source, /max-height:min\(\$\{PANEL_SHELL_CONTRACT\.narrowExpandedMaxViewportHeight\}dvh/);
   assert.match(source, /\.panel\.collapsed \{ width:\$\{PANEL_SHELL_CONTRACT\.narrowCollapsedMaxWidth\}px; max-height:\$\{PANEL_SHELL_CONTRACT\.narrowCollapsedMaxHeight\}px; \}/);
   assert.match(source, /\.body \{ flex:1 1 auto; min-height:0; max-height:none; overflow-x:hidden; overflow-y:auto;/);
+});
+
+test('120px narrow reservation models the accepted 390x844 purchase clearance', () => {
+  const viewportHeight = 844;
+  const purchaseToolbarTop = 739;
+  const helperBottom = viewportHeight - core.PANEL_SHELL_CONTRACT.narrowLowerClearance;
+  const states = ['minimized', 'expanded', 'disclosure-open', 'disclosure-and-settings-open'];
+
+  assert.equal(helperBottom, 724);
+  assert.equal(purchaseToolbarTop - helperBottom, 15);
+  assert.deepEqual(states.map(() => helperBottom), [724, 724, 724, 724]);
+});
+
+test('120px narrow reservation keeps the 360x600 shell inside its viewport', () => {
+  const viewport = { width: 360, height: 600 };
+  const rightInset = 12;
+  const horizontalInset = 24;
+  const expandedWidth = Math.min(320, viewport.width - horizontalInset);
+  const expandedHeight = viewport.height * (core.PANEL_SHELL_CONTRACT.narrowExpandedMaxViewportHeight / 100);
+  const helperBottom = viewport.height - core.PANEL_SHELL_CONTRACT.narrowLowerClearance;
+  const helperTop = helperBottom - expandedHeight;
+  const helperLeft = viewport.width - rightInset - expandedWidth;
+
+  assert.equal(expandedHeight, 300);
+  assert.equal(helperBottom, 480);
+  assert.equal(helperTop, 180);
+  assert.equal(expandedWidth, 320);
+  assert.equal(helperLeft, 28);
+  assert.ok(helperTop >= 0);
+  assert.ok(helperLeft >= 0);
+  assert.ok(helperLeft + expandedWidth <= viewport.width);
 });
 
 test('toggle view exposes a stable name and synchronized accessible state', () => {

@@ -69,7 +69,7 @@
   const PANEL_SHELL_CONTRACT = Object.freeze({
     id: 'responsive-panel-v1',
     narrowMaxWidth: 480,
-    narrowLowerClearance: 72,
+    narrowLowerClearance: 120,
     narrowExpandedMaxViewportHeight: 50,
     narrowCollapsedMaxWidth: 180,
     narrowCollapsedMaxHeight: 52,
@@ -117,6 +117,29 @@
     'description',
     'delivery',
   ]);
+  const SECTION_DISCLOSURE_CONTRACT = Object.freeze({
+    id: 'section-disclosure-v1',
+    summary: 'Sources & missing sections',
+    sectionLabels: Object.freeze({
+      sizeGuide: 'Size Guide',
+      gallery: 'Gallery',
+      ratingSummary: 'Rating Summary',
+      store: 'Store',
+      characteristics: 'Characteristics',
+      description: 'Description',
+      delivery: 'Delivery',
+    }),
+    sourceAliases: Object.freeze({
+      productData: 'Product API',
+      'ssr:__AER_DATA__': 'Page data',
+      'dom:product-header': 'Product header',
+      'dom:review-section': 'Review summary',
+      'dom:store': 'Store section',
+      'dom:characteristics': 'Characteristics section',
+      'dom:description': 'Description section',
+      'native:shipping-calculate': 'Shipping API',
+    }),
+  });
   const PRODUCT_CORE_ISSUE_ORDER = Object.freeze(['selected-sku-unresolved']);
 
   // For present sections, sources contributed accepted values. Otherwise they
@@ -229,6 +252,81 @@
     const requested = new Set((Array.isArray(sources) ? sources : [sources])
       .filter((source) => SECTION_SOURCE_LABELS.has(source)));
     return SECTION_SOURCE_ORDER.filter((source) => requested.has(source));
+  }
+
+  function createSectionDisclosureModel(product) {
+    const sections = product?._meta?.sections || {};
+    const present = [];
+    const confirmedMissing = [];
+    PRODUCT_SECTION_ORDER.forEach((sectionId) => {
+      const section = sections[sectionId];
+      const label = SECTION_DISCLOSURE_CONTRACT.sectionLabels[sectionId];
+      if (section?.state === 'present') {
+        const sources = normalizeSectionSources(section.sources)
+          .map((source) => SECTION_DISCLOSURE_CONTRACT.sourceAliases[source])
+          .filter(Boolean);
+        if (sources.length) present.push({ label, sources });
+      } else if (section?.state === 'missing') {
+        confirmedMissing.push(label);
+      }
+    });
+    return {
+      present,
+      confirmedMissing,
+      hidden: present.length === 0 && confirmedMissing.length === 0,
+    };
+  }
+
+  function renderSectionDisclosure(disclosure, product) {
+    const model = createSectionDisclosureModel(product);
+    const content = disclosure?.querySelector?.('[data-section-disclosure-content]');
+    if (!disclosure || !content) return model;
+    disclosure.hidden = model.hidden;
+    content.replaceChildren();
+    if (model.hidden) {
+      disclosure.open = false;
+      return model;
+    }
+    const ownerDocument = disclosure.ownerDocument || document;
+    model.present.forEach(({ label, sources }) => {
+      const row = ownerDocument.createElement('div');
+      row.className = 'section-source-row';
+      row.textContent = `${label}: ${sources.join(', ')}`;
+      content.appendChild(row);
+    });
+    if (model.confirmedMissing.length) {
+      const row = ownerDocument.createElement('div');
+      row.className = 'confirmed-missing-row';
+      row.textContent = `Confirmed missing: ${model.confirmedMissing.join(', ')}`;
+      content.appendChild(row);
+    }
+    return model;
+  }
+
+  function createPanelBodyWheelHandler(body) {
+    return (event) => {
+      if (!body || !Number.isFinite(event?.deltaY) || event.deltaY === 0) return;
+      if (Math.abs(event?.deltaX || 0) > Math.abs(event.deltaY)) return;
+      const maxScrollTop = Math.max(0, body.scrollHeight - body.clientHeight);
+      if (maxScrollTop === 0) return;
+      const deltaScale = event.deltaMode === 1
+        ? 16
+        : event.deltaMode === 2 ? body.clientHeight : 1;
+      const nextScrollTop = Math.max(0, Math.min(
+        maxScrollTop,
+        body.scrollTop + event.deltaY * deltaScale,
+      ));
+      if (nextScrollTop === body.scrollTop) return;
+      body.scrollTop = nextScrollTop;
+      event.preventDefault?.();
+      event.stopPropagation?.();
+    };
+  }
+
+  function bindPanelBodyWheelScroll(body) {
+    const onWheel = createPanelBodyWheelHandler(body);
+    body.addEventListener('wheel', onWheel, { passive: false });
+    return () => body.removeEventListener('wheel', onWheel);
   }
 
   function createSectionDiagnostic(state, sources = [], diagnostic = null) {
@@ -3850,7 +3948,11 @@
     createResponsivePanelController,
     SECTION_SOURCE_ORDER,
     PRODUCT_SECTION_ORDER,
+    SECTION_DISCLOSURE_CONTRACT,
     normalizeSectionSources,
+    createSectionDisclosureModel,
+    renderSectionDisclosure,
+    createPanelBodyWheelHandler,
     createSectionDiagnostic,
     createSectionObservation,
     sectionDiagnosticFromObservations,
@@ -4316,6 +4418,8 @@
         .wide { grid-column:1/-1; }
         details { margin-top:9px; border-top:1px solid #eee; padding-top:8px; }
         summary { cursor:pointer; } label { display:flex; gap:7px; margin-top:8px; }
+        .section-disclosure-content { display:grid; gap:5px; margin-top:7px; }
+        .section-source-row, .confirmed-missing-row { overflow-wrap:anywhere; }
         .diagnostic { width:100%; margin-top:9px; }
         @media (max-width:${PANEL_SHELL_CONTRACT.narrowMaxWidth}px) {
           .grid .wide { grid-column:auto; }
@@ -4329,6 +4433,10 @@
           <div class="grid">
             ${renderPanelActionButtons(PRODUCT_PANEL_CONTRACT.actions)}
           </div>
+          <details class="section-disclosure" data-section-disclosure hidden>
+            <summary>${SECTION_DISCLOSURE_CONTRACT.summary}</summary>
+            <div class="section-disclosure-content" data-section-disclosure-content></div>
+          </details>
           <details>
             <summary>Settings</summary>
             <label><input type="checkbox" data-setting="autoRedirectComToRu"> Auto redirect COM → RU</label>
@@ -4340,10 +4448,12 @@
     (document.body || document.documentElement).appendChild(host);
 
     const panel = shadow.querySelector('.panel');
+    const panelBody = shadow.querySelector('.body');
     const status = shadow.querySelector('.status');
     const productButtons = PRODUCT_PANEL_CONTRACT.actions
       .filter((action) => action.requiresProduct)
       .map((action) => shadow.querySelector(`[data-action="${action.id}"]`));
+    const sectionDisclosure = shadow.querySelector('[data-section-disclosure]');
     const autoRedirect = shadow.querySelector('[data-setting="autoRedirectComToRu"]');
     const shippingDebug = shadow.querySelector('[data-action="shipping-debug"]');
     const responsivePanel = bindResponsivePanel(
@@ -4352,6 +4462,7 @@
       panel,
       shadow.querySelector('[data-action="toggle"]'),
     );
+    const disposeWheelScroll = bindPanelBodyWheelScroll(panelBody);
     autoRedirect.checked = runtime.settings.autoRedirectComToRu;
     shippingDebug.disabled = !runtime.shippingCapture;
 
@@ -4401,13 +4512,17 @@
     return {
       setProduct(product) {
         productButtons.forEach((button) => { button.disabled = false; });
+        renderSectionDisclosure(sectionDisclosure, product);
         flash(formatProductStatus(product), assessProductCompleteness(product).state === 'invalid');
       },
       setShippingCapture(capture) {
         shippingDebug.disabled = !capture;
       },
       setStatus: flash,
-      dispose: responsivePanel.destroy,
+      dispose() {
+        disposeWheelScroll();
+        responsivePanel.destroy();
+      },
     };
   }
 
