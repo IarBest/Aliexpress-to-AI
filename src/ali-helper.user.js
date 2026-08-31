@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ali Helper
 // @namespace    https://github.com/local/ali-helper
-// @version      0.1.22
+// @version      0.1.23
 // @description  Read-only AliExpress URL cleaner and product/variant exporter
 // @match        https://aliexpress.ru/item/*
 // @match        https://www.aliexpress.com/item/*
@@ -18,7 +18,7 @@
 (function factory(root) {
   'use strict';
 
-  const VERSION = '0.1.22';
+  const VERSION = '0.1.23';
   const SETTINGS_KEY = 'ali-helper:settings:v1';
   const NATIVE_REVIEW_PATHNAME = '/aer-jsonapi/review/v5/desktop/product-reviews';
   const REVIEW_CAPTURE_CAP = 30;
@@ -66,6 +66,34 @@
     autoRedirectComToRu: true,
     panelCollapsed: false,
   });
+  const PANEL_SHELL_CONTRACT = Object.freeze({
+    id: 'responsive-panel-v1',
+    narrowMaxWidth: 480,
+    narrowLowerClearance: 72,
+    narrowExpandedMaxViewportHeight: 50,
+    narrowCollapsedMaxWidth: 180,
+    narrowCollapsedMaxHeight: 52,
+  });
+  const PRODUCT_PANEL_ACTIONS = Object.freeze([
+    { id: 'clean-url', label: 'Copy clean URL', requiresProduct: false, desktopWide: false },
+    { id: 'market', label: 'RU / COM', requiresProduct: false, desktopWide: false },
+    { id: 'product', label: 'Copy product', requiresProduct: true, desktopWide: false },
+    { id: 'variants', label: 'Copy variants', requiresProduct: true, desktopWide: false },
+    { id: 'chatgpt', label: 'Copy for ChatGPT', requiresProduct: true, desktopWide: true },
+    { id: 'description', label: 'Copy description', requiresProduct: true, desktopWide: true },
+  ].map(Object.freeze));
+  const REVIEWS_PANEL_ACTIONS = Object.freeze([
+    { id: 'reviews', label: 'Copy reviews JSON', requiresReviews: true },
+    { id: 'reviews-chatgpt', label: 'Copy reviews for ChatGPT', requiresReviews: true },
+  ].map(Object.freeze));
+  const PRODUCT_PANEL_CONTRACT = Object.freeze({
+    shell: PANEL_SHELL_CONTRACT,
+    actions: PRODUCT_PANEL_ACTIONS,
+  });
+  const REVIEWS_PANEL_CONTRACT = Object.freeze({
+    shell: PANEL_SHELL_CONTRACT,
+    actions: REVIEWS_PANEL_ACTIONS,
+  });
   const SECTION_SOURCE_ORDER = Object.freeze([
     'productData',
     'ssr:__AER_DATA__',
@@ -100,6 +128,94 @@
     'affiliate_id', 'affiliate_key', 'terminal_id', 'af', 'afsmartredirect',
     'srcsns', 'spreadtype', 'biztype', 'social_params', 'gatewayadapt',
   ]);
+
+  function panelModeForWidth(viewportWidth) {
+    const width = Number(viewportWidth);
+    return Number.isFinite(width) && width >= 0 && width <= PANEL_SHELL_CONTRACT.narrowMaxWidth
+      ? 'narrow'
+      : 'desktop';
+  }
+
+  function createPanelLayoutStateForMode(mode, desktopCollapsed) {
+    return Object.freeze({
+      mode: mode === 'narrow' ? 'narrow' : 'desktop',
+      desktopCollapsed: Boolean(desktopCollapsed),
+      narrowCollapsed: true,
+    });
+  }
+
+  function createPanelLayoutState(viewportWidth, desktopCollapsed) {
+    return createPanelLayoutStateForMode(panelModeForWidth(viewportWidth), desktopCollapsed);
+  }
+
+  function setPanelLayoutMode(state, mode) {
+    return Object.freeze({
+      ...state,
+      mode: mode === 'narrow' ? 'narrow' : 'desktop',
+    });
+  }
+
+  function setPanelLayoutViewport(state, viewportWidth) {
+    return setPanelLayoutMode(state, panelModeForWidth(viewportWidth));
+  }
+
+  function togglePanelLayoutState(state) {
+    if (state.mode === 'narrow') {
+      return Object.freeze({ ...state, narrowCollapsed: !state.narrowCollapsed });
+    }
+    return Object.freeze({ ...state, desktopCollapsed: !state.desktopCollapsed });
+  }
+
+  function isPanelLayoutCollapsed(state) {
+    return state.mode === 'narrow' ? state.narrowCollapsed : state.desktopCollapsed;
+  }
+
+  function panelCollapsedPreferenceToPersist(state) {
+    return state.mode === 'desktop' ? state.desktopCollapsed : null;
+  }
+
+  function panelToggleView(state) {
+    const collapsed = isPanelLayoutCollapsed(state);
+    return Object.freeze({
+      symbol: collapsed ? '+' : '—',
+      ariaLabel: 'Toggle Ali Helper panel',
+      ariaExpanded: String(!collapsed),
+      title: collapsed ? 'Expand Ali Helper panel' : 'Collapse Ali Helper panel',
+    });
+  }
+
+  function createResponsivePanelController(mediaQuery, desktopCollapsed, onApply, onPersist) {
+    let layoutState = createPanelLayoutStateForMode(
+      mediaQuery.matches ? 'narrow' : 'desktop',
+      desktopCollapsed,
+    );
+    const apply = () => onApply(layoutState, panelToggleView(layoutState));
+    const onMediaChange = (event) => {
+      layoutState = setPanelLayoutMode(layoutState, event.matches ? 'narrow' : 'desktop');
+      apply();
+    };
+    let removeMediaListener = () => {};
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', onMediaChange);
+      removeMediaListener = () => mediaQuery.removeEventListener('change', onMediaChange);
+    } else if (typeof mediaQuery.addListener === 'function') {
+      mediaQuery.addListener(onMediaChange);
+      removeMediaListener = () => mediaQuery.removeListener(onMediaChange);
+    }
+    apply();
+    return Object.freeze({
+      toggle() {
+        layoutState = togglePanelLayoutState(layoutState);
+        const desktopPreference = panelCollapsedPreferenceToPersist(layoutState);
+        if (desktopPreference !== null) onPersist(desktopPreference);
+        apply();
+      },
+      destroy() {
+        removeMediaListener();
+        removeMediaListener = () => {};
+      },
+    });
+  }
 
   function asString(value) {
     return value === null || value === undefined ? null : String(value);
@@ -3720,6 +3836,18 @@
   const AliHelperCore = {
     VERSION,
     DEFAULT_SETTINGS,
+    PANEL_SHELL_CONTRACT,
+    PRODUCT_PANEL_CONTRACT,
+    REVIEWS_PANEL_CONTRACT,
+    panelModeForWidth,
+    createPanelLayoutState,
+    setPanelLayoutMode,
+    setPanelLayoutViewport,
+    togglePanelLayoutState,
+    isPanelLayoutCollapsed,
+    panelCollapsedPreferenceToPersist,
+    panelToggleView,
+    createResponsivePanelController,
     SECTION_SOURCE_ORDER,
     PRODUCT_SECTION_ORDER,
     normalizeSectionSources,
@@ -4118,47 +4246,93 @@
     return null;
   }
 
-  function createPanel(runtime) {
+  const SHARED_PANEL_STYLES = `
+    :host { all:initial; position:fixed; right:16px; bottom:16px; z-index:2147483000; display:block; }
+    .panel { width:320px; max-width:calc(100vw - 24px); color:#191919; background:#fff; border:1px solid #ddd; border-radius:12px; box-shadow:0 8px 28px rgba(0,0,0,.22); font:13px/1.35 Arial,sans-serif; overflow:hidden; }
+    header { display:flex; align-items:center; gap:8px; padding:10px 12px; background:#ffefe8; }
+    strong { flex:1; font-size:14px; }
+    .body { padding:10px; max-height:min(65vh,560px); overflow:auto; }
+    .panel.collapsed .body { display:none; }
+    button { border:1px solid #d7d7d7; border-radius:8px; background:#fff; color:#222; padding:7px 9px; cursor:pointer; font:inherit; }
+    button:hover { background:#f7f7f7; }
+    button:disabled { opacity:.45; cursor:not-allowed; }
+    .icon { padding:4px 8px; }
+    .status { margin:0 0 9px; padding:7px 8px; border-radius:7px; background:#f5f5f5; overflow-wrap:anywhere; }
+    .status.error { color:#8a1f11; background:#fff0ed; }
+    .meta { color:#666; margin-top:8px; font-size:11px; }
+    button:focus-visible, summary:focus-visible, input:focus-visible { outline:2px solid #b64016; outline-offset:2px; }
+    @media (max-width:${PANEL_SHELL_CONTRACT.narrowMaxWidth}px) {
+      :host { right:12px; bottom:calc(${PANEL_SHELL_CONTRACT.narrowLowerClearance}px + env(safe-area-inset-bottom, 0px)); }
+      .panel { box-sizing:border-box; width:min(320px, calc(100vw - 24px)); max-width:calc(100vw - 24px); max-height:min(${PANEL_SHELL_CONTRACT.narrowExpandedMaxViewportHeight}vh, calc(100vh - 96px - env(safe-area-inset-bottom, 0px))); display:flex; flex-direction:column; }
+      .panel.collapsed { width:${PANEL_SHELL_CONTRACT.narrowCollapsedMaxWidth}px; max-height:${PANEL_SHELL_CONTRACT.narrowCollapsedMaxHeight}px; }
+      header { flex:none; }
+      .body { flex:1 1 auto; min-height:0; max-height:none; overflow-x:hidden; overflow-y:auto; overscroll-behavior:contain; }
+    }
+    @supports (height:100dvh) {
+      @media (max-width:${PANEL_SHELL_CONTRACT.narrowMaxWidth}px) {
+        .panel { max-height:min(${PANEL_SHELL_CONTRACT.narrowExpandedMaxViewportHeight}dvh, calc(100dvh - 96px - env(safe-area-inset-bottom, 0px))); }
+      }
+    }
+  `;
+
+  function createPanelHost() {
     const host = document.createElement('div');
     host.id = 'ali-helper-host';
-    host.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:2147483000;';
-    const shadow = host.attachShadow({ mode: 'open' });
+    return { host, shadow: host.attachShadow({ mode: 'open' }) };
+  }
+
+  function renderPanelActionButtons(actions, className = '') {
+    return actions.map((action) => {
+      const classes = [className, action.desktopWide ? 'wide' : ''].filter(Boolean).join(' ');
+      const classAttribute = classes ? ` class="${classes}"` : '';
+      const disabled = action.requiresProduct || action.requiresReviews ? ' disabled' : '';
+      return `<button type="button"${classAttribute} data-action="${action.id}"${disabled}>${action.label}</button>`;
+    }).join('');
+  }
+
+  function bindResponsivePanel(runtime, host, panel, toggle) {
+    const mediaQuery = window.matchMedia(`(max-width: ${PANEL_SHELL_CONTRACT.narrowMaxWidth}px)`);
+    return createResponsivePanelController(mediaQuery, runtime.settings.panelCollapsed, (layoutState, toggleView) => {
+      const collapsed = isPanelLayoutCollapsed(layoutState);
+      panel.classList.toggle('collapsed', collapsed);
+      panel.dataset.layoutMode = layoutState.mode;
+      host.dataset.aliHelperPanelMode = layoutState.mode;
+      toggle.textContent = toggleView.symbol;
+      toggle.setAttribute('aria-label', toggleView.ariaLabel);
+      toggle.setAttribute('aria-expanded', toggleView.ariaExpanded);
+      toggle.title = toggleView.title;
+    }, (desktopPreference) => {
+      runtime.settings.panelCollapsed = desktopPreference;
+      saveSettings(runtime.settings);
+    });
+  }
+
+  function createPanel(runtime) {
+    const { host, shadow } = createPanelHost();
     shadow.innerHTML = `
       <style>
-        :host { all: initial; }
-        .panel { width: 320px; max-width: calc(100vw - 24px); color: #191919; background: #fff; border: 1px solid #ddd; border-radius: 12px; box-shadow: 0 8px 28px rgba(0,0,0,.22); font: 13px/1.35 Arial,sans-serif; overflow: hidden; }
-        header { display:flex; align-items:center; gap:8px; padding:10px 12px; background:#ffefe8; }
-        strong { flex:1; font-size:14px; }
-        .body { padding:10px; max-height:min(65vh,560px); overflow:auto; }
-        .panel.collapsed .body { display:none; }
-        button { border:1px solid #d7d7d7; border-radius:8px; background:#fff; color:#222; padding:7px 9px; cursor:pointer; font:inherit; }
-        button:hover { background:#f7f7f7; } button:disabled { opacity:.45; cursor:not-allowed; }
-        .icon { padding:4px 8px; }
+        ${SHARED_PANEL_STYLES}
         .grid { display:grid; grid-template-columns:1fr 1fr; gap:7px; }
         .wide { grid-column:1/-1; }
-        .status { margin:0 0 9px; padding:7px 8px; border-radius:7px; background:#f5f5f5; overflow-wrap:anywhere; }
-        .status.error { color:#8a1f11; background:#fff0ed; }
         details { margin-top:9px; border-top:1px solid #eee; padding-top:8px; }
         summary { cursor:pointer; } label { display:flex; gap:7px; margin-top:8px; }
         .diagnostic { width:100%; margin-top:9px; }
-        .meta { color:#666; margin-top:8px; font-size:11px; }
+        @media (max-width:${PANEL_SHELL_CONTRACT.narrowMaxWidth}px) {
+          .grid .wide { grid-column:auto; }
+          .diagnostic { box-sizing:border-box; }
+        }
       </style>
       <section class="panel">
-        <header><strong>Ali Helper</strong><button class="icon" data-action="toggle" title="Collapse/expand">—</button></header>
+        <header><strong>Ali Helper</strong><button type="button" class="icon" data-action="toggle">—</button></header>
         <div class="body">
           <div class="status">Waiting for productData…</div>
           <div class="grid">
-            <button data-action="clean-url">Copy clean URL</button>
-            <button data-action="market">RU / COM</button>
-            <button data-action="product" disabled>Copy product</button>
-            <button data-action="variants" disabled>Copy variants</button>
-            <button class="wide" data-action="chatgpt" disabled>Copy for ChatGPT</button>
-            <button class="wide" data-action="description" disabled>Copy description</button>
+            ${renderPanelActionButtons(PRODUCT_PANEL_CONTRACT.actions)}
           </div>
           <details>
             <summary>Settings</summary>
             <label><input type="checkbox" data-setting="autoRedirectComToRu"> Auto redirect COM → RU</label>
-            <button class="diagnostic" data-action="shipping-debug" disabled>Copy shipping debug</button>
+            <button type="button" class="diagnostic" data-action="shipping-debug" disabled>Copy shipping debug</button>
           </details>
           <div class="meta">Read/copy/navigation only · v${VERSION}</div>
         </div>
@@ -4167,13 +4341,19 @@
 
     const panel = shadow.querySelector('.panel');
     const status = shadow.querySelector('.status');
-    const productButtons = ['product', 'variants', 'chatgpt', 'description'].map((name) => shadow.querySelector(`[data-action="${name}"]`));
+    const productButtons = PRODUCT_PANEL_CONTRACT.actions
+      .filter((action) => action.requiresProduct)
+      .map((action) => shadow.querySelector(`[data-action="${action.id}"]`));
     const autoRedirect = shadow.querySelector('[data-setting="autoRedirectComToRu"]');
     const shippingDebug = shadow.querySelector('[data-action="shipping-debug"]');
+    const responsivePanel = bindResponsivePanel(
+      runtime,
+      host,
+      panel,
+      shadow.querySelector('[data-action="toggle"]'),
+    );
     autoRedirect.checked = runtime.settings.autoRedirectComToRu;
     shippingDebug.disabled = !runtime.shippingCapture;
-    panel.classList.toggle('collapsed', runtime.settings.panelCollapsed);
-    shadow.querySelector('[data-action="toggle"]').textContent = runtime.settings.panelCollapsed ? '+' : '—';
 
     function flash(message, isError = false) {
       status.textContent = message;
@@ -4186,10 +4366,7 @@
       const action = event.target?.dataset?.action;
       if (!action) return;
       if (action === 'toggle') {
-        runtime.settings.panelCollapsed = !runtime.settings.panelCollapsed;
-        panel.classList.toggle('collapsed', runtime.settings.panelCollapsed);
-        event.target.textContent = runtime.settings.panelCollapsed ? '+' : '—';
-        saveSettings(runtime.settings);
+        responsivePanel.toggle();
       } else if (action === 'clean-url') {
         copyWithFeedback(normalizeItemUrl(location.href).href, 'Clean URL');
       } else if (action === 'market') {
@@ -4230,38 +4407,25 @@
         shippingDebug.disabled = !capture;
       },
       setStatus: flash,
+      dispose: responsivePanel.destroy,
     };
   }
 
   function createReviewsPanel(runtime) {
-    const host = document.createElement('div');
-    host.id = 'ali-helper-host';
-    host.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:2147483000;';
-    const shadow = host.attachShadow({ mode: 'open' });
+    const { host, shadow } = createPanelHost();
     shadow.innerHTML = `
       <style>
-        :host { all: initial; }
-        .panel { width:320px; max-width:calc(100vw - 24px); color:#191919; background:#fff; border:1px solid #ddd; border-radius:12px; box-shadow:0 8px 28px rgba(0,0,0,.22); font:13px/1.35 Arial,sans-serif; overflow:hidden; }
-        header { display:flex; align-items:center; gap:8px; padding:10px 12px; background:#ffefe8; }
-        strong { flex:1; font-size:14px; }
-        .body { padding:10px; }
-        .panel.collapsed .body { display:none; }
-        button { border:1px solid #d7d7d7; border-radius:8px; background:#fff; color:#222; padding:7px 9px; cursor:pointer; font:inherit; }
-        button:disabled { opacity:.45; cursor:not-allowed; }
-        .icon { padding:4px 8px; }
+        ${SHARED_PANEL_STYLES}
         .actions { display:flex; flex-direction:column; gap:7px; }
         .action { width:100%; }
-        .status { margin:0 0 9px; padding:7px 8px; border-radius:7px; background:#f5f5f5; overflow-wrap:anywhere; }
-        .status.error { color:#8a1f11; background:#fff0ed; }
-        .meta { color:#666; margin-top:8px; font-size:11px; }
+        @media (max-width:${PANEL_SHELL_CONTRACT.narrowMaxWidth}px) { .action { box-sizing:border-box; } }
       </style>
       <section class="panel">
-        <header><strong>Ali Helper</strong><button class="icon" data-action="toggle" title="Collapse/expand">—</button></header>
+        <header><strong>Ali Helper</strong><button type="button" class="icon" data-action="toggle">—</button></header>
         <div class="body">
           <div class="status">Waiting for first-page SSR reviews…</div>
           <div class="actions">
-            <button class="action" data-action="reviews" disabled>Copy reviews JSON</button>
-            <button class="action" data-action="reviews-chatgpt" disabled>Copy reviews for ChatGPT</button>
+            ${renderPanelActionButtons(REVIEWS_PANEL_CONTRACT.actions, 'action')}
           </div>
           <div class="meta">Read/copy/navigation only · v${VERSION}</div>
         </div>
@@ -4269,9 +4433,14 @@
     (document.body || document.documentElement).appendChild(host);
     const panel = shadow.querySelector('.panel');
     const status = shadow.querySelector('.status');
-    const copyButtons = shadow.querySelectorAll('[data-action="reviews"], [data-action="reviews-chatgpt"]');
-    panel.classList.toggle('collapsed', runtime.settings.panelCollapsed);
-    shadow.querySelector('[data-action="toggle"]').textContent = runtime.settings.panelCollapsed ? '+' : '—';
+    const copyButtons = REVIEWS_PANEL_CONTRACT.actions
+      .map((action) => shadow.querySelector(`[data-action="${action.id}"]`));
+    const responsivePanel = bindResponsivePanel(
+      runtime,
+      host,
+      panel,
+      shadow.querySelector('[data-action="toggle"]'),
+    );
     function flash(message, isError = false) {
       status.textContent = message;
       status.classList.toggle('error', isError);
@@ -4279,10 +4448,7 @@
     shadow.addEventListener('click', async (event) => {
       const action = event.target?.dataset?.action;
       if (action === 'toggle') {
-        runtime.settings.panelCollapsed = !runtime.settings.panelCollapsed;
-        panel.classList.toggle('collapsed', runtime.settings.panelCollapsed);
-        event.target.textContent = runtime.settings.panelCollapsed ? '+' : '—';
-        saveSettings(runtime.settings);
+        responsivePanel.toggle();
       } else if (action === 'reviews' && runtime.reviewPage) {
         try {
           await copyText(exportReviewsPage(runtime.reviewPage));
@@ -4305,6 +4471,7 @@
         flash(formatReviewsPageStatus(reviewPage));
       },
       setStatus: flash,
+      dispose: responsivePanel.destroy,
     };
   }
 
@@ -4324,6 +4491,7 @@
         runtime.active = false;
         if (runtime.domReadyHandler) document.removeEventListener('DOMContentLoaded', runtime.domReadyHandler);
         runtime.domReadyHandler = null;
+        runtime.ui?.dispose?.();
         runtime.ssrRetryLifecycle?.dispose();
       },
     };
@@ -4424,6 +4592,7 @@
         runtime.active = false;
         if (runtime.domReadyHandler) document.removeEventListener('DOMContentLoaded', runtime.domReadyHandler);
         runtime.domReadyHandler = null;
+        runtime.ui?.dispose?.();
         runtime.pollingLifecycle?.dispose();
       },
     };

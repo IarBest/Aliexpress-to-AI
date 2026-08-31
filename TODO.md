@@ -728,15 +728,19 @@ Acceptance: основной export остаётся читаемым и огр�
       через `product._meta.sections`; reviews сохраняют отдельный safe
       diagnostics contract.
 - [x] Сохранить collapsible panel и settings через Tampermonkey storage.
-- [ ] Проверить layout на desktop и узком viewport без перекрытия основных
-      AliExpress controls. Текущий v0.1.22 не проходит narrow check при
-      390×844: fixed panel перекрывает product content и нижнюю область purchase
-      controls. После будущего layout fix повторить desktop + narrow verification.
+- [x] Проверить layout на desktop и узком viewport без перекрытия основных
+      AliExpress controls. Исторически v0.1.22 не проходил narrow check при
+      390×844: fixed panel перекрывал product content и нижнюю область purchase
+      controls. Принятый responsive pass добавил narrow breakpoint,
+      viewport-safe нижний clearance, bounded expanded height и internal
+      scrolling с сохранением desktop layout; Product и общий Reviews shell
+      проверены, пересечение с reference purchase controls в accepted live smoke
+      равно нулю.
 - [x] Корректно обновлять panel после SPA item/SKU changes.
-- [ ] Завершить responsive organization/layout существующих actions без
-      перегрузки панели. Текущие Settings/reviews separation являются partial
-      groundwork; primary product actions всё ещё требуют organization pass.
-      Active `Load reviews` / `Refresh shipping` не добавлять без research gates.
+- [x] Завершить responsive organization/layout существующих actions без
+      перегрузки панели. Desktop сохраняет принятый direct-action layout; narrow
+      mode использует три ряда по две кнопки, и все шесть Product actions остаются
+      напрямую доступны. Новые active network actions и menu не добавлены.
 - [ ] **Conditional:** если будет одобрено ещё одно persistent action и action
       set вырастет, рассмотреть sections/menu или equivalent grouping в рамках
       соответствующего UI pass; отдельная реализация сейчас не требуется.

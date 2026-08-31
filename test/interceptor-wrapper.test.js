@@ -97,6 +97,19 @@ function installers(captures, callbacks = {}) {
   };
 }
 
+test('installing all passive observers originates no product, shipping, or review request', async () => withPageLocation(async () => {
+  const { pageWindow, calls } = createFetchHarness();
+  const captures = { product: [], shipping: [], reviews: [] };
+  const install = installers(captures);
+  install.product(pageWindow);
+  install.shipping(pageWindow);
+  install.reviews(pageWindow);
+  await flushHelperWork();
+
+  assert.equal(calls.length, 0);
+  assert.deepEqual(captures, { product: [], shipping: [], reviews: [] });
+}));
+
 function makeFetchCases() {
   const controller = new AbortController();
   const productInput = new Request(PRODUCT_URL, { method: 'POST' });
