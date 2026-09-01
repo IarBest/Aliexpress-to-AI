@@ -5,6 +5,11 @@ Tampermonkey smoke test. P0–P7 являются capability groups, а не ф�
 execution order. Текущий приоритет определяется оставшимися открытыми и явно
 research-gated пунктами.
 
+**Mandatory roadmap exhausted.** Все обязательные пункты закрыты. Три
+оставшихся rare P7 capture являются opportunistic, Future/optional не блокирует
+roadmap, а conditional/deferred пункты сохраняют уже указанную классификацию;
+это не означает, что каждый unchecked пункт репозитория является обязательным.
+
 ## Definition of done
 
 Это reusable per-task completion template, а не checklist готовности всего
@@ -513,7 +518,7 @@ Smoke выполнялся на реально активном Ali Helper v0.1.
 
 Production passive native capture page 2+, filter/sort/SKU contexts и SSR +
 native merge реализованы в P4. Будущими остаются explicit helper-controlled
-loading, configurable cap и progress/stop logic для такой загрузки. Несколько
+loading и progress/stop logic для такой загрузки. Несколько
 additional objects и review videos пока не наблюдались. `product.reviews` на PDP
 не сохраняется и не объединяется с reviews-page model.
 
@@ -546,10 +551,13 @@ capture cap, gaps/conflicts, follow-ups и active-context export реализо�
 - [x] Показывать loaded count/pages/context/cap в reviews-page status/export.
 - [x] Не угадывать неизвестные sort/filter codes: human labels только для
       wire-confirmed values, остальные generic.
-- [ ] Сделать bounded passive retained-review cap configurable с default 30
-      reviews на context. Настройка влияет только на сохранение passive
-      observations в page-session memory и не создаёт, не повторяет, не
-      подавляет и иначе не управляет native AliExpress review requests.
+- [x] Сделать bounded passive retained-review cap configurable: presets
+      `10 / 30 / 50 / 100`, default `30`. Каждый context получает immutable cap
+      snapshot; изменение настройки действует только на будущие contexts, а
+      существующие сохраняют исходный cap. Настройка влияет только на сохранение
+      passive observations в page-session memory, не создаёт, не повторяет, не
+      подавляет и не отменяет native AliExpress review requests; export schema
+      не меняется.
 
 #### Optional active-loading research — deferred
 
@@ -618,13 +626,14 @@ sorted/unique `skuFilter`; pages хранятся отдельно по `pageNum
 seeded из SSR, page 2+ приходят из native responses. Filter/sort/SKU contexts не
 смешиваются, inactive contexts сохраняются.
 
-Passive capture cap — 30 reviews на context; native requests beyond cap не
-блокируются. Admission зависит от page slot (`pageNum/pageSize/cap`), а не от
-response completion order: при cap 30 / pageSize 10 сохраняются pages 1–3, а
-page 4+ не занимает cache даже при завершении раньше page 2. Request sequence
-назначается при invocation native fetch. Late response старого context может
-пополнить свой cache, но не может переключить active context после более нового
-request.
+Passive capture cap выбирается из `10 / 30 / 50 / 100` (default `30`) и
+фиксируется immutable snapshot для каждого context; изменение настройки
+применяется только к будущим contexts. Native requests beyond cap не блокируются.
+Admission зависит от page slot (`pageNum/pageSize/cap`), а не от response
+completion order: при cap 30 / pageSize 10 сохраняются pages 1–3, а page 4+ не
+занимает cache даже при завершении раньше page 2. Request sequence назначается
+при invocation native fetch. Late response старого context может пополнить свой
+cache, но не может переключить active context после более нового request.
 
 Merge использует только contiguous pages от page 1: `pageNum` ascending и
 source order внутри page. Dedupe key — `${productId}:${id}`; identical duplicate

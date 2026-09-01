@@ -110,6 +110,87 @@ test('installing all passive observers originates no product, shipping, or revie
   assert.deepEqual(captures, { product: [], shipping: [], reviews: [] });
 }));
 
+test('changing passive review retention and leaving higher capacity available originates no request', async () => withPageLocation(async () => {
+  const { pageWindow, calls } = createFetchHarness();
+  core.installNativeReviewInterceptor(pageWindow, '100', () => assert.fail('no native response was requested'));
+  const saved = [];
+  const runtime = {
+    settings: { ...core.DEFAULT_SETTINGS },
+    reviewCache: core.createReviewCache('100', 30),
+    reviewPage: null,
+  };
+  const result = core.applyPassiveReviewRetentionCapSelection(runtime, '100', (settings) => {
+    saved.push(settings.passiveReviewRetentionCap);
+  });
+  await flushHelperWork();
+
+  assert.deepEqual(result, { accepted: true, preference: 100, activeCaptureCap: null });
+  assert.deepEqual(saved, [100]);
+  assert.equal(runtime.reviewCache.defaultCap, 100);
+  assert.equal(calls.length, 0);
+}));
+
+test('a native review page beyond a low cap still forwards once with unchanged wire data and resolves normally', async () => {
+  const itemId = '321';
+  const cap = 10;
+  const requestBody = {
+    productKey: { id: itemId, sourceId: 0 },
+    pagination: { pageNum: 2, pageSize: 9 },
+    sort: 1,
+    filters: [],
+    skuFilter: [],
+  };
+  const init = {
+    method: 'POST',
+    body: JSON.stringify(requestBody),
+    headers: { 'Content-Type': 'application/json', 'X-Native-Marker': 'unchanged' },
+    credentials: 'include',
+  };
+  const response = { marker: 'native-response', clone: () => ({ json: async () => ({ data: { reviews: [] } }) }) };
+  const nativePromise = Promise.resolve(response);
+  const calls = [];
+  const pageWindow = {
+    location: { href: `https://aliexpress.ru/item/${itemId}/reviews` },
+    fetch(...args) {
+      calls.push({ thisValue: this, args });
+      return nativePromise;
+    },
+  };
+  let cache = core.createReviewCache(itemId, cap);
+  core.installNativeReviewInterceptor(pageWindow, itemId, (batch, sequence) => {
+    cache = core.applyNativeReviewBatch(cache, batch, sequence);
+  });
+  const customThis = { marker: 'native-this' };
+  const returned = pageWindow.fetch.call(customThis, REVIEW_URL, init);
+
+  assert.equal(returned, nativePromise);
+  assert.equal(await returned, response);
+  await flushHelperWork();
+  await flushHelperWork();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].thisValue, customThis);
+  assert.equal(calls[0].args.length, 2);
+  assert.equal(calls[0].args[0], REVIEW_URL);
+  assert.equal(calls[0].args[1], init);
+  assert.equal(calls[0].args[1].body, init.body);
+  assert.equal(calls[0].args[1].headers, init.headers);
+  assert.doesNotMatch(REVIEW_URL, /[?&](?:cap|limit|retention)=/i);
+  assert.doesNotMatch(init.body, /(?:^|\D)10(?:\D|$)|captureCap|retention/i);
+  assert.doesNotMatch(JSON.stringify(init.headers), /(?:^|\D)10(?:\D|$)|captureCap|retention/i);
+  const active = core.getActiveReviewPage(cache);
+  assert.equal(active.captureCap, 10);
+  assert.equal(active.captureCapReached, true);
+  assert.deepEqual(active.pagesLoaded, []);
+  assert.deepEqual(active.reviews, []);
+});
+
+test('native review forwarding contains no settings or cap-dependent branch', () => {
+  const interceptorSource = String(core.installNativeReviewInterceptor);
+  assert.doesNotMatch(interceptorSource, /settings|defaultCap|captureCap|retention|PASSIVE_REVIEW/i);
+  assert.match(interceptorSource, /const result = originalFetch\.apply\(this, args\)/);
+  assert.match(interceptorSource, /return result/);
+});
+
 function makeFetchCases() {
   const controller = new AbortController();
   const productInput = new Request(PRODUCT_URL, { method: 'POST' });

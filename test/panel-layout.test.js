@@ -128,6 +128,46 @@ test('Reviews uses the shared shell contract and retains its existing two stacke
   assert.match(reviewsSource, /renderPanelActionButtons\(REVIEWS_PANEL_CONTRACT\.actions, 'action'\)/);
 });
 
+test('Reviews owns one passive settings disclosure with exactly the four presets', () => {
+  const productStart = source.indexOf('function createPanel(runtime)');
+  const reviewsStart = source.indexOf('function createReviewsPanel(runtime)');
+  const reviewsEnd = source.indexOf('function startReviewsPage');
+  const productSource = source.slice(productStart, reviewsStart);
+  const reviewsSource = source.slice(reviewsStart, reviewsEnd);
+  assert.equal((reviewsSource.match(/<details class="review-settings">/g) || []).length, 1);
+  assert.match(reviewsSource, /<summary>Review settings<\/summary>/);
+  assert.match(reviewsSource, /Passive review retention per context/);
+  assert.deepEqual(
+    [...reviewsSource.matchAll(/<option value="(10|30|50|100)"(?: selected)?>([^<]+)<\/option>/g)]
+      .map((match) => [match[1], match[2]]),
+    [
+      ['10', '10 reviews'],
+      ['30', '30 reviews (default)'],
+      ['50', '50 reviews'],
+      ['100', '100 reviews'],
+    ],
+  );
+  assert.match(reviewsSource, /<option value="30" selected>30 reviews \(default\)<\/option>/);
+  assert.match(reviewsSource, /Keeps only reviews AliExpress loads itself; Ali Helper never loads, repeats, or blocks review requests\./);
+  assert.match(reviewsSource, /Changes apply to new review contexts\. Existing retained contexts stay unchanged\./);
+  assert.match(reviewsSource, /Not saved\. Choose 10, 30, 50, or 100 reviews\./);
+  assert.doesNotMatch(productSource, /Review settings|passiveReviewRetentionCap|Passive review retention/);
+  assert.equal((productSource.match(/<summary>Settings<\/summary>/g) || []).length, 1);
+});
+
+test('Reviews settings keep the accepted 767/768 shell behavior and add no third action', () => {
+  assert.equal(core.panelModeForWidth(767), 'narrow');
+  assert.equal(core.createPanelLayoutState(767, false).narrowCollapsed, true);
+  assert.equal(core.panelModeForWidth(768), 'desktop');
+  assert.equal(core.REVIEWS_PANEL_CONTRACT.actions.length, 2);
+  const reviewsStart = source.indexOf('function createReviewsPanel(runtime)');
+  const reviewsEnd = source.indexOf('function startReviewsPage');
+  const reviewsSource = source.slice(reviewsStart, reviewsEnd);
+  assert.match(reviewsSource, /review-setting-control select \{ box-sizing:border-box; width:100%/);
+  assert.match(reviewsSource, /@media \(max-width:\$\{PANEL_SHELL_CONTRACT\.narrowMaxWidth\}px\)/);
+  assert.doesNotMatch(reviewsSource, /data-action="(?:load|fetch|request|download)/i);
+});
+
 test('responsive transitions retain one state and one unchanged action contract', () => {
   const actions = core.PRODUCT_PANEL_CONTRACT.actions;
   let state = core.createPanelLayoutState(1920, false);

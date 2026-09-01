@@ -3702,7 +3702,7 @@ test('normalized reviews JSON export remains full fidelity while ChatGPT export 
 
 test('review status humanizes only confirmed sort/filter codes and reports passive capture', () => {
   const status = core.formatReviewsPageStatus({
-    source: 'native:product-reviews', loadedCount: 0, pagesLoaded: [1], captureCapReached: false,
+    source: 'native:product-reviews', loadedCount: 0, pagesLoaded: [1], captureCap: 30, captureCapReached: false,
     context: { sort: 7, filters: [1, 2, 9], skuFilter: ['1', '2'], pageSize: 10 },
   });
   assert.match(status, /Sort 7/);
@@ -3710,6 +3710,7 @@ test('review status humanizes only confirmed sort/filter codes and reports passi
   assert.match(status, /Additional/);
   assert.match(status, /Filter 9/);
   assert.match(status, /SKU filter · 2 IDs/);
+  assert.match(status, /retention cap: 30/);
   assert.match(status, /passive native/);
   assert.doesNotMatch(status, /loaded by Ali Helper/i);
 });

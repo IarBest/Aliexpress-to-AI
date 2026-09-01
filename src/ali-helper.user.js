@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ali Helper
 // @namespace    https://github.com/local/ali-helper
-// @version      0.1.24
+// @version      0.1.25
 // @description  Read-only AliExpress URL cleaner and product/variant exporter
 // @match        https://aliexpress.ru/item/*
 // @match        https://www.aliexpress.com/item/*
@@ -18,10 +18,11 @@
 (function factory(root) {
   'use strict';
 
-  const VERSION = '0.1.24';
+  const VERSION = '0.1.25';
   const SETTINGS_KEY = 'ali-helper:settings:v1';
   const NATIVE_REVIEW_PATHNAME = '/aer-jsonapi/review/v5/desktop/product-reviews';
   const REVIEW_CAPTURE_CAP = 30;
+  const PASSIVE_REVIEW_RETENTION_CAP_OPTIONS = Object.freeze([10, 30, 50, 100]);
   const AGGREGATE_SSR_MAX_DEPTH = 80;
   const RUNTIME_REGISTRY_KEY = '__aliHelperRuntimeV1__';
   const INITIAL_REVIEW_CONTEXT = Object.freeze({ sort: 1, filters: [], skuFilter: [], pageSize: 10 });
@@ -65,7 +66,31 @@
   const DEFAULT_SETTINGS = Object.freeze({
     autoRedirectComToRu: true,
     panelCollapsed: false,
+    passiveReviewRetentionCap: REVIEW_CAPTURE_CAP,
   });
+
+  function isPassiveReviewRetentionCap(value) {
+    return typeof value === 'number' && PASSIVE_REVIEW_RETENTION_CAP_OPTIONS.includes(value);
+  }
+
+  function normalizePassiveReviewRetentionCap(value) {
+    return isPassiveReviewRetentionCap(value) ? value : REVIEW_CAPTURE_CAP;
+  }
+
+  function parsePassiveReviewRetentionCapSelection(value) {
+    if (typeof value !== 'string' || !/^(10|30|50|100)$/.test(value)) return null;
+    const cap = Number(value);
+    return isPassiveReviewRetentionCap(cap) ? cap : null;
+  }
+
+  function normalizeSettings(value) {
+    const stored = isPlainObject(value) ? value : {};
+    return {
+      ...DEFAULT_SETTINGS,
+      ...stored,
+      passiveReviewRetentionCap: normalizePassiveReviewRetentionCap(stored.passiveReviewRetentionCap),
+    };
+  }
   const PANEL_SHELL_CONTRACT = Object.freeze({
     id: 'responsive-panel-v1',
     narrowMaxWidth: 767,
@@ -1863,7 +1888,7 @@
     if (!/^\d+$/.test(normalizedItemId || '') || !Number.isSafeInteger(cap) || cap < 1) return null;
     return {
       itemId: normalizedItemId,
-      cap,
+      defaultCap: cap,
       activeContextKey: null,
       activeSequence: 0,
       nextSequence: 0,
@@ -1871,9 +1896,27 @@
     };
   }
 
-  function reviewEntry(context) {
+  function setReviewCacheDefaultCap(cache, cap) {
+    if (!cache || !Number.isSafeInteger(cap) || cap < 1 || cache.defaultCap === cap) return cache;
+    return { ...cache, defaultCap: cap };
+  }
+
+  function applyPassiveReviewRetentionCapSelection(runtime, value, persist = saveSettings) {
+    const previousCap = normalizePassiveReviewRetentionCap(runtime?.settings?.passiveReviewRetentionCap);
+    const selectedCap = parsePassiveReviewRetentionCapSelection(value);
+    if (!runtime || !isPlainObject(runtime.settings) || selectedCap === null) {
+      return { accepted: false, preference: previousCap, activeCaptureCap: runtime?.reviewPage?.captureCap ?? null };
+    }
+    runtime.settings.passiveReviewRetentionCap = selectedCap;
+    runtime.reviewCache = setReviewCacheDefaultCap(runtime.reviewCache, selectedCap);
+    if (typeof persist === 'function') persist(runtime.settings);
+    return { accepted: true, preference: selectedCap, activeCaptureCap: runtime.reviewPage?.captureCap ?? null };
+  }
+
+  function reviewEntry(context, captureCap) {
     return {
       context,
+      captureCap,
       pages: new Map(),
       diagnostic: null,
       ignoredBeyondCap: false,
@@ -1921,10 +1964,12 @@
       return { ...cache, activeContextKey, activeSequence, nextSequence, contexts };
     }
     const contexts = new Map(cache.contexts);
-    const entry = currentEntry ? { ...currentEntry, pages: new Map(currentEntry.pages) } : reviewEntry(canonical);
+    const entry = currentEntry
+      ? { ...currentEntry, pages: new Map(currentEntry.pages) }
+      : reviewEntry(canonical, cache.defaultCap);
     if (hasExisting) {
       entry.diagnostic = 'page-conflict';
-    } else if (isReviewPageWithinCaptureCap(pageNum, canonical.pageSize, cache.cap)) entry.pages.set(pageNum, reviews);
+    } else if (isReviewPageWithinCaptureCap(pageNum, canonical.pageSize, entry.captureCap)) entry.pages.set(pageNum, reviews);
     else entry.ignoredBeyondCap = true;
     if (source === 'ssr') entry.hasSsr = true;
     if (source === 'native') entry.hasNative = true;
@@ -1983,8 +2028,8 @@
       context: entry.context,
       pagesLoaded: merged.pagesLoaded,
       loadedCount,
-      captureCap: cache.cap,
-      captureCapReached: entry.ignoredBeyondCap || retainedCount >= cache.cap,
+      captureCap: entry.captureCap,
+      captureCapReached: entry.ignoredBeyondCap || retainedCount >= entry.captureCap,
       ...(merged.diagnostic ? { diagnostic: merged.diagnostic } : {}),
       reviews: merged.reviews,
     };
@@ -2000,13 +2045,14 @@
 
   function formatReviewsPageStatus(reviewPage) {
     if (reviewPage.source === 'ssr:__AER_DATA__') {
-      return `Reviews ready · ${reviewPage.loadedCount} first-page reviews · source: SSR`;
+      return `Reviews ready · ${reviewPage.loadedCount} first-page reviews · retention cap: ${reviewPage.captureCap} · source: SSR`;
     }
     const labels = formatReviewContext(reviewPage.context);
     const pages = reviewPage.pagesLoaded;
     const contiguous = pages.length > 1 && pages.every((page, index) => page === index + 1);
     if (contiguous) labels.unshift(`pages 1–${pages.at(-1)}`);
     else if (pages.length) labels.unshift(`pages ${pages.join(', ')}`);
+    labels.push(`retention cap: ${reviewPage.captureCap}`);
     if (reviewPage.captureCapReached) labels.push('capture cap reached');
     if (reviewPage.diagnostic) labels.push(reviewPage.diagnostic);
     return `Reviews captured · ${reviewPage.loadedCount} reviews${labels.length ? ` · ${labels.join(' · ')}` : ''} · passive native`;
@@ -3941,7 +3987,14 @@
 
   const AliHelperCore = {
     VERSION,
+    SETTINGS_KEY,
     DEFAULT_SETTINGS,
+    PASSIVE_REVIEW_RETENTION_CAP_OPTIONS,
+    isPassiveReviewRetentionCap,
+    normalizePassiveReviewRetentionCap,
+    parsePassiveReviewRetentionCapSelection,
+    normalizeSettings,
+    loadSettings,
     PANEL_SHELL_CONTRACT,
     PRODUCT_PANEL_CONTRACT,
     REVIEWS_PANEL_CONTRACT,
@@ -4007,6 +4060,8 @@
     normalizeNativeReviewResponse,
     normalizeNativeReviewBatch,
     createReviewCache,
+    setReviewCacheDefaultCap,
+    applyPassiveReviewRetentionCapSelection,
     isReviewPageWithinCaptureCap,
     seedReviewCacheFromSsr,
     applyNativeReviewBatch,
@@ -4113,11 +4168,14 @@
 
   if (typeof window === 'undefined' || typeof document === 'undefined') return;
 
-  function loadSettings() {
+  function loadSettings(readSetting) {
     try {
-      return { ...DEFAULT_SETTINGS, ...(GM_getValue(SETTINGS_KEY, {}) || {}) };
+      const stored = typeof readSetting === 'function'
+        ? readSetting(SETTINGS_KEY, {})
+        : GM_getValue(SETTINGS_KEY, {});
+      return normalizeSettings(stored);
     } catch (_) {
-      return { ...DEFAULT_SETTINGS };
+      return normalizeSettings({});
     }
   }
 
@@ -4542,6 +4600,13 @@
         ${SHARED_PANEL_STYLES}
         .actions { display:flex; flex-direction:column; gap:7px; }
         .action { width:100%; }
+        .review-settings { margin-top:9px; border-top:1px solid #eee; padding-top:8px; }
+        .review-settings summary { cursor:pointer; }
+        .review-setting-control { display:grid; gap:5px; margin-top:8px; }
+        .review-setting-control select { box-sizing:border-box; width:100%; border:1px solid #d7d7d7; border-radius:8px; background:#fff; color:#222; padding:7px 9px; font:inherit; }
+        .review-setting-help, .review-setting-feedback { margin:7px 0 0; color:#666; font-size:11px; }
+        .review-setting-feedback.error { color:#8a1f11; }
+        .review-setting-control select:focus-visible { outline:2px solid #b64016; outline-offset:2px; }
         @media (max-width:${PANEL_SHELL_CONTRACT.narrowMaxWidth}px) { .action { box-sizing:border-box; } }
       </style>
       <section class="panel">
@@ -4551,6 +4616,20 @@
           <div class="actions">
             ${renderPanelActionButtons(REVIEWS_PANEL_CONTRACT.actions, 'action')}
           </div>
+          <details class="review-settings">
+            <summary>Review settings</summary>
+            <label class="review-setting-control">
+              <span>Passive review retention per context</span>
+              <select data-setting="passiveReviewRetentionCap">
+                <option value="10">10 reviews</option>
+                <option value="30" selected>30 reviews (default)</option>
+                <option value="50">50 reviews</option>
+                <option value="100">100 reviews</option>
+              </select>
+            </label>
+            <p class="review-setting-help">Keeps only reviews AliExpress loads itself; Ali Helper never loads, repeats, or blocks review requests. Changes apply to new review contexts. Existing retained contexts stay unchanged.</p>
+            <p class="review-setting-feedback" data-review-setting-feedback hidden aria-live="polite"></p>
+          </details>
           <div class="meta">Read/copy/navigation only · v${VERSION}</div>
         </div>
       </section>`;
@@ -4559,6 +4638,8 @@
     const status = shadow.querySelector('.status');
     const copyButtons = REVIEWS_PANEL_CONTRACT.actions
       .map((action) => shadow.querySelector(`[data-action="${action.id}"]`));
+    const retentionSelect = shadow.querySelector('[data-setting="passiveReviewRetentionCap"]');
+    const settingFeedback = shadow.querySelector('[data-review-setting-feedback]');
     const responsivePanel = bindResponsivePanel(
       runtime,
       host,
@@ -4569,6 +4650,23 @@
       status.textContent = message;
       status.classList.toggle('error', isError);
     }
+    function showSettingFeedback(message, isError = false) {
+      settingFeedback.hidden = false;
+      settingFeedback.textContent = message;
+      settingFeedback.classList.toggle('error', isError);
+    }
+    retentionSelect.value = String(runtime.settings.passiveReviewRetentionCap);
+    retentionSelect.addEventListener('change', () => {
+      const result = applyPassiveReviewRetentionCapSelection(runtime, retentionSelect.value);
+      if (!result.accepted) {
+        retentionSelect.value = String(result.preference);
+        showSettingFeedback('Not saved. Choose 10, 30, 50, or 100 reviews.', true);
+        return;
+      }
+      showSettingFeedback(result.activeCaptureCap === null
+        ? `Saved. New review contexts retain up to ${result.preference} reviews.`
+        : `Saved. New contexts use ${result.preference}; current context remains ${result.activeCaptureCap}.`);
+    });
     shadow.addEventListener('click', async (event) => {
       const action = event.target?.dataset?.action;
       if (action === 'toggle') {
@@ -4619,7 +4717,7 @@
         runtime.ssrRetryLifecycle?.dispose();
       },
     };
-    runtime.reviewCache = createReviewCache(runtime.itemId);
+    runtime.reviewCache = createReviewCache(runtime.itemId, runtime.settings.passiveReviewRetentionCap);
     installNativeReviewInterceptor(pageWindow, runtime.itemId, (batch, sequence) => {
       if (!runtime.active) return;
       const nextCache = applyNativeReviewBatch(runtime.reviewCache, batch, sequence);
