@@ -8,11 +8,15 @@ const core = require('../src/ali-helper.user.js');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'ali-helper.user.js'), 'utf8');
 
-test('panel breakpoint classifies 390 and 480 as narrow and larger widths as desktop', () => {
+test('panel breakpoint keeps widths through 767px narrow and switches at 768px', () => {
   const cases = [
     [390, 'narrow'],
     [480, 'narrow'],
-    [481, 'desktop'],
+    [481, 'narrow'],
+    [767, 'narrow'],
+    [768, 'desktop'],
+    [800, 'desktop'],
+    [801, 'desktop'],
     [1920, 'desktop'],
   ];
   cases.forEach(([width, expected]) => assert.equal(core.panelModeForWidth(width), expected, `${width}px`));
@@ -32,18 +36,18 @@ test('fresh narrow presentation is minimized without changing either desktop pre
 
 test('narrow toggles stay page-local and desktop restoration uses the persisted preference', () => {
   for (const desktopCollapsed of [false, true]) {
-    let state = core.createPanelLayoutState(390, desktopCollapsed);
+    let state = core.createPanelLayoutState(767, desktopCollapsed);
     state = core.togglePanelLayoutState(state);
     assert.equal(core.isPanelLayoutCollapsed(state), false);
     assert.equal(state.desktopCollapsed, desktopCollapsed);
     assert.equal(core.panelCollapsedPreferenceToPersist(state), null);
 
-    state = core.setPanelLayoutViewport(state, 481);
+    state = core.setPanelLayoutViewport(state, 768);
     assert.equal(state.mode, 'desktop');
     assert.equal(core.isPanelLayoutCollapsed(state), desktopCollapsed);
     assert.equal(core.panelCollapsedPreferenceToPersist(state), desktopCollapsed);
 
-    state = core.setPanelLayoutViewport(state, 390);
+    state = core.setPanelLayoutViewport(state, 767);
     assert.equal(core.isPanelLayoutCollapsed(state), false, 'page-local narrow choice survives a breakpoint round trip');
   }
 });
@@ -127,7 +131,7 @@ test('Reviews uses the shared shell contract and retains its existing two stacke
 test('responsive transitions retain one state and one unchanged action contract', () => {
   const actions = core.PRODUCT_PANEL_CONTRACT.actions;
   let state = core.createPanelLayoutState(1920, false);
-  for (const width of [390, 481, 480, 1920, 390, 481]) {
+  for (const width of [767, 768, 767, 1920, 767, 768]) {
     state = core.setPanelLayoutViewport(state, width);
     assert.deepEqual(Object.keys(state).sort(), ['desktopCollapsed', 'mode', 'narrowCollapsed']);
     assert.equal(core.PRODUCT_PANEL_CONTRACT.actions, actions);
@@ -194,7 +198,7 @@ test('responsive controller installs one media listener and removes it idempoten
 test('shared narrow shell contract drives clearance, bounds, and internal body scrolling', () => {
   assert.deepEqual(core.PANEL_SHELL_CONTRACT, {
     id: 'responsive-panel-v1',
-    narrowMaxWidth: 480,
+    narrowMaxWidth: 767,
     narrowLowerClearance: 120,
     narrowExpandedMaxViewportHeight: 50,
     narrowCollapsedMaxWidth: 180,
@@ -236,6 +240,12 @@ test('120px narrow reservation keeps the 360x600 shell inside its viewport', () 
   assert.ok(helperTop >= 0);
   assert.ok(helperLeft >= 0);
   assert.ok(helperLeft + expandedWidth <= viewport.width);
+});
+
+test('800x600 uses desktop mode and the normal desktop bottom placement', () => {
+  const viewport = { width: 800, height: 600 };
+  assert.equal(core.panelModeForWidth(viewport.width), 'desktop');
+  assert.match(source, /:host \{ all:initial; position:fixed; right:16px; bottom:16px;/);
 });
 
 test('toggle view exposes a stable name and synchronized accessible state', () => {

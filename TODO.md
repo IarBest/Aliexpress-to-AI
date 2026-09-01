@@ -720,10 +720,11 @@ Acceptance: основной export остаётся читаемым и огр�
 - [x] **Superseded by P6:** старую модель loading/ready/partial/error заменил
       contract `complete` / `partial` / `invalid`; waiting/error presentation
       уже существует, а принятый UI остаётся compact status surface.
-- [ ] Добавить в panel compact disclosure безопасных per-section semantic
-      sources и подтверждённых `missing` optional sections. Underlying P6
-      metadata уже существует; UI должен сохранять различие `missing` /
-      `not-observed` и не показывать raw metadata или raw URLs.
+- [x] Добавить в Product panel compact native `Sources & missing sections`:
+      безопасные semantic per-section sources и подтверждённые `missing` только
+      для поддерживаемых missing-capable sections, без raw URL/provenance и без
+      изменения export/schema. `not-observed` и `invalid` остаются в основном
+      status.
 - [x] **Superseded and generalized by P6:** product-side contract реализован
       через `product._meta.sections`; reviews сохраняют отдельный safe
       diagnostics contract.
@@ -735,7 +736,11 @@ Acceptance: основной export остаётся читаемым и огр�
       viewport-safe нижний clearance, bounded expanded height и internal
       scrolling с сохранением desktop layout; Product и общий Reviews shell
       проверены, пересечение с reference purchase controls в accepted live smoke
-      равно нулю.
+      равно нулю. Final contract совпадает с native transition: `<=767px` narrow,
+      `>=768px` desktop; persistent fixed/sticky purchase controls защищены
+      reservation `120px + safe-area`. Transient overlap с обычным inline content
+      принят как overlay behavior; production не inspect/measure/move/hide/modify
+      purchase controls.
 - [x] Корректно обновлять panel после SPA item/SKU changes.
 - [x] Завершить responsive organization/layout существующих actions без
       перегрузки панели. Desktop сохраняет принятый direct-action layout; narrow

@@ -41,6 +41,16 @@ test('section disclosure contract is fixed, Product-only display vocabulary', ()
   assert.equal(Object.isFrozen(core.SECTION_DISCLOSURE_CONTRACT.sourceAliases), true);
   assert.deepEqual(Object.keys(core.SECTION_DISCLOSURE_CONTRACT.sectionLabels), core.PRODUCT_SECTION_ORDER);
   assert.deepEqual(Object.keys(core.SECTION_DISCLOSURE_CONTRACT.sourceAliases), core.SECTION_SOURCE_ORDER);
+  assert.deepEqual(core.PRODUCT_CONFIRMED_MISSING_SECTIONS, [
+    'sizeGuide',
+    'gallery',
+    'ratingSummary',
+    'store',
+    'characteristics',
+    'description',
+  ]);
+  assert.equal(Object.isFrozen(core.PRODUCT_CONFIRMED_MISSING_SECTIONS), true);
+  assert.equal(core.PRODUCT_CONFIRMED_MISSING_SECTIONS.includes('delivery'), false);
 });
 
 test('present rows use deterministic section and source order with safe aliases only', () => {
@@ -66,7 +76,7 @@ test('present rows use deterministic section and source order with safe aliases 
   assert.doesNotMatch(JSON.stringify(model), /attacker|https?:\/\//);
 });
 
-test('confirmed missing sections are grouped in deterministic section order', () => {
+test('confirmed missing sections are capability-filtered in deterministic section order', () => {
   const model = core.createSectionDisclosureModel(productWithSections({
     delivery: { state: 'missing', sources: [] },
     sizeGuide: { state: 'missing', sources: [] },
@@ -74,8 +84,54 @@ test('confirmed missing sections are grouped in deterministic section order', ()
   }));
 
   assert.deepEqual(model.present, []);
-  assert.deepEqual(model.confirmedMissing, ['Size Guide', 'Description', 'Delivery']);
+  assert.deepEqual(model.confirmedMissing, ['Size Guide', 'Description']);
   assert.equal(model.hidden, false);
+});
+
+test('disclosure projection filters noncanonical metadata without mutating its input', () => {
+  const sections = {
+    unknownSection: { state: 'missing', sources: ['unknown:source'] },
+    delivery: { state: 'missing', sources: ['native:shipping-calculate'] },
+    description: { state: 'missing', sources: [] },
+    store: {
+      state: 'present',
+      sources: ['dom:store', 'unknown:source', 'productData', 'dom:store'],
+    },
+  };
+  const product = productWithSections(sections);
+  const snapshot = JSON.parse(JSON.stringify(sections));
+  const originalKeyOrder = Object.keys(sections);
+  const originalSourceArrays = Object.fromEntries(
+    Object.entries(sections).map(([sectionId, section]) => [sectionId, section.sources]),
+  );
+  const originalSourceContents = Object.fromEntries(
+    Object.entries(sections).map(([sectionId, section]) => [sectionId, [...section.sources]]),
+  );
+  const { disclosure, children } = createDisclosureStub();
+
+  const model = core.createSectionDisclosureModel(product);
+  const renderedModel = core.renderSectionDisclosure(disclosure, product);
+
+  const expectedModel = {
+    present: [{ label: 'Store', sources: ['Product API', 'Store section'] }],
+    confirmedMissing: ['Description'],
+    hidden: false,
+  };
+  assert.deepEqual(model, expectedModel);
+  assert.deepEqual(renderedModel, expectedModel);
+  assert.deepEqual(children.map(({ textContent }) => textContent), [
+    'Store: Product API, Store section',
+    'Confirmed missing: Description',
+  ]);
+  assert.deepEqual(sections, snapshot);
+  assert.deepEqual(Object.keys(sections), originalKeyOrder);
+  Object.entries(sections).forEach(([sectionId, section]) => {
+    assert.equal(section.sources, originalSourceArrays[sectionId], `${sectionId} source array reference`);
+    assert.deepEqual(section.sources, originalSourceContents[sectionId], `${sectionId} source array contents`);
+  });
+  assert.equal(sections.store.sources.includes('unknown:source'), true);
+  assert.equal(sections.delivery.state, 'missing');
+  assert.equal(sections.unknownSection.state, 'missing');
 });
 
 test('not-observed, invalid, malformed, and unknown-source entries stay out of disclosure', () => {
@@ -94,14 +150,14 @@ test('renderer creates text-only rows and closes a disclosure when it becomes em
   const { disclosure, children } = createDisclosureStub();
   const visible = core.renderSectionDisclosure(disclosure, productWithSections({
     store: { state: 'present', sources: ['dom:store'] },
-    delivery: { state: 'missing', sources: [] },
+    description: { state: 'missing', sources: [] },
   }));
 
   assert.equal(visible.hidden, false);
   assert.equal(disclosure.hidden, false);
   assert.deepEqual(children.map(({ tagName, className, textContent }) => ({ tagName, className, textContent })), [
     { tagName: 'DIV', className: 'section-source-row', textContent: 'Store: Store section' },
-    { tagName: 'DIV', className: 'confirmed-missing-row', textContent: 'Confirmed missing: Delivery' },
+    { tagName: 'DIV', className: 'confirmed-missing-row', textContent: 'Confirmed missing: Description' },
   ]);
 
   disclosure.open = true;
@@ -181,8 +237,18 @@ test('Product body wheel bridge handles line/page deltas and ignores non-scrolla
   assert.equal(fixedBody.scrollTop, 0);
 });
 
-test('Product body wheel bridge ignores horizontal-dominant gestures and keeps vertical-dominant behavior', () => {
-  const body = { clientHeight: 100, scrollHeight: 500, scrollTop: 100 };
+test('Product body wheel bridge leaves horizontal-dominant native behavior untouched', () => {
+  let storedScrollTop = 100;
+  let scrollTopAssignments = 0;
+  const body = {
+    clientHeight: 100,
+    scrollHeight: 500,
+    get scrollTop() { return storedScrollTop; },
+    set scrollTop(value) {
+      scrollTopAssignments += 1;
+      storedScrollTop = value;
+    },
+  };
   const handler = core.createPanelBodyWheelHandler(body);
   const calls = { prevented: 0, stopped: 0 };
   const event = (deltaX, deltaY) => ({
@@ -195,14 +261,17 @@ test('Product body wheel bridge ignores horizontal-dominant gestures and keeps v
 
   handler(event(50, 1));
   assert.equal(body.scrollTop, 100);
+  assert.equal(scrollTopAssignments, 0, 'bridge does not assign scrollTop for a 50/1 gesture');
   assert.deepEqual(calls, { prevented: 0, stopped: 0 });
 
   handler(event(50, 0));
   assert.equal(body.scrollTop, 100);
+  assert.equal(scrollTopAssignments, 0, 'bridge does not assign scrollTop for a pure horizontal gesture');
   assert.deepEqual(calls, { prevented: 0, stopped: 0 });
 
   handler(event(1, 50));
   assert.equal(body.scrollTop, 150);
+  assert.equal(scrollTopAssignments, 1);
   assert.deepEqual(calls, { prevented: 1, stopped: 1 });
 });
 

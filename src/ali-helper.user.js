@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ali Helper
 // @namespace    https://github.com/local/ali-helper
-// @version      0.1.23
+// @version      0.1.24
 // @description  Read-only AliExpress URL cleaner and product/variant exporter
 // @match        https://aliexpress.ru/item/*
 // @match        https://www.aliexpress.com/item/*
@@ -18,7 +18,7 @@
 (function factory(root) {
   'use strict';
 
-  const VERSION = '0.1.23';
+  const VERSION = '0.1.24';
   const SETTINGS_KEY = 'ali-helper:settings:v1';
   const NATIVE_REVIEW_PATHNAME = '/aer-jsonapi/review/v5/desktop/product-reviews';
   const REVIEW_CAPTURE_CAP = 30;
@@ -68,7 +68,7 @@
   });
   const PANEL_SHELL_CONTRACT = Object.freeze({
     id: 'responsive-panel-v1',
-    narrowMaxWidth: 480,
+    narrowMaxWidth: 767,
     narrowLowerClearance: 120,
     narrowExpandedMaxViewportHeight: 50,
     narrowCollapsedMaxWidth: 180,
@@ -116,6 +116,14 @@
     'characteristics',
     'description',
     'delivery',
+  ]);
+  const PRODUCT_CONFIRMED_MISSING_SECTIONS = Object.freeze([
+    'sizeGuide',
+    'gallery',
+    'ratingSummary',
+    'store',
+    'characteristics',
+    'description',
   ]);
   const SECTION_DISCLOSURE_CONTRACT = Object.freeze({
     id: 'section-disclosure-v1',
@@ -266,7 +274,7 @@
           .map((source) => SECTION_DISCLOSURE_CONTRACT.sourceAliases[source])
           .filter(Boolean);
         if (sources.length) present.push({ label, sources });
-      } else if (section?.state === 'missing') {
+      } else if (section?.state === 'missing' && PRODUCT_CONFIRMED_MISSING_SECTIONS.includes(sectionId)) {
         confirmedMissing.push(label);
       }
     });
@@ -3948,6 +3956,7 @@
     createResponsivePanelController,
     SECTION_SOURCE_ORDER,
     PRODUCT_SECTION_ORDER,
+    PRODUCT_CONFIRMED_MISSING_SECTIONS,
     SECTION_DISCLOSURE_CONTRACT,
     normalizeSectionSources,
     createSectionDisclosureModel,
