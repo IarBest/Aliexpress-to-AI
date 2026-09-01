@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ali Helper
 // @namespace    https://github.com/local/ali-helper
-// @version      0.1.25
+// @version      0.1.26
 // @description  Read-only AliExpress URL cleaner and product/variant exporter
 // @match        https://aliexpress.ru/item/*
 // @match        https://www.aliexpress.com/item/*
@@ -18,7 +18,7 @@
 (function factory(root) {
   'use strict';
 
-  const VERSION = '0.1.25';
+  const VERSION = '0.1.26';
   const SETTINGS_KEY = 'ali-helper:settings:v1';
   const NATIVE_REVIEW_PATHNAME = '/aer-jsonapi/review/v5/desktop/product-reviews';
   const REVIEW_CAPTURE_CAP = 30;
@@ -99,14 +99,56 @@
     narrowCollapsedMaxWidth: 180,
     narrowCollapsedMaxHeight: 52,
   });
+  const TOOLTIP_DELAY_MS = 1300;
   const PRODUCT_PANEL_ACTIONS = Object.freeze([
-    { id: 'clean-url', label: 'Copy clean URL', requiresProduct: false, desktopWide: false },
-    { id: 'market', label: 'RU / COM', requiresProduct: false, desktopWide: false },
-    { id: 'product', label: 'Copy product', requiresProduct: true, desktopWide: false },
-    { id: 'variants', label: 'Copy variants', requiresProduct: true, desktopWide: false },
-    { id: 'chatgpt', label: 'Copy for ChatGPT', requiresProduct: true, desktopWide: true },
-    { id: 'description', label: 'Copy description', requiresProduct: true, desktopWide: true },
+    {
+      id: 'chatgpt',
+      label: 'Copy for ChatGPT',
+      tooltip: 'Copies a concise product summary ready to paste into ChatGPT.',
+      requiresProduct: true,
+      desktopWide: true,
+      primary: true,
+    },
+    {
+      id: 'product',
+      label: 'Copy product',
+      tooltip: 'Copies the normalized product data as JSON.',
+      requiresProduct: true,
+      desktopWide: false,
+    },
+    {
+      id: 'variants',
+      label: 'Copy variants',
+      tooltip: 'Copies every real SKU combination in a readable text export.',
+      requiresProduct: true,
+      desktopWide: false,
+    },
+    {
+      id: 'description',
+      label: 'Copy description',
+      tooltip: 'Copies the full ordered description with text, links, and image URLs.',
+      requiresProduct: true,
+      desktopWide: true,
+    },
+    {
+      id: 'clean-url',
+      label: 'Copy clean URL',
+      tooltip: 'Copies this item URL without known tracking parameters.',
+      requiresProduct: false,
+      desktopWide: false,
+    },
+    {
+      id: 'market',
+      label: 'RU / COM',
+      tooltip: 'Opens this item on the other AliExpress market (RU or COM).',
+      requiresProduct: false,
+      desktopWide: false,
+    },
   ].map(Object.freeze));
+  const PRODUCT_PANEL_GROUPS = Object.freeze([
+    { id: 'export', ariaLabel: 'Product export', actionIds: ['chatgpt', 'product', 'variants', 'description'] },
+    { id: 'quick', ariaLabel: 'Quick actions', actionIds: ['clean-url', 'market'] },
+  ].map((group) => Object.freeze({ ...group, actionIds: Object.freeze(group.actionIds) })));
   const REVIEWS_PANEL_ACTIONS = Object.freeze([
     { id: 'reviews', label: 'Copy reviews JSON', requiresReviews: true },
     { id: 'reviews-chatgpt', label: 'Copy reviews for ChatGPT', requiresReviews: true },
@@ -153,6 +195,7 @@
   const SECTION_DISCLOSURE_CONTRACT = Object.freeze({
     id: 'section-disclosure-v1',
     summary: 'Sources & missing sections',
+    tooltip: 'Shows the source of each product section and any sections confirmed missing.',
     sectionLabels: Object.freeze({
       sizeGuide: 'Size Guide',
       gallery: 'Gallery',
@@ -236,7 +279,7 @@
       symbol: collapsed ? '+' : '—',
       ariaLabel: 'Toggle Ali Helper panel',
       ariaExpanded: String(!collapsed),
-      title: collapsed ? 'Expand Ali Helper panel' : 'Collapse Ali Helper panel',
+      tooltip: collapsed ? 'Expand Ali Helper panel.' : 'Collapse Ali Helper panel.',
     });
   }
 
@@ -336,6 +379,122 @@
     return model;
   }
 
+  function renderProductSectionDisclosure(disclosure, product) {
+    const model = renderSectionDisclosure(disclosure, product);
+    const summary = disclosure?.querySelector?.('summary');
+    const badge = disclosure?.querySelector?.('[data-completeness-badge]');
+    const content = disclosure?.querySelector?.('[data-section-disclosure-content]');
+    const completeness = assessProductCompleteness(product);
+    const exceptional = completeness.state === 'partial' || completeness.state === 'invalid';
+    const stateLabel = exceptional
+      ? `${completeness.state[0].toUpperCase()}${completeness.state.slice(1)}`
+      : '';
+
+    if (badge) {
+      badge.hidden = !exceptional;
+      badge.textContent = stateLabel;
+      if (exceptional) badge.dataset.state = completeness.state;
+      else delete badge.dataset.state;
+    }
+    if (summary) {
+      if (exceptional) {
+        summary.setAttribute(
+          'aria-label',
+          `${SECTION_DISCLOSURE_CONTRACT.summary}. Product status: ${stateLabel}.`,
+        );
+      } else {
+        summary.removeAttribute('aria-label');
+      }
+    }
+    if (!exceptional || !disclosure || !content) return { model, completeness };
+
+    disclosure.hidden = false;
+    const ownerDocument = disclosure.ownerDocument || document;
+    const issueRows = [];
+    if (completeness.invalidSections.length) {
+      issueRows.push(`Invalid: ${completeness.invalidSections
+        .map(({ section, diagnostic }) => `${formatProductSectionLabel(section)} (${diagnostic})`)
+        .join(', ')}`);
+    }
+    if (completeness.notObservedSections.length) {
+      issueRows.push(`Not observed: ${completeness.notObservedSections.map(formatProductSectionLabel).join(', ')}`);
+    }
+    if (completeness.coreIssues.length) {
+      issueRows.push(`Core issues: ${completeness.coreIssues.map(formatProductCoreIssue).join(', ')}`);
+    }
+    issueRows.forEach((text) => {
+      const row = ownerDocument.createElement('div');
+      row.className = 'completeness-detail-row';
+      row.textContent = text;
+      content.appendChild(row);
+    });
+    return { model, completeness };
+  }
+
+  function createProductStatusController(status, options = {}) {
+    const setTimer = options.setTimer || setTimeout;
+    const clearTimer = options.clearTimer || clearTimeout;
+    const clearDelayMs = options.clearDelayMs ?? 2800;
+    let baseMessage = status.textContent || '';
+    let baseIsError = Boolean(baseMessage && status.classList.contains('error'));
+    let transientMessage = '';
+    let clearHandle = null;
+    let revision = 0;
+    let disposed = false;
+
+    function invalidateTransient() {
+      revision += 1;
+      const handle = clearHandle;
+      clearHandle = null;
+      transientMessage = '';
+      if (handle !== null) clearTimer(handle);
+    }
+    function render(message, isError) {
+      status.textContent = message;
+      status.classList.toggle('error', isError);
+      status.hidden = !message;
+    }
+    function clear() {
+      if (disposed) return;
+      baseMessage = '';
+      baseIsError = false;
+      invalidateTransient();
+      render('', false);
+    }
+    return {
+      showPersistent(message, isError = false) {
+        if (disposed) return;
+        baseMessage = message;
+        baseIsError = Boolean(message && isError);
+        invalidateTransient();
+        render(baseMessage, baseIsError);
+      },
+      showTransient(message) {
+        if (disposed) return;
+        invalidateTransient();
+        transientMessage = message;
+        const ownRevision = revision;
+        render(transientMessage, false);
+        clearHandle = setTimer(() => {
+          if (disposed || ownRevision !== revision) return;
+          clearHandle = null;
+          transientMessage = '';
+          revision += 1;
+          render(baseMessage, baseIsError);
+        }, clearDelayMs);
+      },
+      clear,
+      dispose() {
+        if (disposed) return;
+        baseMessage = '';
+        baseIsError = false;
+        invalidateTransient();
+        render('', false);
+        disposed = true;
+      },
+    };
+  }
+
   function createPanelBodyWheelHandler(body) {
     return (event) => {
       if (!body || !Number.isFinite(event?.deltaY) || event.deltaY === 0) return;
@@ -360,6 +519,177 @@
     const onWheel = createPanelBodyWheelHandler(body);
     body.addEventListener('wheel', onWheel, { passive: false });
     return () => body.removeEventListener('wheel', onWheel);
+  }
+
+  const TOOLTIP_CONTROLLERS = new WeakMap();
+
+  function createTooltipController(root, options = {}) {
+    const existing = TOOLTIP_CONTROLLERS.get(root);
+    if (existing) return existing;
+
+    const ownerDocument = root.ownerDocument || document;
+    const tooltip = ownerDocument.createElement('div');
+    const delay = Number.isFinite(options.delay) && options.delay >= 0
+      ? options.delay
+      : TOOLTIP_DELAY_MS;
+    const setTimer = options.setTimer || setTimeout;
+    const clearTimer = options.clearTimer || clearTimeout;
+    const getViewport = options.getViewport || (() => ({
+      width: globalThis.innerWidth,
+      height: globalThis.innerHeight,
+    }));
+    const targets = Array.from(root.querySelectorAll('[data-tooltip]'));
+    const bindings = [];
+    let pendingTimer = null;
+    let pendingTarget = null;
+    let visibleTarget = null;
+    let previousDescribedBy = null;
+    let disposed = false;
+
+    tooltip.id = 'ali-helper-tooltip';
+    tooltip.className = 'tooltip';
+    tooltip.hidden = true;
+    tooltip.setAttribute('role', 'tooltip');
+    tooltip.setAttribute('data-ali-helper-tooltip', '');
+    root.appendChild(tooltip);
+
+    function clearPending(target = null) {
+      if (target && pendingTarget !== target) return;
+      if (pendingTimer !== null) clearTimer(pendingTimer);
+      pendingTimer = null;
+      pendingTarget = null;
+    }
+
+    function restoreDescription() {
+      if (!visibleTarget) return;
+      if (previousDescribedBy === null) {
+        visibleTarget.removeAttribute('aria-describedby');
+      } else {
+        visibleTarget.setAttribute('aria-describedby', previousDescribedBy);
+      }
+      previousDescribedBy = null;
+    }
+
+    function hideVisible(target = null) {
+      if (target && visibleTarget !== target) return;
+      restoreDescription();
+      visibleTarget = null;
+      tooltip.hidden = true;
+      tooltip.textContent = '';
+    }
+
+    function positionTooltip(target) {
+      if (typeof target.getBoundingClientRect !== 'function'
+        || typeof tooltip.getBoundingClientRect !== 'function') return;
+      const targetRect = target.getBoundingClientRect();
+      const tooltipRect = tooltip.getBoundingClientRect();
+      const viewport = getViewport();
+      const inset = 8;
+      const gap = 8;
+      const maxLeft = Math.max(inset, viewport.width - tooltipRect.width - inset);
+      const left = Math.max(inset, Math.min(
+        maxLeft,
+        targetRect.left + (targetRect.width - tooltipRect.width) / 2,
+      ));
+      let top = targetRect.bottom + gap;
+      if (top + tooltipRect.height > viewport.height - inset) {
+        top = targetRect.top - tooltipRect.height - gap;
+      }
+      tooltip.style.left = `${Math.round(left)}px`;
+      tooltip.style.top = `${Math.round(Math.max(inset, top))}px`;
+    }
+
+    function show(target) {
+      if (disposed) return;
+      const text = target?.dataset?.tooltip;
+      if (typeof text !== 'string' || !text.trim()) return;
+      hideVisible();
+      visibleTarget = target;
+      previousDescribedBy = target.getAttribute('aria-describedby');
+      const describedBy = new Set((previousDescribedBy || '').split(/\s+/).filter(Boolean));
+      describedBy.add(tooltip.id);
+      target.setAttribute('aria-describedby', Array.from(describedBy).join(' '));
+      tooltip.textContent = text;
+      tooltip.hidden = false;
+      positionTooltip(target);
+    }
+
+    function schedule(target) {
+      if (disposed || visibleTarget === target
+        || (pendingTarget === target && pendingTimer !== null)) return;
+      clearPending();
+      hideVisible();
+      pendingTarget = target;
+      pendingTimer = setTimer(() => {
+        const scheduledTarget = pendingTarget;
+        pendingTimer = null;
+        pendingTarget = null;
+        if (scheduledTarget === target) show(target);
+      }, delay);
+    }
+
+    function cancel(target) {
+      clearPending(target);
+      hideVisible(target);
+    }
+
+    targets.forEach((target) => {
+      const state = { hovered: false, focusEligible: false, focusFromPointer: false };
+      const listeners = {
+        pointerenter(event) {
+          if (event.pointerType === 'touch') return;
+          state.hovered = true;
+          schedule(target);
+        },
+        pointerleave() {
+          state.hovered = false;
+          if (!state.focusEligible) cancel(target);
+        },
+        pointerdown(event) {
+          state.focusFromPointer = true;
+          if (event.pointerType === 'touch') {
+            state.hovered = false;
+            cancel(target);
+          }
+        },
+        pointerup() {
+          state.focusFromPointer = false;
+        },
+        pointercancel() {
+          state.focusFromPointer = false;
+        },
+        focus() {
+          state.focusEligible = !state.focusFromPointer;
+          if (state.focusEligible) schedule(target);
+        },
+        blur() {
+          state.focusEligible = false;
+          state.focusFromPointer = false;
+          if (!state.hovered) cancel(target);
+        },
+        click() {
+          cancel(target);
+        },
+      };
+      Object.entries(listeners).forEach(([type, listener]) => {
+        target.addEventListener(type, listener);
+        bindings.push([target, type, listener]);
+      });
+    });
+
+    const controller = Object.freeze({
+      dispose() {
+        if (disposed) return;
+        disposed = true;
+        clearPending();
+        hideVisible();
+        bindings.forEach(([target, type, listener]) => target.removeEventListener(type, listener));
+        tooltip.remove();
+        TOOLTIP_CONTROLLERS.delete(root);
+      },
+    });
+    TOOLTIP_CONTROLLERS.set(root, controller);
+    return controller;
   }
 
   function createSectionDiagnostic(state, sources = [], diagnostic = null) {
@@ -3996,7 +4326,10 @@
     normalizeSettings,
     loadSettings,
     PANEL_SHELL_CONTRACT,
+    TOOLTIP_DELAY_MS,
     PRODUCT_PANEL_CONTRACT,
+    PRODUCT_PANEL_GROUPS,
+    renderProductActionGroups,
     REVIEWS_PANEL_CONTRACT,
     panelModeForWidth,
     createPanelLayoutState,
@@ -4014,7 +4347,10 @@
     normalizeSectionSources,
     createSectionDisclosureModel,
     renderSectionDisclosure,
+    renderProductSectionDisclosure,
+    createProductStatusController,
     createPanelBodyWheelHandler,
+    createTooltipController,
     createSectionDiagnostic,
     createSectionObservation,
     sectionDiagnosticFromObservations,
@@ -4417,19 +4753,27 @@
 
   const SHARED_PANEL_STYLES = `
     :host { all:initial; position:fixed; right:16px; bottom:16px; z-index:2147483000; display:block; }
-    .panel { width:320px; max-width:calc(100vw - 24px); color:#191919; background:#fff; border:1px solid #ddd; border-radius:12px; box-shadow:0 8px 28px rgba(0,0,0,.22); font:13px/1.35 Arial,sans-serif; overflow:hidden; }
-    header { display:flex; align-items:center; gap:8px; padding:10px 12px; background:#ffefe8; }
-    strong { flex:1; font-size:14px; }
-    .body { padding:10px; max-height:min(65vh,560px); overflow:auto; }
+    .panel { width:320px; max-width:calc(100vw - 24px); color:#202938; background:#fbfcfd; border:1px solid #cfd7e2; border-radius:10px; box-shadow:0 6px 18px rgba(31,41,55,.14); font:13px/1.35 Arial,sans-serif; overflow:hidden; }
+    header { display:flex; align-items:center; gap:8px; padding:8px 9px 8px 12px; background:#e9eef3; border-bottom:1px solid #d7dfe8; }
+    strong { flex:1; min-width:0; font-size:14px; font-weight:600; letter-spacing:.01em; }
+    .body { padding:11px; max-height:min(65vh,560px); overflow:auto; }
     .panel.collapsed .body { display:none; }
-    button { border:1px solid #d7d7d7; border-radius:8px; background:#fff; color:#222; padding:7px 9px; cursor:pointer; font:inherit; }
-    button:hover { background:#f7f7f7; }
-    button:disabled { opacity:.45; cursor:not-allowed; }
-    .icon { padding:4px 8px; }
-    .status { margin:0 0 9px; padding:7px 8px; border-radius:7px; background:#f5f5f5; overflow-wrap:anywhere; }
-    .status.error { color:#8a1f11; background:#fff0ed; }
-    .meta { color:#666; margin-top:8px; font-size:11px; }
-    button:focus-visible, summary:focus-visible, input:focus-visible { outline:2px solid #b64016; outline-offset:2px; }
+    button { min-width:0; min-height:36px; border:1px solid #cbd4df; border-radius:7px; background:#fff; color:#273244; padding:8px 10px; cursor:pointer; font:inherit; font-weight:600; line-height:1.25; white-space:normal; overflow-wrap:anywhere; }
+    button:hover { background:#f3f6f9; border-color:#b8c4d1; }
+    button:active { background:#e9eef4; }
+    button:disabled { opacity:.48; cursor:not-allowed; }
+    button.primary { color:#fff; background:#365f8c; border-color:#365f8c; }
+    button.primary:hover { background:#2f557e; border-color:#2f557e; }
+    button.primary:active { background:#294b70; border-color:#294b70; }
+    .icon { display:inline-grid; place-items:center; flex:none; min-width:30px; min-height:28px; padding:3px 8px; font-weight:700; }
+    .status { min-height:18px; margin:0 0 12px; padding:0 1px 9px; color:#536173; border-bottom:1px solid #e4e9ef; overflow-wrap:anywhere; }
+    .status.error { color:#9b2c2c; border-bottom-color:#efcaca; }
+    .meta { display:flex; flex-wrap:wrap; justify-content:space-between; gap:4px 10px; color:#737f8e; margin-top:12px; padding-top:9px; border-top:1px solid #e4e9ef; font-size:11px; }
+    .meta a { color:#63758a; text-decoration:none; }
+    .meta a:hover { color:#365f8c; text-decoration:underline; }
+    .tooltip { position:fixed; z-index:2147483001; box-sizing:border-box; max-width:min(260px,calc(100vw - 16px)); padding:6px 8px; border:1px solid #27364a; border-radius:6px; background:#27364a; color:#fff; box-shadow:0 3px 10px rgba(31,41,55,.18); font:12px/1.35 Arial,sans-serif; overflow-wrap:anywhere; pointer-events:none; }
+    .tooltip[hidden] { display:none; }
+    button:focus-visible, summary:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible { outline:2px solid #3f78b5; outline-offset:2px; }
     @media (max-width:${PANEL_SHELL_CONTRACT.narrowMaxWidth}px) {
       :host { right:12px; bottom:calc(${PANEL_SHELL_CONTRACT.narrowLowerClearance}px + env(safe-area-inset-bottom, 0px)); }
       .panel { box-sizing:border-box; width:min(320px, calc(100vw - 24px)); max-width:calc(100vw - 24px); max-height:min(${PANEL_SHELL_CONTRACT.narrowExpandedMaxViewportHeight}vh, calc(100vh - 96px - env(safe-area-inset-bottom, 0px))); display:flex; flex-direction:column; }
@@ -4452,11 +4796,35 @@
 
   function renderPanelActionButtons(actions, className = '') {
     return actions.map((action) => {
-      const classes = [className, action.desktopWide ? 'wide' : ''].filter(Boolean).join(' ');
+      const classes = [
+        className,
+        action.desktopWide ? 'wide' : '',
+        action.primary ? 'primary' : '',
+      ].filter(Boolean).join(' ');
       const classAttribute = classes ? ` class="${classes}"` : '';
       const disabled = action.requiresProduct || action.requiresReviews ? ' disabled' : '';
       return `<button type="button"${classAttribute} data-action="${action.id}"${disabled}>${action.label}</button>`;
     }).join('');
+  }
+
+  function renderProductActionGroups() {
+    return PRODUCT_PANEL_GROUPS.map((group) => {
+      const actions = group.actionIds
+        .map((actionId) => PRODUCT_PANEL_ACTIONS.find((action) => action.id === actionId))
+        .filter(Boolean);
+      return `
+        <section class="action-group action-group-${group.id}" role="group" aria-label="${group.ariaLabel}">
+          <div class="grid">${renderPanelActionButtons(actions)}</div>
+        </section>`;
+    }).join('');
+  }
+
+  function applyPanelActionTooltips(root, actions) {
+    actions.forEach((action) => {
+      if (!action.tooltip) return;
+      const button = root.querySelector(`[data-action="${action.id}"]`);
+      if (button) button.dataset.tooltip = action.tooltip;
+    });
   }
 
   function bindResponsivePanel(runtime, host, panel, toggle) {
@@ -4469,7 +4837,7 @@
       toggle.textContent = toggleView.symbol;
       toggle.setAttribute('aria-label', toggleView.ariaLabel);
       toggle.setAttribute('aria-expanded', toggleView.ariaExpanded);
-      toggle.title = toggleView.title;
+      toggle.dataset.tooltip = toggleView.tooltip;
     }, (desktopPreference) => {
       runtime.settings.panelCollapsed = desktopPreference;
       saveSettings(runtime.settings);
@@ -4481,27 +4849,35 @@
     shadow.innerHTML = `
       <style>
         ${SHARED_PANEL_STYLES}
-        .grid { display:grid; grid-template-columns:1fr 1fr; gap:7px; }
+        .action-groups { display:grid; gap:15px; }
+        .action-group { min-width:0; }
+        .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
         .wide { grid-column:1/-1; }
-        details { margin-top:9px; border-top:1px solid #eee; padding-top:8px; }
-        summary { cursor:pointer; } label { display:flex; gap:7px; margin-top:8px; }
+        .product-status { min-height:0; margin:0 0 9px; padding:0 1px; border-bottom:0; }
+        .product-status[hidden] { display:none; }
+        details { margin-top:10px; }
+        summary { width:fit-content; max-width:100%; color:#536173; cursor:pointer; font-weight:600; overflow-wrap:anywhere; }
+        details[open] summary { color:#273244; }
+        .completeness-badge { display:inline-block; margin-left:6px; padding:1px 5px; border:1px solid #cbd4df; border-radius:999px; color:#536173; font-size:10px; font-weight:700; line-height:1.4; vertical-align:1px; }
+        .completeness-badge[data-state="invalid"] { border-color:#efcaca; color:#9b2c2c; }
+        .completeness-badge[hidden] { display:none; }
+        label { display:flex; gap:7px; margin-top:8px; }
         .section-disclosure-content { display:grid; gap:5px; margin-top:7px; }
-        .section-source-row, .confirmed-missing-row { overflow-wrap:anywhere; }
+        .section-source-row, .confirmed-missing-row, .completeness-detail-row { overflow-wrap:anywhere; }
         .diagnostic { width:100%; margin-top:9px; }
         @media (max-width:${PANEL_SHELL_CONTRACT.narrowMaxWidth}px) {
-          .grid .wide { grid-column:auto; }
           .diagnostic { box-sizing:border-box; }
         }
       </style>
       <section class="panel">
         <header><strong>Ali Helper</strong><button type="button" class="icon" data-action="toggle">—</button></header>
         <div class="body">
-          <div class="status">Waiting for productData…</div>
-          <div class="grid">
-            ${renderPanelActionButtons(PRODUCT_PANEL_CONTRACT.actions)}
+          <div class="status product-status" role="status" aria-live="polite" aria-atomic="true">Waiting for productData…</div>
+          <div class="action-groups">
+            ${renderProductActionGroups()}
           </div>
           <details class="section-disclosure" data-section-disclosure hidden>
-            <summary>${SECTION_DISCLOSURE_CONTRACT.summary}</summary>
+            <summary>${SECTION_DISCLOSURE_CONTRACT.summary}<span class="completeness-badge" data-completeness-badge hidden></span></summary>
             <div class="section-disclosure-content" data-section-disclosure-content></div>
           </details>
           <details>
@@ -4509,7 +4885,10 @@
             <label><input type="checkbox" data-setting="autoRedirectComToRu"> Auto redirect COM → RU</label>
             <button type="button" class="diagnostic" data-action="shipping-debug" disabled>Copy shipping debug</button>
           </details>
-          <div class="meta">Read/copy/navigation only · v${VERSION}</div>
+          <footer class="meta">
+            <span>Read/copy/navigation only · v${VERSION}</span>
+            <a href="https://bigbensoft.com/" target="_blank" rel="noopener noreferrer">bigbensoft.com</a>
+          </footer>
         </div>
       </section>`;
     (document.body || document.documentElement).appendChild(host);
@@ -4523,22 +4902,25 @@
     const sectionDisclosure = shadow.querySelector('[data-section-disclosure]');
     const autoRedirect = shadow.querySelector('[data-setting="autoRedirectComToRu"]');
     const shippingDebug = shadow.querySelector('[data-action="shipping-debug"]');
+    applyPanelActionTooltips(shadow, PRODUCT_PANEL_CONTRACT.actions);
+    sectionDisclosure.querySelector('summary').dataset.tooltip = SECTION_DISCLOSURE_CONTRACT.tooltip;
     const responsivePanel = bindResponsivePanel(
       runtime,
       host,
       panel,
       shadow.querySelector('[data-action="toggle"]'),
     );
+    const tooltipController = createTooltipController(shadow);
     const disposeWheelScroll = bindPanelBodyWheelScroll(panelBody);
+    const statusController = createProductStatusController(status);
     autoRedirect.checked = runtime.settings.autoRedirectComToRu;
     shippingDebug.disabled = !runtime.shippingCapture;
 
     function flash(message, isError = false) {
-      status.textContent = message;
-      status.classList.toggle('error', isError);
+      statusController.showPersistent(message, isError);
     }
     async function copyWithFeedback(text, label) {
-      try { await copyText(text); flash(`${label} copied.`); } catch (error) { flash(`Copy failed: ${error.message}`, true); }
+      try { await copyText(text); statusController.showTransient(`${label} copied.`); } catch (error) { flash(`Copy failed: ${error.message}`, true); }
     }
     shadow.addEventListener('click', (event) => {
       const action = event.target?.dataset?.action;
@@ -4574,19 +4956,21 @@
     autoRedirect.addEventListener('change', () => {
       runtime.settings.autoRedirectComToRu = autoRedirect.checked;
       saveSettings(runtime.settings);
-      flash('Settings saved.');
+      statusController.showTransient('Settings saved.');
     });
     return {
       setProduct(product) {
         productButtons.forEach((button) => { button.disabled = false; });
-        renderSectionDisclosure(sectionDisclosure, product);
-        flash(formatProductStatus(product), assessProductCompleteness(product).state === 'invalid');
+        renderProductSectionDisclosure(sectionDisclosure, product);
+        statusController.clear();
       },
       setShippingCapture(capture) {
         shippingDebug.disabled = !capture;
       },
       setStatus: flash,
       dispose() {
+        statusController.dispose();
+        tooltipController.dispose();
         disposeWheelScroll();
         responsivePanel.destroy();
       },
@@ -4603,16 +4987,15 @@
         .review-settings { margin-top:9px; border-top:1px solid #eee; padding-top:8px; }
         .review-settings summary { cursor:pointer; }
         .review-setting-control { display:grid; gap:5px; margin-top:8px; }
-        .review-setting-control select { box-sizing:border-box; width:100%; border:1px solid #d7d7d7; border-radius:8px; background:#fff; color:#222; padding:7px 9px; font:inherit; }
-        .review-setting-help, .review-setting-feedback { margin:7px 0 0; color:#666; font-size:11px; }
-        .review-setting-feedback.error { color:#8a1f11; }
-        .review-setting-control select:focus-visible { outline:2px solid #b64016; outline-offset:2px; }
+        .review-setting-control select { box-sizing:border-box; width:100%; border:1px solid #cbd4df; border-radius:7px; background:#fff; color:#273244; padding:7px 9px; font:inherit; }
+        .review-setting-help, .review-setting-feedback { margin:7px 0 0; color:#687586; font-size:11px; }
+        .review-setting-feedback.error { color:#9b2c2c; }
         @media (max-width:${PANEL_SHELL_CONTRACT.narrowMaxWidth}px) { .action { box-sizing:border-box; } }
       </style>
       <section class="panel">
         <header><strong>Ali Helper</strong><button type="button" class="icon" data-action="toggle">—</button></header>
         <div class="body">
-          <div class="status">Waiting for first-page SSR reviews…</div>
+          <div class="status" role="status" aria-live="polite" aria-atomic="true">Waiting for first-page SSR reviews…</div>
           <div class="actions">
             ${renderPanelActionButtons(REVIEWS_PANEL_CONTRACT.actions, 'action')}
           </div>
@@ -4630,7 +5013,10 @@
             <p class="review-setting-help">Keeps only reviews AliExpress loads itself; Ali Helper never loads, repeats, or blocks review requests. Changes apply to new review contexts. Existing retained contexts stay unchanged.</p>
             <p class="review-setting-feedback" data-review-setting-feedback hidden aria-live="polite"></p>
           </details>
-          <div class="meta">Read/copy/navigation only · v${VERSION}</div>
+          <footer class="meta">
+            <span>Read/copy/navigation only · v${VERSION}</span>
+            <a href="https://bigbensoft.com/" target="_blank" rel="noopener noreferrer">bigbensoft.com</a>
+          </footer>
         </div>
       </section>`;
     (document.body || document.documentElement).appendChild(host);
@@ -4646,6 +5032,7 @@
       panel,
       shadow.querySelector('[data-action="toggle"]'),
     );
+    const tooltipController = createTooltipController(shadow);
     function flash(message, isError = false) {
       status.textContent = message;
       status.classList.toggle('error', isError);
@@ -4693,7 +5080,10 @@
         flash(formatReviewsPageStatus(reviewPage));
       },
       setStatus: flash,
-      dispose: responsivePanel.destroy,
+      dispose() {
+        tooltipController.dispose();
+        responsivePanel.destroy();
+      },
     };
   }
 

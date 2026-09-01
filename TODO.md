@@ -954,6 +954,13 @@ follow-up semantics, а также scoped third-party DOM exclusion.
 
 Эти идеи не блокируют основной roadmap:
 
+- [x] **Completed optional UI polish:** neutral/light visual hierarchy, compact
+      shared Product/Reviews header, Product actions с `Copy for ChatGPT` первым
+      и без visible group captions, delayed explanatory tooltips, transient
+      Product feedback с восстановлением persistent extraction status, textual
+      `Partial` / `Invalid` presentation и footer branding `bigbensoft.com`.
+      Существующие responsive и passive-network contracts сохранены; panel
+      width, Product/Reviews actions и export semantics не изменялись.
 - [ ] **Deferred research:** Bulk shipping calculation только по явному действию
       и с hard cap, после доказательства безопасного active shipping
       sender/runtime boundary.

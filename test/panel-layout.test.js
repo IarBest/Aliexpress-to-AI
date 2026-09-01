@@ -69,44 +69,87 @@ test('desktop toggles update only the desktop collapse preference', () => {
 test('product action contract keeps exactly six unique existing identities and labels', () => {
   const actions = core.PRODUCT_PANEL_CONTRACT.actions;
   assert.deepEqual(actions.map(({ id, label }) => [id, label]), [
-    ['clean-url', 'Copy clean URL'],
-    ['market', 'RU / COM'],
+    ['chatgpt', 'Copy for ChatGPT'],
     ['product', 'Copy product'],
     ['variants', 'Copy variants'],
-    ['chatgpt', 'Copy for ChatGPT'],
     ['description', 'Copy description'],
+    ['clean-url', 'Copy clean URL'],
+    ['market', 'RU / COM'],
   ]);
   assert.equal(actions.length, 6);
   assert.equal(new Set(actions.map(({ id }) => id)).size, 6);
+  assert.deepEqual(actions.filter(({ primary }) => primary).map(({ id }) => id), ['chatgpt']);
 });
 
 test('product-data gate remains limited to product, variants, ChatGPT, and description', () => {
   const gated = core.PRODUCT_PANEL_CONTRACT.actions
     .filter(({ requiresProduct }) => requiresProduct)
     .map(({ id }) => id);
-  assert.deepEqual(gated, ['product', 'variants', 'chatgpt', 'description']);
+  assert.deepEqual(gated, ['chatgpt', 'product', 'variants', 'description']);
   assert.equal(core.PRODUCT_PANEL_CONTRACT.actions.find(({ id }) => id === 'clean-url').requiresProduct, false);
   assert.equal(core.PRODUCT_PANEL_CONTRACT.actions.find(({ id }) => id === 'market').requiresProduct, false);
 });
 
-test('product rows preserve desktop organization and use three pairs only in narrow mode', () => {
+test('Product renders two captionless accessible clusters in exact DOM and focus order', () => {
+  assert.deepEqual(
+    core.PRODUCT_PANEL_GROUPS.map(({ id, ariaLabel, actionIds }) => [id, ariaLabel, actionIds]),
+    [
+      ['export', 'Product export', ['chatgpt', 'product', 'variants', 'description']],
+      ['quick', 'Quick actions', ['clean-url', 'market']],
+    ],
+  );
+  assert.equal(Object.isFrozen(core.PRODUCT_PANEL_GROUPS), true);
+  core.PRODUCT_PANEL_GROUPS.forEach((group) => {
+    assert.equal(Object.isFrozen(group), true);
+    assert.equal(Object.isFrozen(group.actionIds), true);
+  });
   assert.deepEqual(
     core.PRODUCT_PANEL_CONTRACT.actions.map(({ id, desktopWide }) => [id, desktopWide]),
     [
-      ['clean-url', false],
-      ['market', false],
+      ['chatgpt', true],
       ['product', false],
       ['variants', false],
-      ['chatgpt', true],
       ['description', true],
+      ['clean-url', false],
+      ['market', false],
     ],
   );
+  const html = core.renderProductActionGroups();
+  assert.deepEqual(
+    [...html.matchAll(/data-action="([^"]+)"/g)].map((match) => match[1]),
+    ['chatgpt', 'product', 'variants', 'description', 'clean-url', 'market'],
+  );
+  assert.equal((html.match(/role="group"/g) || []).length, 2);
+  assert.match(html, /class="action-group action-group-export" role="group" aria-label="Product export"/);
+  assert.match(html, /class="action-group action-group-quick" role="group" aria-label="Quick actions"/);
+  assert.doesNotMatch(html, /<h[1-6]\b|group-label|>\s*Quick actions\s*<|>\s*Product export\s*</);
+  assert.match(html, /class="wide primary" data-action="chatgpt"/);
+  assert.match(html, /class="wide" data-action="description"/);
+  assert.doesNotMatch(html, /class="[^"]*wide[^"]*" data-action="(?:product|variants|clean-url|market)"/);
   const productStart = source.indexOf('function createPanel(runtime)');
   const productEnd = source.indexOf('function createReviewsPanel(runtime)');
   const productSource = source.slice(productStart, productEnd);
-  assert.match(productSource, /renderPanelActionButtons\(PRODUCT_PANEL_CONTRACT\.actions\)/);
+  assert.match(productSource, /renderProductActionGroups\(\)/);
+  assert.match(source, /function renderProductActionGroups\(\)/);
+  assert.match(productSource, /\.action-groups \{ display:grid; gap:15px; \}/);
+  assert.match(productSource, /grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/);
+  assert.match(productSource, /\.grid \{[^}]*gap:8px;/);
   assert.match(productSource, /\.wide \{ grid-column:1\/-1; \}/);
-  assert.match(productSource, /\.grid \.wide \{ grid-column:auto; \}/);
+  assert.doesNotMatch(productSource, /\.grid \.wide \{ grid-column:auto; \}/);
+  assert.doesNotMatch(productSource, /group-label|>Additional<|label: 'Additional'/);
+  assert.match(source, /white-space:normal; overflow-wrap:anywhere/);
+});
+
+test('Product actions precede disclosures in the same order used by keyboard navigation', () => {
+  const productStart = source.indexOf('function createPanel(runtime)');
+  const productEnd = source.indexOf('function createReviewsPanel(runtime)');
+  const productSource = source.slice(productStart, productEnd);
+  const renderedActions = core.renderProductActionGroups();
+  const focusOrder = [...renderedActions.matchAll(/<button[^>]*data-action="([^"]+)"/g)]
+    .map((match) => match[1]);
+  assert.deepEqual(focusOrder, ['chatgpt', 'product', 'variants', 'description', 'clean-url', 'market']);
+  assert.ok(productSource.indexOf('renderProductActionGroups()') < productSource.indexOf('data-section-disclosure hidden'));
+  assert.ok(productSource.indexOf('data-section-disclosure hidden') < productSource.indexOf('<summary>Settings</summary>'));
 });
 
 test('Reviews uses the shared shell contract and retains its existing two stacked actions', () => {
@@ -294,18 +337,22 @@ test('toggle view exposes a stable name and synchronized accessible state', () =
   assert.equal(collapsed.ariaLabel, 'Toggle Ali Helper panel');
   assert.equal(collapsed.ariaExpanded, 'false');
   assert.equal(collapsed.symbol, '+');
+  assert.equal(collapsed.tooltip, 'Expand Ali Helper panel.');
 
   state = core.togglePanelLayoutState(state);
   const expanded = core.panelToggleView(state);
   assert.equal(expanded.ariaLabel, collapsed.ariaLabel);
   assert.equal(expanded.ariaExpanded, 'true');
   assert.equal(expanded.symbol, '—');
+  assert.equal(expanded.tooltip, 'Collapse Ali Helper panel.');
   assert.match(source, /button:focus-visible, summary:focus-visible, input:focus-visible/);
   const bindStart = source.indexOf('function bindResponsivePanel');
   const bindEnd = source.indexOf('function createPanel(runtime)');
   const bindSource = source.slice(bindStart, bindEnd);
   assert.match(bindSource, /toggle\.setAttribute\('aria-label', toggleView\.ariaLabel\)/);
   assert.match(bindSource, /toggle\.setAttribute\('aria-expanded', toggleView\.ariaExpanded\)/);
+  assert.match(bindSource, /toggle\.dataset\.tooltip = toggleView\.tooltip/);
+  assert.doesNotMatch(bindSource, /toggle\.title|setAttribute\(['"]title/);
   const nativeToggle = /<button type="button" class="icon" data-action="toggle">—<\/button>/g;
   assert.equal((source.match(nativeToggle) || []).length, 2);
 });
@@ -328,4 +375,41 @@ test('panel builders contain no request-producing or purchase-control behavior',
     'toggle', 'clean-url', 'market', 'product', 'variants', 'chatgpt', 'description', 'shipping-debug',
   ]);
   assert.deepEqual(reviewActions, ['toggle', 'reviews', 'reviews-chatgpt']);
+});
+
+test('each existing Product action keeps exactly one original handler mapping', () => {
+  const productStart = source.indexOf('function createPanel(runtime)');
+  const productEnd = source.indexOf('function createReviewsPanel(runtime)');
+  const productSource = source.slice(productStart, productEnd);
+  assert.equal((productSource.match(/shadow\.addEventListener\('click'/g) || []).length, 1);
+  const mappings = [
+    ['clean-url', /copyWithFeedback\(normalizeItemUrl\(location\.href\)\.href, 'Clean URL'\)/g],
+    ['market', /location\.assign\(toggleMarketUrl\(location\.href\)\.href\)/g],
+    ['product', /copyWithFeedback\(exportProduct\(product\), 'Product JSON'\)/g],
+    ['variants', /copyWithFeedback\(exportVariants\(product\), 'Variants'\)/g],
+    ['chatgpt', /copyWithFeedback\(exportForChatGPT\(product\), 'Product'\)/g],
+    ['description', /copyWithFeedback\(exportDescription\(product\), 'Description'\)/g],
+  ];
+  mappings.forEach(([actionId, operation]) => {
+    assert.equal((productSource.match(new RegExp(`action === '${actionId}'`, 'g')) || []).length, 1, actionId);
+    assert.equal((productSource.match(operation) || []).length, 1, `${actionId} operation`);
+  });
+});
+
+test('shared shell is neutral, status is live but lightweight, and footer branding is safe', () => {
+  assert.doesNotMatch(source, /#ffefe8|peach|gradient/i);
+  assert.match(source, /header \{[^}]*padding:8px 9px 8px 12px;[^}]*background:#e9eef3;[^}]*border-bottom:1px solid #d7dfe8;/);
+  const headerRule = source.match(/header \{([^}]*)\}/)?.[1] || '';
+  assert.doesNotMatch(headerRule, /(?:^|;)\s*height:/);
+  assert.match(source, /strong \{[^}]*font-size:14px;[^}]*font-weight:600;/);
+  assert.equal((source.match(/<header><strong>Ali Helper<\/strong><button type="button" class="icon" data-action="toggle">—<\/button><\/header>/g) || []).length, 2);
+  assert.match(source, /button\.primary \{ color:#fff; background:#365f8c; border-color:#365f8c; \}/);
+  assert.match(source, /\.status \{[^}]*border-bottom:1px solid #e4e9ef;/);
+  assert.doesNotMatch(source, /\.status \{[^}]*border-radius|\.status \{[^}]*background:/);
+  assert.match(source, /\.product-status \{ min-height:0; margin:0 0 9px; padding:0 1px; border-bottom:0; \}/);
+  assert.match(source, /\.product-status\[hidden\] \{ display:none; \}/);
+  assert.equal((source.match(/role="status" aria-live="polite" aria-atomic="true"/g) || []).length, 2);
+  assert.equal((source.match(/href="https:\/\/bigbensoft\.com\/"/g) || []).length, 2);
+  assert.equal((source.match(/target="_blank" rel="noopener noreferrer">bigbensoft\.com<\/a>/g) || []).length, 2);
+  assert.equal(core.VERSION, '0.1.26');
 });

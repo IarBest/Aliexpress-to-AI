@@ -14,6 +14,13 @@ function productWithSections(sections) {
 
 function createDisclosureStub() {
   const children = [];
+  const summaryAttributes = new Map();
+  const summary = {
+    setAttribute(name, value) { summaryAttributes.set(name, value); },
+    removeAttribute(name) { summaryAttributes.delete(name); },
+    getAttribute(name) { return summaryAttributes.get(name) ?? null; },
+  };
+  const badge = { hidden: true, textContent: '', dataset: {} };
   const content = {
     replaceChildren() { children.length = 0; },
     appendChild(node) { children.push(node); },
@@ -27,10 +34,13 @@ function createDisclosureStub() {
       },
     },
     querySelector(selector) {
-      return selector === '[data-section-disclosure-content]' ? content : null;
+      if (selector === '[data-section-disclosure-content]') return content;
+      if (selector === '[data-completeness-badge]') return badge;
+      if (selector === 'summary') return summary;
+      return null;
     },
   };
-  return { disclosure, children };
+  return { disclosure, children, summary, badge };
 }
 
 test('section disclosure contract is fixed, Product-only display vocabulary', () => {
@@ -170,20 +180,75 @@ test('renderer creates text-only rows and closes a disclosure when it becomes em
   assert.deepEqual(children, []);
 });
 
+test('complete Product state has no completeness badge or exceptional accessible label', () => {
+  const { disclosure, children, summary, badge } = createDisclosureStub();
+  const result = core.renderProductSectionDisclosure(disclosure, productWithSections({
+    store: { state: 'present', sources: ['dom:store'] },
+  }));
+
+  assert.equal(result.completeness.state, 'complete');
+  assert.equal(disclosure.hidden, false);
+  assert.equal(badge.hidden, true);
+  assert.equal(badge.textContent, '');
+  assert.equal(badge.dataset.state, undefined);
+  assert.equal(summary.getAttribute('aria-label'), null);
+  assert.deepEqual(children.map(({ textContent }) => textContent), ['Store: Store section']);
+});
+
+test('partial Product state exposes a text badge and keeps its issues inside the disclosure', () => {
+  const { disclosure, children, summary, badge } = createDisclosureStub();
+  const result = core.renderProductSectionDisclosure(disclosure, productWithSections({
+    delivery: { state: 'not-observed', sources: [] },
+  }));
+
+  assert.equal(result.completeness.state, 'partial');
+  assert.equal(disclosure.hidden, false);
+  assert.equal(badge.hidden, false);
+  assert.equal(badge.textContent, 'Partial');
+  assert.equal(badge.dataset.state, 'partial');
+  assert.equal(
+    summary.getAttribute('aria-label'),
+    'Sources & missing sections. Product status: Partial.',
+  );
+  assert.deepEqual(children.map(({ className, textContent }) => ({ className, textContent })), [
+    { className: 'completeness-detail-row', textContent: 'Not observed: Delivery' },
+  ]);
+});
+
+test('invalid Product state exposes a text badge and names invalid sections without color dependence', () => {
+  const { disclosure, children, summary, badge } = createDisclosureStub();
+  const result = core.renderProductSectionDisclosure(disclosure, productWithSections({
+    gallery: { state: 'invalid', sources: [], diagnostic: 'conflict' },
+  }));
+
+  assert.equal(result.completeness.state, 'invalid');
+  assert.equal(disclosure.hidden, false);
+  assert.equal(badge.hidden, false);
+  assert.equal(badge.textContent, 'Invalid');
+  assert.equal(badge.dataset.state, 'invalid');
+  assert.equal(
+    summary.getAttribute('aria-label'),
+    'Sources & missing sections. Product status: Invalid.',
+  );
+  assert.deepEqual(children.map(({ className, textContent }) => ({ className, textContent })), [
+    { className: 'completeness-detail-row', textContent: 'Invalid: Gallery (conflict)' },
+  ]);
+});
+
 test('Product owns one native disclosure after actions and before Settings; Reviews owns none', () => {
   const productStart = source.indexOf('function createPanel(runtime)');
   const reviewsStart = source.indexOf('function createReviewsPanel(runtime)');
   const reviewsEnd = source.indexOf('function startReviewsPage');
   const productSource = source.slice(productStart, reviewsStart);
   const reviewsSource = source.slice(reviewsStart, reviewsEnd);
-  const actionsIndex = productSource.indexOf('renderPanelActionButtons(PRODUCT_PANEL_CONTRACT.actions)');
+  const actionsIndex = productSource.indexOf('renderProductActionGroups()');
   const disclosureIndex = productSource.indexOf('data-section-disclosure hidden');
   const settingsIndex = productSource.indexOf('<summary>Settings</summary>');
 
   assert.ok(actionsIndex >= 0 && disclosureIndex > actionsIndex && settingsIndex > disclosureIndex);
   assert.equal((productSource.match(/data-section-disclosure hidden/g) || []).length, 1);
   assert.match(productSource, /<details class="section-disclosure" data-section-disclosure hidden>/);
-  assert.match(productSource, /<summary>\$\{SECTION_DISCLOSURE_CONTRACT\.summary\}<\/summary>/);
+  assert.match(productSource, /<summary>\$\{SECTION_DISCLOSURE_CONTRACT\.summary\}<span class="completeness-badge" data-completeness-badge hidden><\/span><\/summary>/);
   assert.doesNotMatch(reviewsSource, /data-section-disclosure|SECTION_DISCLOSURE_CONTRACT/);
 });
 
