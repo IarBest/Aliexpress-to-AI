@@ -241,14 +241,14 @@ test('Product owns one native disclosure after actions and before Settings; Revi
   const reviewsEnd = source.indexOf('function startReviewsPage');
   const productSource = source.slice(productStart, reviewsStart);
   const reviewsSource = source.slice(reviewsStart, reviewsEnd);
-  const actionsIndex = productSource.indexOf('renderProductActionGroups()');
+  const actionsIndex = productSource.indexOf('renderProductActionGroups(false)');
   const disclosureIndex = productSource.indexOf('data-section-disclosure hidden');
-  const settingsIndex = productSource.indexOf('<summary>Settings</summary>');
+  const settingsIndex = productSource.indexOf('data-product-settings');
 
   assert.ok(actionsIndex >= 0 && disclosureIndex > actionsIndex && settingsIndex > disclosureIndex);
   assert.equal((productSource.match(/data-section-disclosure hidden/g) || []).length, 1);
   assert.match(productSource, /<details class="section-disclosure" data-section-disclosure hidden>/);
-  assert.match(productSource, /<summary>\$\{SECTION_DISCLOSURE_CONTRACT\.summary\}<span class="completeness-badge" data-completeness-badge hidden><\/span><\/summary>/);
+  assert.match(productSource, /<summary><span data-section-summary><\/span><span class="completeness-badge" data-completeness-badge hidden><\/span><\/summary>/);
   assert.doesNotMatch(reviewsSource, /data-section-disclosure|SECTION_DISCLOSURE_CONTRACT/);
 });
 
@@ -259,7 +259,7 @@ test('disclosure renderer is passive and inserts allowlisted content through tex
 
   assert.ok(start >= 0 && end > start);
   assert.match(disclosureSource, /row\.textContent = `\$\{label\}: \$\{sources\.join\(', '\)\}`/);
-  assert.match(disclosureSource, /row\.textContent = `Confirmed missing: \$\{model\.confirmedMissing\.join\(', '\)\}`/);
+  assert.match(disclosureSource, /row\.textContent = t\(locale, 'sections\.confirmedMissing'/);
   assert.doesNotMatch(disclosureSource, /innerHTML|insertAdjacentHTML|\bfetch\s*\(|\bXMLHttpRequest\b|\.click\s*\(/);
 });
 

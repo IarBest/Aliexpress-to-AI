@@ -175,6 +175,37 @@ test('pointer hover waits for the delay and cancellation prevents visibility', (
   controller.dispose();
 });
 
+test('pending tooltip reads the switched locale at the original 1300ms expiry', () => {
+  const { target, timers, tooltip, controller } = setup('English tooltip');
+  target.dispatch('pointerenter', { pointerType: 'mouse' });
+  assert.equal(timers.size, 1);
+  assert.deepEqual(timers.delays, [1300]);
+
+  target.dataset.tooltip = 'Русская подсказка';
+  assert.equal(timers.size, 1, 'locale refresh does not replace the pending timer');
+  assert.deepEqual(timers.delays, [1300]);
+  timers.runAll();
+  assert.equal(tooltip.textContent, 'Русская подсказка');
+  assert.equal(tooltip.hidden, false);
+  controller.dispose();
+});
+
+test('visible tooltip refreshes localized text in place without adding timers or listeners', () => {
+  const { target, timers, tooltip, controller } = setup('English tooltip');
+  const listenerCount = target.listenerCount();
+  target.dispatch('focus');
+  timers.runAll();
+  assert.equal(tooltip.textContent, 'English tooltip');
+
+  target.dataset.tooltip = 'Русская подсказка';
+  controller.refresh();
+  assert.equal(tooltip.textContent, 'Русская подсказка');
+  assert.equal(timers.size, 0);
+  assert.equal(target.listenerCount(), listenerCount);
+  assert.equal(target.getAttribute('aria-describedby'), 'ali-helper-tooltip');
+  controller.dispose();
+});
+
 test('keyboard focus uses the same delay while touch focus remains tooltip-free', () => {
   const { target, timers, tooltip, controller } = setup();
   target.dispatch('focus');
@@ -242,7 +273,7 @@ test('tooltip implementation uses safe text, ignores pointer interaction, and is
   assert.match(tooltipSource, /tooltip\.textContent = text/);
   assert.doesNotMatch(tooltipSource, /innerHTML|insertAdjacentHTML/);
   assert.match(source, /\.tooltip \{[^}]*pointer-events:none;/);
-  assert.equal((source.match(/const tooltipController = createTooltipController\(shadow\);/g) || []).length, 2);
+  assert.equal((source.match(/tooltipController = createTooltipController\(shadow\);/g) || []).length, 2);
   assert.equal((source.match(/tooltipController\.dispose\(\);/g) || []).length, 2);
   assert.doesNotMatch(source, /data-tooltip[^\n]*on(?:error|load)|\.title = toggleView/);
 });

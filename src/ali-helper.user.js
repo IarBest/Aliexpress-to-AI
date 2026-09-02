@@ -1,8 +1,9 @@
 // ==UserScript==
 // @name         Ali Helper
 // @namespace    https://github.com/local/ali-helper
-// @version      0.1.26
+// @version      0.1.27
 // @description  Read-only AliExpress URL cleaner and product/variant exporter
+// @description:ru Помощник AliExpress только для чтения: очистка URL и экспорт товара и вариантов
 // @match        https://aliexpress.ru/item/*
 // @match        https://www.aliexpress.com/item/*
 // @match        https://aliexpress.com/item/*
@@ -18,7 +19,7 @@
 (function factory(root) {
   'use strict';
 
-  const VERSION = '0.1.26';
+  const VERSION = '0.1.27';
   const SETTINGS_KEY = 'ali-helper:settings:v1';
   const NATIVE_REVIEW_PATHNAME = '/aer-jsonapi/review/v5/desktop/product-reviews';
   const REVIEW_CAPTURE_CAP = 30;
@@ -63,11 +64,256 @@
     'ol', 'p', 'pre', 'section', 'summary', 'table', 'tbody', 'td', 'tfoot', 'th',
     'thead', 'tr', 'ul',
   ]);
+  const SUPPORTED_UI_LANGUAGES = Object.freeze(['en', 'ru']);
+  const UI_STRINGS = Object.freeze({
+    en: Object.freeze({
+      'product.group.export': 'Product export',
+      'product.group.quick': 'Quick actions',
+      'panel.expand': 'Expand Ali Helper panel.',
+      'panel.collapse': 'Collapse Ali Helper panel.',
+      'language.aria': 'Interface language: English. Switch to Russian.',
+      'language.tooltip': 'Switch the Ali Helper interface to Russian.',
+      'action.productChatgpt': 'Copy product for ChatGPT',
+      'action.productJson': 'Copy product JSON',
+      'action.variants': 'Copy variants',
+      'action.description': 'Copy description',
+      'action.cleanUrl': 'Copy clean URL',
+      'action.market': 'RU / COM',
+      'action.reviewsJson': 'Copy reviews JSON',
+      'action.reviewsChatgpt': 'Copy reviews for ChatGPT',
+      'action.shippingDebug': 'Copy shipping debug',
+      'tooltip.productChatgpt': 'Copies a concise product summary ready to paste into ChatGPT.',
+      'tooltip.productJson': 'Copies the normalized product data as JSON.',
+      'tooltip.variants': 'Copies every real SKU combination in a readable text export.',
+      'tooltip.description': 'Copies the full ordered description with text, links, and image URLs.',
+      'tooltip.cleanUrl': 'Copies this item URL without known tracking parameters.',
+      'tooltip.market': 'Opens this item on the other AliExpress market (RU or COM).',
+      'tooltip.sections': 'Shows the source of each product section and any sections confirmed missing.',
+      'sections.summary': 'Sources & missing sections',
+      'section.sizeGuide': 'Size Guide',
+      'section.gallery': 'Gallery',
+      'section.ratingSummary': 'Rating Summary',
+      'section.store': 'Store',
+      'section.characteristics': 'Characteristics',
+      'section.description': 'Description',
+      'section.delivery': 'Delivery',
+      'source.productApi': 'Product API',
+      'source.pageData': 'Page data',
+      'source.productHeader': 'Product header',
+      'source.reviewSummary': 'Review summary',
+      'source.storeSection': 'Store section',
+      'source.characteristicsSection': 'Characteristics section',
+      'source.descriptionSection': 'Description section',
+      'source.shippingApi': 'Shipping API',
+      'sections.confirmedMissing': 'Confirmed missing: {sections}',
+      'status.partialBadge': 'Partial',
+      'status.invalidBadge': 'Invalid',
+      'sections.statusAria': 'Sources & missing sections. Product status: {state}.',
+      'sections.invalid': 'Invalid: {sections}',
+      'sections.notObserved': 'Not observed: {sections}',
+      'sections.coreIssues': 'Core issues: {issues}',
+      'core.selectedSkuUnresolved': 'selected SKU unresolved',
+      'diagnostic.conflict': 'conflict',
+      'diagnostic.schemaMismatch': 'schema-mismatch',
+      'diagnostic.traversalLimit': 'traversal-limit',
+      'diagnostic.reviewConflict': 'review-conflict',
+      'product.waiting': 'Waiting for productData…',
+      'product.changedWaiting': 'Product changed; waiting for productData…',
+      'product.normalizationFailed': 'productData found but normalization failed: {error}',
+      'product.notFound': 'productData not found yet. Reload the page with Ali Helper enabled; SSR contains no SKU data.',
+      'settings.title': 'Settings',
+      'settings.autoRedirect': 'Auto redirect COM → RU',
+      'copy.cleanUrlSuccess': 'Clean URL copied.',
+      'copy.productJsonSuccess': 'Product JSON copied.',
+      'copy.variantsSuccess': 'Variants copied.',
+      'copy.productChatgptSuccess': 'Product copied.',
+      'copy.descriptionSuccess': 'Description copied.',
+      'copy.shippingDebugSuccess': 'Shipping debug copied.',
+      'copy.failed': 'Copy failed: {error}',
+      'settings.saved': 'Settings saved.',
+      'footer.safety': 'Read/copy/navigation only · v{version}',
+      'reviews.waiting': 'Waiting for first-page SSR reviews…',
+      'reviews.settings.title': 'Review settings',
+      'reviews.retention.label': 'Passive review retention per context',
+      'reviews.retention.10': '10 reviews',
+      'reviews.retention.30': '30 reviews (default)',
+      'reviews.retention.50': '50 reviews',
+      'reviews.retention.100': '100 reviews',
+      'reviews.retention.help': 'Keeps only reviews AliExpress loads itself; Ali Helper never loads, repeats, or blocks review requests. Changes apply to new review contexts. Existing retained contexts stay unchanged.',
+      'reviews.retention.invalid': 'Not saved. Choose 10, 30, 50, or 100 reviews.',
+      'reviews.retention.savedNew': 'Saved. New review contexts retain up to {cap} reviews.',
+      'reviews.retention.savedCurrent': 'Saved. New contexts use {newCap}; current context remains {currentCap}.',
+      'reviews.copyJsonSuccess': 'Reviews JSON copied.',
+      'reviews.copyChatgptSuccess': 'Reviews for ChatGPT copied.',
+      'reviews.status.ready': 'Reviews ready · {count} first-page reviews · retention cap: {cap} · source: SSR',
+      'reviews.status.captured': 'Reviews captured · {count} reviews{details} · passive native',
+      'reviews.context.newest': 'New reviews first',
+      'reviews.context.sort': 'Sort {sort}',
+      'reviews.context.withPhotos': 'With photos',
+      'reviews.context.additional': 'Additional',
+      'reviews.context.filter': 'Filter {filter}',
+      'reviews.context.skuFilter': 'SKU filter · {count} IDs',
+      'reviews.status.pagesRange': 'pages 1–{last}',
+      'reviews.status.pagesList': 'pages {pages}',
+      'reviews.status.retentionCap': 'retention cap: {cap}',
+      'reviews.status.capReached': 'capture cap reached',
+      'reviews.error.invalidItemId': 'Reviews page item ID could not be resolved.',
+      'reviews.error.noCandidate': 'First-page SSR review list was not found.',
+      'reviews.error.invalidCandidate': 'First-page SSR review schema was not recognized safely.',
+      'reviews.error.conflictingCandidates': 'Conflicting first-page SSR review lists were found.',
+      'reviews.error.traversalLimit': 'SSR review scan reached its safety limit.',
+      'reviews.error.untrustedFallback': 'First-page SSR reviews were not found or were not trustworthy.',
+    }),
+    ru: Object.freeze({
+      'product.group.export': 'Экспорт товара',
+      'product.group.quick': 'Быстрые действия',
+      'panel.expand': 'Развернуть панель Ali Helper.',
+      'panel.collapse': 'Свернуть панель Ali Helper.',
+      'language.aria': 'Язык интерфейса: русский. Переключить на английский.',
+      'language.tooltip': 'Переключить интерфейс Ali Helper на английский.',
+      'action.productChatgpt': 'Скопировать товар для ChatGPT',
+      'action.productJson': 'JSON товара',
+      'action.variants': 'Варианты',
+      'action.description': 'Описание',
+      'action.cleanUrl': 'Чистый URL',
+      'action.market': 'RU / COM',
+      'action.reviewsJson': 'Скопировать отзывы в JSON',
+      'action.reviewsChatgpt': 'Скопировать отзывы для ChatGPT',
+      'action.shippingDebug': 'Скопировать диагностику доставки',
+      'tooltip.productChatgpt': 'Копирует краткую сводку о товаре, готовую для вставки в ChatGPT.',
+      'tooltip.productJson': 'Копирует данные товара в формате JSON.',
+      'tooltip.variants': 'Копирует все реальные комбинации SKU в удобном текстовом формате.',
+      'tooltip.description': 'Копирует полное описание в исходном порядке: текст, ссылки и URL изображений.',
+      'tooltip.cleanUrl': 'Копирует URL товара без известных параметров отслеживания.',
+      'tooltip.market': 'Открывает товар на другом рынке AliExpress: RU или COM.',
+      'tooltip.sections': 'Показывает источники разделов товара и подтверждённо недостающие разделы.',
+      'sections.summary': 'Источники и недостающие разделы',
+      'section.sizeGuide': 'Таблица размеров',
+      'section.gallery': 'Галерея',
+      'section.ratingSummary': 'Рейтинг',
+      'section.store': 'Магазин',
+      'section.characteristics': 'Характеристики',
+      'section.description': 'Описание',
+      'section.delivery': 'Доставка',
+      'source.productApi': 'API товара',
+      'source.pageData': 'Данные страницы',
+      'source.productHeader': 'Шапка товара',
+      'source.reviewSummary': 'Сводка отзывов',
+      'source.storeSection': 'Раздел магазина',
+      'source.characteristicsSection': 'Раздел характеристик',
+      'source.descriptionSection': 'Раздел описания',
+      'source.shippingApi': 'API доставки',
+      'sections.confirmedMissing': 'Проверено, но не найдено: {sections}',
+      'status.partialBadge': 'Частично',
+      'status.invalidBadge': 'Ошибка',
+      'sections.statusAria': 'Источники и недостающие разделы. Состояние данных: {state}.',
+      'sections.invalid': 'Ошибка данных: {sections}',
+      'sections.notObserved': 'Не проверено: {sections}',
+      'sections.coreIssues': 'Основные проблемы: {issues}',
+      'core.selectedSkuUnresolved': 'выбранный SKU не определён',
+      'diagnostic.conflict': 'конфликт данных',
+      'diagnostic.schemaMismatch': 'неподдерживаемый формат данных',
+      'diagnostic.traversalLimit': 'достигнут предел безопасной проверки',
+      'diagnostic.reviewConflict': 'конфликт данных отзывов',
+      'product.waiting': 'Ожидание данных о товаре…',
+      'product.changedWaiting': 'Товар изменился; ожидаем данные…',
+      'product.normalizationFailed': 'Данные товара получены, но их не удалось обработать: {error}',
+      'product.notFound': 'Данные товара пока не найдены. Перезагрузите страницу с включённым Ali Helper; в данных страницы нет SKU.',
+      'settings.title': 'Настройки',
+      'settings.autoRedirect': 'Автопереход COM → RU',
+      'copy.cleanUrlSuccess': 'Чистый URL скопирован.',
+      'copy.productJsonSuccess': 'JSON товара скопирован.',
+      'copy.variantsSuccess': 'Варианты скопированы.',
+      'copy.productChatgptSuccess': 'Товар для ChatGPT скопирован.',
+      'copy.descriptionSuccess': 'Описание скопировано.',
+      'copy.shippingDebugSuccess': 'Диагностика доставки скопирована.',
+      'copy.failed': 'Не удалось скопировать: {error}',
+      'settings.saved': 'Настройки сохранены.',
+      'footer.safety': 'Только чтение, копирование и переходы · v{version}',
+      'reviews.waiting': 'Ожидание первой страницы отзывов…',
+      'reviews.settings.title': 'Настройки отзывов',
+      'reviews.retention.label': 'Лимит отзывов для каждого набора фильтров',
+      'reviews.retention.10': '10 отзывов',
+      'reviews.retention.30': '30 отзывов (по умолчанию)',
+      'reviews.retention.50': '50 отзывов',
+      'reviews.retention.100': '100 отзывов',
+      'reviews.retention.help': 'Сохраняются только отзывы, которые загружает сам AliExpress. Ali Helper не создаёт, не повторяет и не блокирует запросы отзывов. Изменение применяется к новым наборам фильтров; уже сохранённые наборы не меняются.',
+      'reviews.retention.invalid': 'Не сохранено. Выберите 10, 30, 50 или 100 отзывов.',
+      'reviews.retention.savedNew': 'Сохранено. Для новых наборов фильтров сохраняется до {cap} отзывов.',
+      'reviews.retention.savedCurrent': 'Сохранено. Для новых наборов — до {newCap} отзывов; для текущего лимит остаётся {currentCap}.',
+      'reviews.copyJsonSuccess': 'Отзывы в JSON скопированы.',
+      'reviews.copyChatgptSuccess': 'Отзывы для ChatGPT скопированы.',
+      'reviews.status.ready': 'Отзывы готовы · На первой странице: {count} · лимит хранения: {cap} · источник: данные страницы',
+      'reviews.status.captured': 'Отзывы обнаружены · Количество: {count}{details} · пассивное наблюдение',
+      'reviews.context.newest': 'Сначала новые',
+      'reviews.context.sort': 'Сортировка: {sort}',
+      'reviews.context.withPhotos': 'С фото',
+      'reviews.context.additional': 'Дополнительные отзывы',
+      'reviews.context.filter': 'Фильтр: {filter}',
+      'reviews.context.skuFilter': 'Фильтр SKU · ID: {count}',
+      'reviews.status.pagesRange': 'страницы 1–{last}',
+      'reviews.status.pagesList': 'страницы {pages}',
+      'reviews.status.retentionCap': 'лимит хранения: {cap}',
+      'reviews.status.capReached': 'лимит хранения достигнут',
+      'reviews.error.invalidItemId': 'Не удалось определить ID товара на странице отзывов.',
+      'reviews.error.noCandidate': 'Не удалось найти первую страницу отзывов в данных страницы.',
+      'reviews.error.invalidCandidate': 'Формат первой страницы отзывов не распознан.',
+      'reviews.error.conflictingCandidates': 'В данных первой страницы найдены противоречащие списки отзывов.',
+      'reviews.error.traversalLimit': 'Проверка отзывов достигла безопасного лимита.',
+      'reviews.error.untrustedFallback': 'Отзывы первой страницы не найдены или данные нельзя считать надёжными.',
+    }),
+  });
   const DEFAULT_SETTINGS = Object.freeze({
     autoRedirectComToRu: true,
     panelCollapsed: false,
     passiveReviewRetentionCap: REVIEW_CAPTURE_CAP,
   });
+
+  function isUiLanguage(value) {
+    return typeof value === 'string' && SUPPORTED_UI_LANGUAGES.includes(value);
+  }
+
+  function resolveUiLanguage(storedValue, preferredLanguages = []) {
+    if (isUiLanguage(storedValue)) return storedValue;
+    const languages = Array.isArray(preferredLanguages) ? preferredLanguages : [];
+    for (const language of languages) {
+      if (typeof language !== 'string') continue;
+      const primary = language.trim().split('-')[0].toLowerCase();
+      if (SUPPORTED_UI_LANGUAGES.includes(primary)) return primary;
+    }
+    return 'en';
+  }
+
+  function getPreferredUiLanguages(navigatorLike = globalThis.navigator) {
+    const preferred = Array.isArray(navigatorLike?.languages)
+      ? navigatorLike.languages.filter((language) => typeof language === 'string')
+      : [];
+    if (typeof navigatorLike?.language === 'string' && !preferred.includes(navigatorLike.language)) {
+      preferred.push(navigatorLike.language);
+    }
+    return preferred;
+  }
+
+  function t(locale, key, params = {}, strings = UI_STRINGS) {
+    const template = strings[isUiLanguage(locale) ? locale : 'en']?.[key]
+      ?? strings.en?.[key]
+      ?? '';
+    return template.replace(/\{([A-Za-z][A-Za-z0-9]*)\}/g, (_, name) => (
+      Object.prototype.hasOwnProperty.call(params, name) ? String(params[name]) : ''
+    ));
+  }
+
+  function createUiMessage(key, params = {}) {
+    return Object.freeze({ key, params: Object.freeze({ ...params }) });
+  }
+
+  function formatUiMessage(locale, message) {
+    if (typeof message === 'string') return message;
+    if (message?.kind === 'reviews-page-status') {
+      return formatReviewsPageStatus(message.reviewPage, locale);
+    }
+    return message?.key ? t(locale, message.key, message.params) : '';
+  }
 
   function isPassiveReviewRetentionCap(value) {
     return typeof value === 'number' && PASSIVE_REVIEW_RETENTION_CAP_OPTIONS.includes(value);
@@ -85,11 +331,13 @@
 
   function normalizeSettings(value) {
     const stored = isPlainObject(value) ? value : {};
-    return {
+    const normalized = {
       ...DEFAULT_SETTINGS,
       ...stored,
       passiveReviewRetentionCap: normalizePassiveReviewRetentionCap(stored.passiveReviewRetentionCap),
     };
+    if (!isUiLanguage(stored.uiLanguage)) delete normalized.uiLanguage;
+    return normalized;
   }
   const PANEL_SHELL_CONTRACT = Object.freeze({
     id: 'responsive-panel-v1',
@@ -103,55 +351,67 @@
   const PRODUCT_PANEL_ACTIONS = Object.freeze([
     {
       id: 'chatgpt',
-      label: 'Copy for ChatGPT',
+      label: 'Copy product for ChatGPT',
+      labelKey: 'action.productChatgpt',
       tooltip: 'Copies a concise product summary ready to paste into ChatGPT.',
+      tooltipKey: 'tooltip.productChatgpt',
       requiresProduct: true,
       desktopWide: true,
       primary: true,
     },
     {
       id: 'product',
-      label: 'Copy product',
+      label: 'Copy product JSON',
+      labelKey: 'action.productJson',
       tooltip: 'Copies the normalized product data as JSON.',
+      tooltipKey: 'tooltip.productJson',
       requiresProduct: true,
       desktopWide: false,
     },
     {
       id: 'variants',
       label: 'Copy variants',
+      labelKey: 'action.variants',
       tooltip: 'Copies every real SKU combination in a readable text export.',
+      tooltipKey: 'tooltip.variants',
       requiresProduct: true,
       desktopWide: false,
     },
     {
       id: 'description',
       label: 'Copy description',
+      labelKey: 'action.description',
       tooltip: 'Copies the full ordered description with text, links, and image URLs.',
+      tooltipKey: 'tooltip.description',
       requiresProduct: true,
       desktopWide: true,
     },
     {
       id: 'clean-url',
       label: 'Copy clean URL',
+      labelKey: 'action.cleanUrl',
       tooltip: 'Copies this item URL without known tracking parameters.',
+      tooltipKey: 'tooltip.cleanUrl',
       requiresProduct: false,
       desktopWide: false,
     },
     {
       id: 'market',
       label: 'RU / COM',
+      labelKey: 'action.market',
       tooltip: 'Opens this item on the other AliExpress market (RU or COM).',
+      tooltipKey: 'tooltip.market',
       requiresProduct: false,
       desktopWide: false,
     },
   ].map(Object.freeze));
   const PRODUCT_PANEL_GROUPS = Object.freeze([
-    { id: 'export', ariaLabel: 'Product export', actionIds: ['chatgpt', 'product', 'variants', 'description'] },
-    { id: 'quick', ariaLabel: 'Quick actions', actionIds: ['clean-url', 'market'] },
+    { id: 'export', ariaLabel: 'Product export', ariaLabelKey: 'product.group.export', actionIds: ['chatgpt', 'product', 'variants', 'description'] },
+    { id: 'quick', ariaLabel: 'Quick actions', ariaLabelKey: 'product.group.quick', actionIds: ['clean-url', 'market'] },
   ].map((group) => Object.freeze({ ...group, actionIds: Object.freeze(group.actionIds) })));
   const REVIEWS_PANEL_ACTIONS = Object.freeze([
-    { id: 'reviews', label: 'Copy reviews JSON', requiresReviews: true },
-    { id: 'reviews-chatgpt', label: 'Copy reviews for ChatGPT', requiresReviews: true },
+    { id: 'reviews', label: 'Copy reviews JSON', labelKey: 'action.reviewsJson', requiresReviews: true },
+    { id: 'reviews-chatgpt', label: 'Copy reviews for ChatGPT', labelKey: 'action.reviewsChatgpt', requiresReviews: true },
   ].map(Object.freeze));
   const PRODUCT_PANEL_CONTRACT = Object.freeze({
     shell: PANEL_SHELL_CONTRACT,
@@ -216,6 +476,25 @@
       'native:shipping-calculate': 'Shipping API',
     }),
   });
+  const SECTION_UI_KEYS = Object.freeze({
+    sizeGuide: 'section.sizeGuide',
+    gallery: 'section.gallery',
+    ratingSummary: 'section.ratingSummary',
+    store: 'section.store',
+    characteristics: 'section.characteristics',
+    description: 'section.description',
+    delivery: 'section.delivery',
+  });
+  const SOURCE_UI_KEYS = Object.freeze({
+    productData: 'source.productApi',
+    'ssr:__AER_DATA__': 'source.pageData',
+    'dom:product-header': 'source.productHeader',
+    'dom:review-section': 'source.reviewSummary',
+    'dom:store': 'source.storeSection',
+    'dom:characteristics': 'source.characteristicsSection',
+    'dom:description': 'source.descriptionSection',
+    'native:shipping-calculate': 'source.shippingApi',
+  });
   const PRODUCT_CORE_ISSUE_ORDER = Object.freeze(['selected-sku-unresolved']);
 
   // For present sections, sources contributed accepted values. Otherwise they
@@ -273,22 +552,23 @@
     return state.mode === 'desktop' ? state.desktopCollapsed : null;
   }
 
-  function panelToggleView(state) {
+  function panelToggleView(state, locale = 'en') {
     const collapsed = isPanelLayoutCollapsed(state);
     return Object.freeze({
       symbol: collapsed ? '+' : '—',
-      ariaLabel: 'Toggle Ali Helper panel',
+      ariaLabel: t(locale, collapsed ? 'panel.expand' : 'panel.collapse'),
       ariaExpanded: String(!collapsed),
-      tooltip: collapsed ? 'Expand Ali Helper panel.' : 'Collapse Ali Helper panel.',
+      tooltip: t(locale, collapsed ? 'panel.expand' : 'panel.collapse'),
     });
   }
 
-  function createResponsivePanelController(mediaQuery, desktopCollapsed, onApply, onPersist) {
+  function createResponsivePanelController(mediaQuery, desktopCollapsed, onApply, onPersist, initialLocale = 'en') {
     let layoutState = createPanelLayoutStateForMode(
       mediaQuery.matches ? 'narrow' : 'desktop',
       desktopCollapsed,
     );
-    const apply = () => onApply(layoutState, panelToggleView(layoutState));
+    let locale = isUiLanguage(initialLocale) ? initialLocale : 'en';
+    const apply = () => onApply(layoutState, panelToggleView(layoutState, locale));
     const onMediaChange = (event) => {
       layoutState = setPanelLayoutMode(layoutState, event.matches ? 'narrow' : 'desktop');
       apply();
@@ -307,6 +587,11 @@
         layoutState = togglePanelLayoutState(layoutState);
         const desktopPreference = panelCollapsedPreferenceToPersist(layoutState);
         if (desktopPreference !== null) onPersist(desktopPreference);
+        apply();
+      },
+      setLocale(nextLocale) {
+        if (!isUiLanguage(nextLocale) || nextLocale === locale) return;
+        locale = nextLocale;
         apply();
       },
       destroy() {
@@ -330,16 +615,30 @@
     return SECTION_SOURCE_ORDER.filter((source) => requested.has(source));
   }
 
-  function createSectionDisclosureModel(product) {
+  function formatUiSectionLabel(sectionId, locale = 'en') {
+    return t(locale, SECTION_UI_KEYS[sectionId]);
+  }
+
+  function formatUiDiagnostic(diagnostic, locale = 'en') {
+    const keys = {
+      conflict: 'diagnostic.conflict',
+      'schema-mismatch': 'diagnostic.schemaMismatch',
+      'traversal-limit': 'diagnostic.traversalLimit',
+      'review-conflict': 'diagnostic.reviewConflict',
+    };
+    return keys[diagnostic] ? t(locale, keys[diagnostic]) : String(diagnostic || '');
+  }
+
+  function createSectionDisclosureModel(product, locale = 'en') {
     const sections = product?._meta?.sections || {};
     const present = [];
     const confirmedMissing = [];
     PRODUCT_SECTION_ORDER.forEach((sectionId) => {
       const section = sections[sectionId];
-      const label = SECTION_DISCLOSURE_CONTRACT.sectionLabels[sectionId];
+      const label = formatUiSectionLabel(sectionId, locale);
       if (section?.state === 'present') {
         const sources = normalizeSectionSources(section.sources)
-          .map((source) => SECTION_DISCLOSURE_CONTRACT.sourceAliases[source])
+          .map((source) => t(locale, SOURCE_UI_KEYS[source]))
           .filter(Boolean);
         if (sources.length) present.push({ label, sources });
       } else if (section?.state === 'missing' && PRODUCT_CONFIRMED_MISSING_SECTIONS.includes(sectionId)) {
@@ -353,8 +652,8 @@
     };
   }
 
-  function renderSectionDisclosure(disclosure, product) {
-    const model = createSectionDisclosureModel(product);
+  function renderSectionDisclosure(disclosure, product, locale = 'en') {
+    const model = createSectionDisclosureModel(product, locale);
     const content = disclosure?.querySelector?.('[data-section-disclosure-content]');
     if (!disclosure || !content) return model;
     disclosure.hidden = model.hidden;
@@ -373,21 +672,23 @@
     if (model.confirmedMissing.length) {
       const row = ownerDocument.createElement('div');
       row.className = 'confirmed-missing-row';
-      row.textContent = `Confirmed missing: ${model.confirmedMissing.join(', ')}`;
+      row.textContent = t(locale, 'sections.confirmedMissing', {
+        sections: model.confirmedMissing.join(', '),
+      });
       content.appendChild(row);
     }
     return model;
   }
 
-  function renderProductSectionDisclosure(disclosure, product) {
-    const model = renderSectionDisclosure(disclosure, product);
+  function renderProductSectionDisclosure(disclosure, product, locale = 'en') {
+    const model = renderSectionDisclosure(disclosure, product, locale);
     const summary = disclosure?.querySelector?.('summary');
     const badge = disclosure?.querySelector?.('[data-completeness-badge]');
     const content = disclosure?.querySelector?.('[data-section-disclosure-content]');
     const completeness = assessProductCompleteness(product);
     const exceptional = completeness.state === 'partial' || completeness.state === 'invalid';
     const stateLabel = exceptional
-      ? `${completeness.state[0].toUpperCase()}${completeness.state.slice(1)}`
+      ? t(locale, completeness.state === 'partial' ? 'status.partialBadge' : 'status.invalidBadge')
       : '';
 
     if (badge) {
@@ -400,7 +701,7 @@
       if (exceptional) {
         summary.setAttribute(
           'aria-label',
-          `${SECTION_DISCLOSURE_CONTRACT.summary}. Product status: ${stateLabel}.`,
+          t(locale, 'sections.statusAria', { state: stateLabel }),
         );
       } else {
         summary.removeAttribute('aria-label');
@@ -412,15 +713,27 @@
     const ownerDocument = disclosure.ownerDocument || document;
     const issueRows = [];
     if (completeness.invalidSections.length) {
-      issueRows.push(`Invalid: ${completeness.invalidSections
-        .map(({ section, diagnostic }) => `${formatProductSectionLabel(section)} (${diagnostic})`)
-        .join(', ')}`);
+      issueRows.push(t(locale, 'sections.invalid', {
+        sections: completeness.invalidSections
+          .map(({ section, diagnostic }) => `${formatUiSectionLabel(section, locale)} (${formatUiDiagnostic(diagnostic, locale)})`)
+          .join(', '),
+      }));
     }
     if (completeness.notObservedSections.length) {
-      issueRows.push(`Not observed: ${completeness.notObservedSections.map(formatProductSectionLabel).join(', ')}`);
+      issueRows.push(t(locale, 'sections.notObserved', {
+        sections: completeness.notObservedSections
+          .map((section) => formatUiSectionLabel(section, locale))
+          .join(', '),
+      }));
     }
     if (completeness.coreIssues.length) {
-      issueRows.push(`Core issues: ${completeness.coreIssues.map(formatProductCoreIssue).join(', ')}`);
+      issueRows.push(t(locale, 'sections.coreIssues', {
+        issues: completeness.coreIssues
+          .map((issue) => (issue === 'selected-sku-unresolved'
+            ? t(locale, 'core.selectedSkuUnresolved')
+            : String(issue)))
+          .join(', '),
+      }));
     }
     issueRows.forEach((text) => {
       const row = ownerDocument.createElement('div');
@@ -435,6 +748,9 @@
     const setTimer = options.setTimer || setTimeout;
     const clearTimer = options.clearTimer || clearTimeout;
     const clearDelayMs = options.clearDelayMs ?? 2800;
+    const formatMessage = options.formatMessage || ((message) => (
+      message === null || message === undefined ? '' : String(message)
+    ));
     let baseMessage = status.textContent || '';
     let baseIsError = Boolean(baseMessage && status.classList.contains('error'));
     let transientMessage = '';
@@ -450,9 +766,10 @@
       if (handle !== null) clearTimer(handle);
     }
     function render(message, isError) {
-      status.textContent = message;
+      const text = formatMessage(message);
+      status.textContent = text;
       status.classList.toggle('error', isError);
-      status.hidden = !message;
+      status.hidden = !text;
     }
     function clear() {
       if (disposed) return;
@@ -482,6 +799,10 @@
           revision += 1;
           render(baseMessage, baseIsError);
         }, clearDelayMs);
+      },
+      refresh() {
+        if (disposed) return;
+        render(transientMessage || baseMessage, transientMessage ? false : baseIsError);
       },
       clear,
       dispose() {
@@ -678,6 +999,16 @@
     });
 
     const controller = Object.freeze({
+      refresh() {
+        if (disposed || !visibleTarget) return;
+        const text = visibleTarget?.dataset?.tooltip;
+        if (typeof text !== 'string' || !text.trim()) {
+          hideVisible();
+          return;
+        }
+        tooltip.textContent = text;
+        positionTooltip(visibleTarget);
+      },
       dispose() {
         if (disposed) return;
         disposed = true;
@@ -2243,6 +2574,17 @@
     return { accepted: true, preference: selectedCap, activeCaptureCap: runtime.reviewPage?.captureCap ?? null };
   }
 
+  function applyUiLanguageSelection(runtime, value, persist = saveSettings) {
+    const current = isUiLanguage(runtime?.uiLanguage) ? runtime.uiLanguage : 'en';
+    if (!runtime || !isPlainObject(runtime.settings) || !isUiLanguage(value)) {
+      return { accepted: false, uiLanguage: current };
+    }
+    runtime.uiLanguage = value;
+    runtime.settings.uiLanguage = value;
+    if (typeof persist === 'function') persist(runtime.settings);
+    return { accepted: true, uiLanguage: value };
+  }
+
   function reviewEntry(context, captureCap) {
     return {
       context,
@@ -2365,27 +2707,40 @@
     };
   }
 
-  function formatReviewContext(context) {
+  function formatReviewContext(context, locale = 'en') {
     const labels = [];
-    if (context.sort !== 1) labels.push(context.sort === 2 ? 'New reviews first' : `Sort ${context.sort}`);
-    labels.push(...context.filters.map((code) => ({ 1: 'With photos', 2: 'Additional' }[code] || `Filter ${code}`)));
-    if (context.skuFilter.length) labels.push(`SKU filter · ${context.skuFilter.length} IDs`);
+    if (context.sort !== 1) labels.push(context.sort === 2
+      ? t(locale, 'reviews.context.newest')
+      : t(locale, 'reviews.context.sort', { sort: context.sort }));
+    labels.push(...context.filters.map((code) => ({
+      1: t(locale, 'reviews.context.withPhotos'),
+      2: t(locale, 'reviews.context.additional'),
+    }[code] || t(locale, 'reviews.context.filter', { filter: code }))));
+    if (context.skuFilter.length) {
+      labels.push(t(locale, 'reviews.context.skuFilter', { count: context.skuFilter.length }));
+    }
     return labels;
   }
 
-  function formatReviewsPageStatus(reviewPage) {
+  function formatReviewsPageStatus(reviewPage, locale = 'en') {
     if (reviewPage.source === 'ssr:__AER_DATA__') {
-      return `Reviews ready · ${reviewPage.loadedCount} first-page reviews · retention cap: ${reviewPage.captureCap} · source: SSR`;
+      return t(locale, 'reviews.status.ready', {
+        count: reviewPage.loadedCount,
+        cap: reviewPage.captureCap,
+      });
     }
-    const labels = formatReviewContext(reviewPage.context);
+    const labels = formatReviewContext(reviewPage.context, locale);
     const pages = reviewPage.pagesLoaded;
     const contiguous = pages.length > 1 && pages.every((page, index) => page === index + 1);
-    if (contiguous) labels.unshift(`pages 1–${pages.at(-1)}`);
-    else if (pages.length) labels.unshift(`pages ${pages.join(', ')}`);
-    labels.push(`retention cap: ${reviewPage.captureCap}`);
-    if (reviewPage.captureCapReached) labels.push('capture cap reached');
-    if (reviewPage.diagnostic) labels.push(reviewPage.diagnostic);
-    return `Reviews captured · ${reviewPage.loadedCount} reviews${labels.length ? ` · ${labels.join(' · ')}` : ''} · passive native`;
+    if (contiguous) labels.unshift(t(locale, 'reviews.status.pagesRange', { last: pages.at(-1) }));
+    else if (pages.length) labels.unshift(t(locale, 'reviews.status.pagesList', { pages: pages.join(', ') }));
+    labels.push(t(locale, 'reviews.status.retentionCap', { cap: reviewPage.captureCap }));
+    if (reviewPage.captureCapReached) labels.push(t(locale, 'reviews.status.capReached'));
+    if (reviewPage.diagnostic) labels.push(formatUiDiagnostic(reviewPage.diagnostic, locale));
+    return t(locale, 'reviews.status.captured', {
+      count: reviewPage.loadedCount,
+      details: labels.length ? ` · ${labels.join(' · ')}` : '',
+    });
   }
 
   function parseLocalizedRating(value) {
@@ -4319,17 +4674,33 @@
     VERSION,
     SETTINGS_KEY,
     DEFAULT_SETTINGS,
+    SUPPORTED_UI_LANGUAGES,
+    UI_STRINGS,
+    isUiLanguage,
+    resolveUiLanguage,
+    getPreferredUiLanguages,
+    t,
+    createUiMessage,
+    formatUiMessage,
     PASSIVE_REVIEW_RETENTION_CAP_OPTIONS,
     isPassiveReviewRetentionCap,
     normalizePassiveReviewRetentionCap,
     parsePassiveReviewRetentionCapSelection,
     normalizeSettings,
     loadSettings,
+    applyUiLanguageSelection,
     PANEL_SHELL_CONTRACT,
     TOOLTIP_DELAY_MS,
     PRODUCT_PANEL_CONTRACT,
     PRODUCT_PANEL_GROUPS,
+    renderPanelHeader,
+    renderPanelActionButtons,
     renderProductActionGroups,
+    applyPanelActionLocale,
+    applyLanguageControl,
+    applySharedPanelLocale,
+    applyProductPanelLocale,
+    applyReviewsPanelLocale,
     REVIEWS_PANEL_CONTRACT,
     panelModeForWidth,
     createPanelLayoutState,
@@ -4344,7 +4715,11 @@
     PRODUCT_SECTION_ORDER,
     PRODUCT_CONFIRMED_MISSING_SECTIONS,
     SECTION_DISCLOSURE_CONTRACT,
+    SECTION_UI_KEYS,
+    SOURCE_UI_KEYS,
     normalizeSectionSources,
+    formatUiSectionLabel,
+    formatUiDiagnostic,
     createSectionDisclosureModel,
     renderSectionDisclosure,
     renderProductSectionDisclosure,
@@ -4729,14 +5104,14 @@
   }
 
   function reviewsDiagnosticMessage(diagnostic) {
-    const messages = {
-      'invalid-item-id': 'Reviews page item ID could not be resolved.',
-      'no-candidate': 'First-page SSR review list was not found.',
-      'invalid-candidate': 'First-page SSR review schema was not recognized safely.',
-      'conflicting-candidates': 'Conflicting first-page SSR review lists were found.',
-      'traversal-limit': 'SSR review scan reached its safety limit.',
+    const keys = {
+      'invalid-item-id': 'reviews.error.invalidItemId',
+      'no-candidate': 'reviews.error.noCandidate',
+      'invalid-candidate': 'reviews.error.invalidCandidate',
+      'conflicting-candidates': 'reviews.error.conflictingCandidates',
+      'traversal-limit': 'reviews.error.traversalLimit',
     };
-    return messages[diagnostic] || 'First-page SSR reviews were not found or were not trustworthy.';
+    return createUiMessage(keys[diagnostic] || 'reviews.error.untrustedFallback');
   }
 
   function findInReact() {
@@ -4754,7 +5129,7 @@
   const SHARED_PANEL_STYLES = `
     :host { all:initial; position:fixed; right:16px; bottom:16px; z-index:2147483000; display:block; }
     .panel { width:320px; max-width:calc(100vw - 24px); color:#202938; background:#fbfcfd; border:1px solid #cfd7e2; border-radius:10px; box-shadow:0 6px 18px rgba(31,41,55,.14); font:13px/1.35 Arial,sans-serif; overflow:hidden; }
-    header { display:flex; align-items:center; gap:8px; padding:8px 9px 8px 12px; background:#e9eef3; border-bottom:1px solid #d7dfe8; }
+    header { display:flex; align-items:center; gap:6px; padding:8px 9px 8px 12px; background:#e9eef3; border-bottom:1px solid #d7dfe8; }
     strong { flex:1; min-width:0; font-size:14px; font-weight:600; letter-spacing:.01em; }
     .body { padding:11px; max-height:min(65vh,560px); overflow:auto; }
     .panel.collapsed .body { display:none; }
@@ -4766,6 +5141,8 @@
     button.primary:hover { background:#2f557e; border-color:#2f557e; }
     button.primary:active { background:#294b70; border-color:#294b70; }
     .icon { display:inline-grid; place-items:center; flex:none; min-width:30px; min-height:28px; padding:3px 8px; font-weight:700; }
+    .language { display:inline-flex; align-items:center; justify-content:center; flex:none; min-height:28px; padding:3px 6px; font-weight:400; white-space:nowrap; overflow-wrap:normal; }
+    .language [data-language-code][data-active="true"] { font-weight:800; text-decoration:underline; text-underline-offset:2px; }
     .status { min-height:18px; margin:0 0 12px; padding:0 1px 9px; color:#536173; border-bottom:1px solid #e4e9ef; overflow-wrap:anywhere; }
     .status.error { color:#9b2c2c; border-bottom-color:#efcaca; }
     .meta { display:flex; flex-wrap:wrap; justify-content:space-between; gap:4px 10px; color:#737f8e; margin-top:12px; padding-top:9px; border-top:1px solid #e4e9ef; font-size:11px; }
@@ -4794,7 +5171,17 @@
     return { host, shadow: host.attachShadow({ mode: 'open' }) };
   }
 
-  function renderPanelActionButtons(actions, className = '') {
+  function renderPanelHeader() {
+    return `<header>
+      <strong>Ali Helper</strong>
+      <button type="button" class="language" data-action="language">
+        <span data-language-code="en">EN</span><span aria-hidden="true">/</span><span data-language-code="ru">RU</span>
+      </button>
+      <button type="button" class="icon" data-action="toggle">—</button>
+    </header>`;
+  }
+
+  function renderPanelActionButtons(actions, className = '', includeText = true) {
     return actions.map((action) => {
       const classes = [
         className,
@@ -4803,28 +5190,84 @@
       ].filter(Boolean).join(' ');
       const classAttribute = classes ? ` class="${classes}"` : '';
       const disabled = action.requiresProduct || action.requiresReviews ? ' disabled' : '';
-      return `<button type="button"${classAttribute} data-action="${action.id}"${disabled}>${action.label}</button>`;
+      return `<button type="button"${classAttribute} data-action="${action.id}"${disabled}>${includeText ? action.label : ''}</button>`;
     }).join('');
   }
 
-  function renderProductActionGroups() {
+  function renderProductActionGroups(includeText = true) {
     return PRODUCT_PANEL_GROUPS.map((group) => {
       const actions = group.actionIds
         .map((actionId) => PRODUCT_PANEL_ACTIONS.find((action) => action.id === actionId))
         .filter(Boolean);
       return `
-        <section class="action-group action-group-${group.id}" role="group" aria-label="${group.ariaLabel}">
-          <div class="grid">${renderPanelActionButtons(actions)}</div>
+        <section class="action-group action-group-${group.id}" data-action-group="${group.id}" role="group"${includeText ? ` aria-label="${group.ariaLabel}"` : ''}>
+          <div class="grid">${renderPanelActionButtons(actions, '', includeText)}</div>
         </section>`;
     }).join('');
   }
 
-  function applyPanelActionTooltips(root, actions) {
+  function applyPanelActionLocale(root, actions, locale) {
     actions.forEach((action) => {
-      if (!action.tooltip) return;
       const button = root.querySelector(`[data-action="${action.id}"]`);
-      if (button) button.dataset.tooltip = action.tooltip;
+      if (!button) return;
+      button.textContent = t(locale, action.labelKey);
+      if (action.tooltipKey) button.dataset.tooltip = t(locale, action.tooltipKey);
     });
+  }
+
+  function applyLanguageControl(button, locale) {
+    if (!button) return;
+    button.setAttribute('aria-label', t(locale, 'language.aria'));
+    button.dataset.tooltip = t(locale, 'language.tooltip');
+    button.dataset.currentLanguage = locale;
+    for (const language of SUPPORTED_UI_LANGUAGES) {
+      const code = button.querySelector(`[data-language-code="${language}"]`);
+      if (!code) continue;
+      if (language === locale) code.dataset.active = 'true';
+      else delete code.dataset.active;
+    }
+  }
+
+  function applySharedPanelLocale(root, locale) {
+    const panel = root.querySelector('.panel');
+    if (panel) panel.setAttribute('lang', locale);
+    applyLanguageControl(root.querySelector('[data-action="language"]'), locale);
+    const footerSafety = root.querySelector('[data-footer-safety]');
+    if (footerSafety) footerSafety.textContent = t(locale, 'footer.safety', { version: VERSION });
+  }
+
+  function applyProductPanelLocale(root, locale) {
+    applySharedPanelLocale(root, locale);
+    applyPanelActionLocale(root, PRODUCT_PANEL_CONTRACT.actions, locale);
+    PRODUCT_PANEL_GROUPS.forEach((group) => {
+      root.querySelector(`[data-action-group="${group.id}"]`)
+        ?.setAttribute('aria-label', t(locale, group.ariaLabelKey));
+    });
+    const sectionSummary = root.querySelector('[data-section-summary]');
+    if (sectionSummary) sectionSummary.textContent = t(locale, 'sections.summary');
+    const sectionDisclosureSummary = root.querySelector('[data-section-disclosure] summary');
+    if (sectionDisclosureSummary) sectionDisclosureSummary.dataset.tooltip = t(locale, 'tooltip.sections');
+    const settingsSummary = root.querySelector('[data-product-settings] summary');
+    if (settingsSummary) settingsSummary.textContent = t(locale, 'settings.title');
+    const autoRedirectLabel = root.querySelector('[data-auto-redirect-label]');
+    if (autoRedirectLabel) autoRedirectLabel.textContent = t(locale, 'settings.autoRedirect');
+    const shippingDebug = root.querySelector('[data-action="shipping-debug"]');
+    if (shippingDebug) shippingDebug.textContent = t(locale, 'action.shippingDebug');
+  }
+
+  function applyReviewsPanelLocale(root, locale) {
+    applySharedPanelLocale(root, locale);
+    applyPanelActionLocale(root, REVIEWS_PANEL_CONTRACT.actions, locale);
+    const settingsSummary = root.querySelector('[data-review-settings-summary]');
+    if (settingsSummary) settingsSummary.textContent = t(locale, 'reviews.settings.title');
+    const retentionLabel = root.querySelector('[data-review-retention-label]');
+    if (retentionLabel) retentionLabel.textContent = t(locale, 'reviews.retention.label');
+    PASSIVE_REVIEW_RETENTION_CAP_OPTIONS.forEach((cap) => {
+      const option = root.querySelector(`[data-review-retention-option="${cap}"]`);
+      if (option) option.textContent = t(locale, `reviews.retention.${cap}`);
+    });
+    const help = root.querySelector('[data-review-setting-help]');
+    if (help) help.textContent = t(locale, 'reviews.retention.help');
   }
 
   function bindResponsivePanel(runtime, host, panel, toggle) {
@@ -4841,7 +5284,7 @@
     }, (desktopPreference) => {
       runtime.settings.panelCollapsed = desktopPreference;
       saveSettings(runtime.settings);
-    });
+    }, runtime.uiLanguage);
   }
 
   function createPanel(runtime) {
@@ -4870,28 +5313,27 @@
         }
       </style>
       <section class="panel">
-        <header><strong>Ali Helper</strong><button type="button" class="icon" data-action="toggle">—</button></header>
+        ${renderPanelHeader()}
         <div class="body">
-          <div class="status product-status" role="status" aria-live="polite" aria-atomic="true">Waiting for productData…</div>
+          <div class="status product-status" role="status" aria-live="polite" aria-atomic="true"></div>
           <div class="action-groups">
-            ${renderProductActionGroups()}
+            ${renderProductActionGroups(false)}
           </div>
           <details class="section-disclosure" data-section-disclosure hidden>
-            <summary>${SECTION_DISCLOSURE_CONTRACT.summary}<span class="completeness-badge" data-completeness-badge hidden></span></summary>
+            <summary><span data-section-summary></span><span class="completeness-badge" data-completeness-badge hidden></span></summary>
             <div class="section-disclosure-content" data-section-disclosure-content></div>
           </details>
-          <details>
-            <summary>Settings</summary>
-            <label><input type="checkbox" data-setting="autoRedirectComToRu"> Auto redirect COM → RU</label>
-            <button type="button" class="diagnostic" data-action="shipping-debug" disabled>Copy shipping debug</button>
+          <details data-product-settings>
+            <summary></summary>
+            <label><input type="checkbox" data-setting="autoRedirectComToRu"><span data-auto-redirect-label></span></label>
+            <button type="button" class="diagnostic" data-action="shipping-debug" disabled></button>
           </details>
           <footer class="meta">
-            <span>Read/copy/navigation only · v${VERSION}</span>
+            <span data-footer-safety></span>
             <a href="https://bigbensoft.com/" target="_blank" rel="noopener noreferrer">bigbensoft.com</a>
           </footer>
         </div>
       </section>`;
-    (document.body || document.documentElement).appendChild(host);
 
     const panel = shadow.querySelector('.panel');
     const panelBody = shadow.querySelector('.body');
@@ -4902,51 +5344,81 @@
     const sectionDisclosure = shadow.querySelector('[data-section-disclosure]');
     const autoRedirect = shadow.querySelector('[data-setting="autoRedirectComToRu"]');
     const shippingDebug = shadow.querySelector('[data-action="shipping-debug"]');
-    applyPanelActionTooltips(shadow, PRODUCT_PANEL_CONTRACT.actions);
-    sectionDisclosure.querySelector('summary').dataset.tooltip = SECTION_DISCLOSURE_CONTRACT.tooltip;
-    const responsivePanel = bindResponsivePanel(
+    let locale = isUiLanguage(runtime.uiLanguage) ? runtime.uiLanguage : 'en';
+    let currentProduct = runtime.product || null;
+    let responsivePanel = null;
+    let tooltipController = null;
+    let statusController = null;
+
+    function applyLocale(nextLocale) {
+      if (!isUiLanguage(nextLocale)) return;
+      const scrollTop = panelBody.scrollTop;
+      locale = nextLocale;
+      runtime.uiLanguage = locale;
+      applyProductPanelLocale(shadow, locale);
+      responsivePanel?.setLocale(locale);
+      if (currentProduct) renderProductSectionDisclosure(sectionDisclosure, currentProduct, locale);
+      statusController?.refresh();
+      tooltipController?.refresh();
+      panelBody.scrollTop = scrollTop;
+    }
+
+    applyLocale(locale);
+    responsivePanel = bindResponsivePanel(
       runtime,
       host,
       panel,
       shadow.querySelector('[data-action="toggle"]'),
     );
-    const tooltipController = createTooltipController(shadow);
+    tooltipController = createTooltipController(shadow);
     const disposeWheelScroll = bindPanelBodyWheelScroll(panelBody);
-    const statusController = createProductStatusController(status);
+    statusController = createProductStatusController(status, {
+      formatMessage: (message) => formatUiMessage(locale, message),
+    });
+    statusController.showPersistent(createUiMessage('product.waiting'));
     autoRedirect.checked = runtime.settings.autoRedirectComToRu;
     shippingDebug.disabled = !runtime.shippingCapture;
 
     function flash(message, isError = false) {
       statusController.showPersistent(message, isError);
     }
-    async function copyWithFeedback(text, label) {
-      try { await copyText(text); statusController.showTransient(`${label} copied.`); } catch (error) { flash(`Copy failed: ${error.message}`, true); }
+    async function copyWithFeedback(text, successKey) {
+      try {
+        await copyText(text);
+        statusController.showTransient(createUiMessage(successKey));
+      } catch (error) {
+        flash(createUiMessage('copy.failed', { error: error.message }), true);
+      }
     }
     shadow.addEventListener('click', (event) => {
-      const action = event.target?.dataset?.action;
+      const action = event.target?.closest?.('[data-action]')?.dataset?.action;
       if (!action) return;
-      if (action === 'toggle') {
+      if (action === 'language') {
+        const nextLocale = locale === 'en' ? 'ru' : 'en';
+        const result = applyUiLanguageSelection(runtime, nextLocale);
+        if (result.accepted) applyLocale(result.uiLanguage);
+      } else if (action === 'toggle') {
         responsivePanel.toggle();
       } else if (action === 'clean-url') {
-        copyWithFeedback(normalizeItemUrl(location.href).href, 'Clean URL');
+        copyWithFeedback(normalizeItemUrl(location.href).href, 'copy.cleanUrlSuccess');
       } else if (action === 'market') {
         location.assign(toggleMarketUrl(location.href).href);
       } else if (action === 'product' && runtime.product) {
         const product = runtime.refreshProductEnrichment?.();
-        if (product) copyWithFeedback(exportProduct(product), 'Product JSON');
+        if (product) copyWithFeedback(exportProduct(product), 'copy.productJsonSuccess');
       } else if (action === 'variants' && runtime.product) {
         const product = runtime.refreshProductEnrichment?.();
-        if (product) copyWithFeedback(exportVariants(product), 'Variants');
+        if (product) copyWithFeedback(exportVariants(product), 'copy.variantsSuccess');
       } else if (action === 'chatgpt' && runtime.product) {
         const product = runtime.refreshProductEnrichment?.();
-        if (product) copyWithFeedback(exportForChatGPT(product), 'Product');
+        if (product) copyWithFeedback(exportForChatGPT(product), 'copy.productChatgptSuccess');
       } else if (action === 'description' && runtime.product) {
         const product = runtime.refreshProductEnrichment?.();
-        if (product) copyWithFeedback(exportDescription(product), 'Description');
+        if (product) copyWithFeedback(exportDescription(product), 'copy.descriptionSuccess');
       } else if (action === 'shipping-debug' && runtime.shippingCapture) {
         const product = runtime.refreshProductEnrichment?.();
         if (shippingCaptureMatchesProduct(runtime.shippingCapture, product)) {
-          copyWithFeedback(JSON.stringify(runtime.shippingCapture, null, 2), 'Shipping debug');
+          copyWithFeedback(JSON.stringify(runtime.shippingCapture, null, 2), 'copy.shippingDebugSuccess');
         } else {
           runtime.shippingCapture = null;
           runtime.ui?.setShippingCapture(null);
@@ -4956,18 +5428,21 @@
     autoRedirect.addEventListener('change', () => {
       runtime.settings.autoRedirectComToRu = autoRedirect.checked;
       saveSettings(runtime.settings);
-      statusController.showTransient('Settings saved.');
+      statusController.showTransient(createUiMessage('settings.saved'));
     });
+    (document.body || document.documentElement).appendChild(host);
     return {
       setProduct(product) {
+        currentProduct = product;
         productButtons.forEach((button) => { button.disabled = false; });
-        renderProductSectionDisclosure(sectionDisclosure, product);
+        renderProductSectionDisclosure(sectionDisclosure, product, locale);
         statusController.clear();
       },
       setShippingCapture(capture) {
         shippingDebug.disabled = !capture;
       },
       setStatus: flash,
+      setLocale: applyLocale,
       dispose() {
         statusController.dispose();
         tooltipController.dispose();
@@ -4993,94 +5468,135 @@
         @media (max-width:${PANEL_SHELL_CONTRACT.narrowMaxWidth}px) { .action { box-sizing:border-box; } }
       </style>
       <section class="panel">
-        <header><strong>Ali Helper</strong><button type="button" class="icon" data-action="toggle">—</button></header>
+        ${renderPanelHeader()}
         <div class="body">
-          <div class="status" role="status" aria-live="polite" aria-atomic="true">Waiting for first-page SSR reviews…</div>
+          <div class="status" role="status" aria-live="polite" aria-atomic="true"></div>
           <div class="actions">
-            ${renderPanelActionButtons(REVIEWS_PANEL_CONTRACT.actions, 'action')}
+            ${renderPanelActionButtons(REVIEWS_PANEL_CONTRACT.actions, 'action', false)}
           </div>
           <details class="review-settings">
-            <summary>Review settings</summary>
+            <summary data-review-settings-summary></summary>
             <label class="review-setting-control">
-              <span>Passive review retention per context</span>
+              <span data-review-retention-label></span>
               <select data-setting="passiveReviewRetentionCap">
-                <option value="10">10 reviews</option>
-                <option value="30" selected>30 reviews (default)</option>
-                <option value="50">50 reviews</option>
-                <option value="100">100 reviews</option>
+                <option value="10" data-review-retention-option="10"></option>
+                <option value="30" data-review-retention-option="30" selected></option>
+                <option value="50" data-review-retention-option="50"></option>
+                <option value="100" data-review-retention-option="100"></option>
               </select>
             </label>
-            <p class="review-setting-help">Keeps only reviews AliExpress loads itself; Ali Helper never loads, repeats, or blocks review requests. Changes apply to new review contexts. Existing retained contexts stay unchanged.</p>
+            <p class="review-setting-help" data-review-setting-help></p>
             <p class="review-setting-feedback" data-review-setting-feedback hidden aria-live="polite"></p>
           </details>
           <footer class="meta">
-            <span>Read/copy/navigation only · v${VERSION}</span>
+            <span data-footer-safety></span>
             <a href="https://bigbensoft.com/" target="_blank" rel="noopener noreferrer">bigbensoft.com</a>
           </footer>
         </div>
       </section>`;
-    (document.body || document.documentElement).appendChild(host);
     const panel = shadow.querySelector('.panel');
+    const panelBody = shadow.querySelector('.body');
     const status = shadow.querySelector('.status');
     const copyButtons = REVIEWS_PANEL_CONTRACT.actions
       .map((action) => shadow.querySelector(`[data-action="${action.id}"]`));
     const retentionSelect = shadow.querySelector('[data-setting="passiveReviewRetentionCap"]');
     const settingFeedback = shadow.querySelector('[data-review-setting-feedback]');
-    const responsivePanel = bindResponsivePanel(
+    let locale = isUiLanguage(runtime.uiLanguage) ? runtime.uiLanguage : 'en';
+    let responsivePanel = null;
+    let tooltipController = null;
+    let statusController = null;
+    let settingFeedbackMessage = null;
+    let settingFeedbackIsError = false;
+
+    function renderSettingFeedback() {
+      if (!settingFeedbackMessage) return;
+      settingFeedback.hidden = false;
+      settingFeedback.textContent = formatUiMessage(locale, settingFeedbackMessage);
+      settingFeedback.classList.toggle('error', settingFeedbackIsError);
+    }
+
+    function applyLocale(nextLocale) {
+      if (!isUiLanguage(nextLocale)) return;
+      const scrollTop = panelBody.scrollTop;
+      locale = nextLocale;
+      runtime.uiLanguage = locale;
+      applyReviewsPanelLocale(shadow, locale);
+      responsivePanel?.setLocale(locale);
+      renderSettingFeedback();
+      statusController?.refresh();
+      tooltipController?.refresh();
+      panelBody.scrollTop = scrollTop;
+    }
+
+    applyLocale(locale);
+    responsivePanel = bindResponsivePanel(
       runtime,
       host,
       panel,
       shadow.querySelector('[data-action="toggle"]'),
     );
-    const tooltipController = createTooltipController(shadow);
+    tooltipController = createTooltipController(shadow);
+    statusController = createProductStatusController(status, {
+      formatMessage: (message) => formatUiMessage(locale, message),
+    });
+    statusController.showPersistent(createUiMessage('reviews.waiting'));
     function flash(message, isError = false) {
-      status.textContent = message;
-      status.classList.toggle('error', isError);
+      statusController.showPersistent(message, isError);
     }
     function showSettingFeedback(message, isError = false) {
-      settingFeedback.hidden = false;
-      settingFeedback.textContent = message;
-      settingFeedback.classList.toggle('error', isError);
+      settingFeedbackMessage = message;
+      settingFeedbackIsError = isError;
+      renderSettingFeedback();
     }
     retentionSelect.value = String(runtime.settings.passiveReviewRetentionCap);
     retentionSelect.addEventListener('change', () => {
       const result = applyPassiveReviewRetentionCapSelection(runtime, retentionSelect.value);
       if (!result.accepted) {
         retentionSelect.value = String(result.preference);
-        showSettingFeedback('Not saved. Choose 10, 30, 50, or 100 reviews.', true);
+        showSettingFeedback(createUiMessage('reviews.retention.invalid'), true);
         return;
       }
       showSettingFeedback(result.activeCaptureCap === null
-        ? `Saved. New review contexts retain up to ${result.preference} reviews.`
-        : `Saved. New contexts use ${result.preference}; current context remains ${result.activeCaptureCap}.`);
+        ? createUiMessage('reviews.retention.savedNew', { cap: result.preference })
+        : createUiMessage('reviews.retention.savedCurrent', {
+          newCap: result.preference,
+          currentCap: result.activeCaptureCap,
+        }));
     });
     shadow.addEventListener('click', async (event) => {
-      const action = event.target?.dataset?.action;
-      if (action === 'toggle') {
+      const action = event.target?.closest?.('[data-action]')?.dataset?.action;
+      if (action === 'language') {
+        const nextLocale = locale === 'en' ? 'ru' : 'en';
+        const result = applyUiLanguageSelection(runtime, nextLocale);
+        if (result.accepted) applyLocale(result.uiLanguage);
+      } else if (action === 'toggle') {
         responsivePanel.toggle();
       } else if (action === 'reviews' && runtime.reviewPage) {
         try {
           await copyText(exportReviewsPage(runtime.reviewPage));
-          flash('Reviews JSON copied.');
+          flash(createUiMessage('reviews.copyJsonSuccess'));
         } catch (error) {
-          flash(`Copy failed: ${error.message}`, true);
+          flash(createUiMessage('copy.failed', { error: error.message }), true);
         }
       } else if (action === 'reviews-chatgpt' && runtime.reviewPage) {
         try {
           await copyText(formatReviewsForChatGPT(runtime.reviewPage));
-          flash('Reviews for ChatGPT copied.');
+          flash(createUiMessage('reviews.copyChatgptSuccess'));
         } catch (error) {
-          flash(`Copy failed: ${error.message}`, true);
+          flash(createUiMessage('copy.failed', { error: error.message }), true);
         }
       }
     });
+    (document.body || document.documentElement).appendChild(host);
     return {
       setReviews(reviewPage) {
         copyButtons.forEach((button) => { button.disabled = false; });
-        flash(formatReviewsPageStatus(reviewPage));
+        flash({ kind: 'reviews-page-status', reviewPage });
       },
       setStatus: flash,
+      setLocale: applyLocale,
       dispose() {
+        statusController.dispose();
         tooltipController.dispose();
         responsivePanel.destroy();
       },
@@ -5088,9 +5604,11 @@
   }
 
   function startReviewsPage(pageWindow) {
+    const settings = loadSettings();
     const runtime = {
       active: true,
-      settings: loadSettings(),
+      settings,
+      uiLanguage: resolveUiLanguage(settings.uiLanguage, getPreferredUiLanguages()),
       itemId: getReviewsItemId(location.href),
       reviewCache: null,
       reviewPage: null,
@@ -5149,6 +5667,7 @@
     const runtime = {
       active: true,
       settings,
+      uiLanguage: resolveUiLanguage(settings.uiLanguage, getPreferredUiLanguages()),
       product: null,
       shippingCapture: null,
       shippingEnvironment: null,
@@ -5224,7 +5743,7 @@
         }
         runtime.ui?.setProduct(runtime.product);
       } catch (error) {
-        runtime.ui?.setStatus(`productData found but normalization failed: ${error.message}`, true);
+        runtime.ui?.setStatus(createUiMessage('product.normalizationFailed', { error: error.message }), true);
       }
     };
 
@@ -5314,7 +5833,7 @@
         runtime.product = null;
         runtime.shippingCapture = null;
         runtime.ui?.setShippingCapture(null);
-        runtime.ui?.setStatus('Product changed; waiting for productData…');
+        runtime.ui?.setStatus(createUiMessage('product.changedWaiting'));
         return runtime.product;
       }
       if (runtime.product) {
@@ -5530,7 +6049,7 @@
         const found = findInSsrScripts() || findInReact();
         if (found) acceptProductData(found.data, found);
         else if (++attempts === 8) {
-          runtime.ui?.setStatus('productData not found yet. Reload the page with Ali Helper enabled; SSR contains no SKU data.', true);
+          runtime.ui?.setStatus(createUiMessage('product.notFound'), true);
         }
       }
       refreshProductEnrichment();

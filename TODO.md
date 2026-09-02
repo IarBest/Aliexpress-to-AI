@@ -955,12 +955,23 @@ follow-up semantics, а также scoped third-party DOM exclusion.
 Эти идеи не блокируют основной roadmap:
 
 - [x] **Completed optional UI polish:** neutral/light visual hierarchy, compact
-      shared Product/Reviews header, Product actions с `Copy for ChatGPT` первым
+      shared Product/Reviews header, Product actions с
+      `Copy product for ChatGPT` первым
       и без visible group captions, delayed explanatory tooltips, transient
       Product feedback с восстановлением persistent extraction status, textual
       `Partial` / `Invalid` presentation и footer branding `bigbensoft.com`.
       Существующие responsive и passive-network contracts сохранены; panel
       width, Product/Reviews actions и export semantics не изменялись.
+- [x] **Completed EN/RU UI localization:** Product и Reviews поддерживают
+      английский и русский интерфейс с видимым `EN/RU` control в общем header.
+      Опциональная настройка `uiLanguage: "en" | "ru"` строго валидируется и
+      сохраняется только после явного переключения; до этого первый
+      поддерживаемый язык выбирается из browser preferences без записи в
+      storage, с fallback на English. Переключение происходит in place и
+      локализует actions, accessibility names, tooltips, statuses, disclosures,
+      settings и footer. Общая ширина остаётся 320px, Product сохраняет шесть
+      actions, Reviews — две, exports побайтово одинаковы в обоих языках, а
+      passive ProductData/Shipping/Reviews network contract остаётся 0/0/0.
 - [ ] **Deferred research:** Bulk shipping calculation только по явному действию
       и с hard cap, после доказательства безопасного active shipping
       sender/runtime boundary.

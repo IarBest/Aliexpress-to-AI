@@ -266,11 +266,12 @@ test('Product panel wiring exposes the initial loading and Clean URL transient p
   const productStart = source.indexOf('function createPanel(runtime)');
   const productEnd = source.indexOf('function createReviewsPanel(runtime)');
   const productSource = source.slice(productStart, productEnd);
-  const markupIndex = productSource.indexOf('Waiting for productData…');
-  const controllerIndex = productSource.indexOf('createProductStatusController(status)');
-  assert.ok(markupIndex >= 0 && controllerIndex > markupIndex);
-  assert.match(productSource, /copyWithFeedback\(normalizeItemUrl\(location\.href\)\.href, 'Clean URL'\)/);
-  assert.match(productSource, /statusController\.showTransient\(`\$\{label\} copied\.`\)/);
+  const markupIndex = productSource.indexOf('class="status product-status"');
+  const controllerIndex = productSource.indexOf('createProductStatusController(status, {');
+  const waitingIndex = productSource.indexOf("showPersistent(createUiMessage('product.waiting'))");
+  assert.ok(markupIndex >= 0 && controllerIndex > markupIndex && waitingIndex > controllerIndex);
+  assert.match(productSource, /copyWithFeedback\(normalizeItemUrl\(location\.href\)\.href, 'copy\.cleanUrlSuccess'\)/);
+  assert.match(productSource, /statusController\.showTransient\(createUiMessage\(successKey\)\)/);
 
   const status = createStatus('Waiting for productData…');
   const timers = createFakeTimers();

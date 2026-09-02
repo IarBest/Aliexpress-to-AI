@@ -69,8 +69,8 @@ test('desktop toggles update only the desktop collapse preference', () => {
 test('product action contract keeps exactly six unique existing identities and labels', () => {
   const actions = core.PRODUCT_PANEL_CONTRACT.actions;
   assert.deepEqual(actions.map(({ id, label }) => [id, label]), [
-    ['chatgpt', 'Copy for ChatGPT'],
-    ['product', 'Copy product'],
+    ['chatgpt', 'Copy product for ChatGPT'],
+    ['product', 'Copy product JSON'],
     ['variants', 'Copy variants'],
     ['description', 'Copy description'],
     ['clean-url', 'Copy clean URL'],
@@ -120,8 +120,8 @@ test('Product renders two captionless accessible clusters in exact DOM and focus
     ['chatgpt', 'product', 'variants', 'description', 'clean-url', 'market'],
   );
   assert.equal((html.match(/role="group"/g) || []).length, 2);
-  assert.match(html, /class="action-group action-group-export" role="group" aria-label="Product export"/);
-  assert.match(html, /class="action-group action-group-quick" role="group" aria-label="Quick actions"/);
+  assert.match(html, /class="action-group action-group-export" data-action-group="export" role="group" aria-label="Product export"/);
+  assert.match(html, /class="action-group action-group-quick" data-action-group="quick" role="group" aria-label="Quick actions"/);
   assert.doesNotMatch(html, /<h[1-6]\b|group-label|>\s*Quick actions\s*<|>\s*Product export\s*</);
   assert.match(html, /class="wide primary" data-action="chatgpt"/);
   assert.match(html, /class="wide" data-action="description"/);
@@ -129,8 +129,8 @@ test('Product renders two captionless accessible clusters in exact DOM and focus
   const productStart = source.indexOf('function createPanel(runtime)');
   const productEnd = source.indexOf('function createReviewsPanel(runtime)');
   const productSource = source.slice(productStart, productEnd);
-  assert.match(productSource, /renderProductActionGroups\(\)/);
-  assert.match(source, /function renderProductActionGroups\(\)/);
+  assert.match(productSource, /renderProductActionGroups\(false\)/);
+  assert.match(source, /function renderProductActionGroups\(includeText = true\)/);
   assert.match(productSource, /\.action-groups \{ display:grid; gap:15px; \}/);
   assert.match(productSource, /grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/);
   assert.match(productSource, /\.grid \{[^}]*gap:8px;/);
@@ -148,8 +148,8 @@ test('Product actions precede disclosures in the same order used by keyboard nav
   const focusOrder = [...renderedActions.matchAll(/<button[^>]*data-action="([^"]+)"/g)]
     .map((match) => match[1]);
   assert.deepEqual(focusOrder, ['chatgpt', 'product', 'variants', 'description', 'clean-url', 'market']);
-  assert.ok(productSource.indexOf('renderProductActionGroups()') < productSource.indexOf('data-section-disclosure hidden'));
-  assert.ok(productSource.indexOf('data-section-disclosure hidden') < productSource.indexOf('<summary>Settings</summary>'));
+  assert.ok(productSource.indexOf('renderProductActionGroups(false)') < productSource.indexOf('data-section-disclosure hidden'));
+  assert.ok(productSource.indexOf('data-section-disclosure hidden') < productSource.indexOf('data-product-settings'));
 });
 
 test('Reviews uses the shared shell contract and retains its existing two stacked actions', () => {
@@ -168,7 +168,7 @@ test('Reviews uses the shared shell contract and retains its existing two stacke
   assert.equal((reviewsSource.match(/SHARED_PANEL_STYLES/g) || []).length, 1);
   assert.equal((reviewsSource.match(/bindResponsivePanel\(/g) || []).length, 1);
   assert.match(reviewsSource, /\.actions \{ display:flex; flex-direction:column; gap:7px; \}/);
-  assert.match(reviewsSource, /renderPanelActionButtons\(REVIEWS_PANEL_CONTRACT\.actions, 'action'\)/);
+  assert.match(reviewsSource, /renderPanelActionButtons\(REVIEWS_PANEL_CONTRACT\.actions, 'action', false\)/);
 });
 
 test('Reviews owns one passive settings disclosure with exactly the four presets', () => {
@@ -178,11 +178,15 @@ test('Reviews owns one passive settings disclosure with exactly the four presets
   const productSource = source.slice(productStart, reviewsStart);
   const reviewsSource = source.slice(reviewsStart, reviewsEnd);
   assert.equal((reviewsSource.match(/<details class="review-settings">/g) || []).length, 1);
-  assert.match(reviewsSource, /<summary>Review settings<\/summary>/);
-  assert.match(reviewsSource, /Passive review retention per context/);
+  assert.match(reviewsSource, /<summary data-review-settings-summary><\/summary>/);
+  assert.match(reviewsSource, /data-review-retention-label/);
   assert.deepEqual(
-    [...reviewsSource.matchAll(/<option value="(10|30|50|100)"(?: selected)?>([^<]+)<\/option>/g)]
-      .map((match) => [match[1], match[2]]),
+    [...reviewsSource.matchAll(/<option value="(10|30|50|100)" data-review-retention-option="\1"(?: selected)?><\/option>/g)]
+      .map((match) => match[1]),
+    ['10', '30', '50', '100'],
+  );
+  assert.deepEqual(
+    [10, 30, 50, 100].map((cap) => [String(cap), core.t('en', `reviews.retention.${cap}`)]),
     [
       ['10', '10 reviews'],
       ['30', '30 reviews (default)'],
@@ -190,12 +194,11 @@ test('Reviews owns one passive settings disclosure with exactly the four presets
       ['100', '100 reviews'],
     ],
   );
-  assert.match(reviewsSource, /<option value="30" selected>30 reviews \(default\)<\/option>/);
-  assert.match(reviewsSource, /Keeps only reviews AliExpress loads itself; Ali Helper never loads, repeats, or blocks review requests\./);
-  assert.match(reviewsSource, /Changes apply to new review contexts\. Existing retained contexts stay unchanged\./);
-  assert.match(reviewsSource, /Not saved\. Choose 10, 30, 50, or 100 reviews\./);
+  assert.match(reviewsSource, /<option value="30" data-review-retention-option="30" selected><\/option>/);
+  assert.match(reviewsSource, /data-review-setting-help/);
+  assert.equal(core.t('en', 'reviews.retention.invalid'), 'Not saved. Choose 10, 30, 50, or 100 reviews.');
   assert.doesNotMatch(productSource, /Review settings|passiveReviewRetentionCap|Passive review retention/);
-  assert.equal((productSource.match(/<summary>Settings<\/summary>/g) || []).length, 1);
+  assert.equal((productSource.match(/data-product-settings/g) || []).length, 1);
 });
 
 test('Reviews settings keep the accepted 767/768 shell behavior and add no third action', () => {
@@ -334,14 +337,14 @@ test('800x600 uses desktop mode and the normal desktop bottom placement', () => 
 test('toggle view exposes a stable name and synchronized accessible state', () => {
   let state = core.createPanelLayoutState(390, false);
   const collapsed = core.panelToggleView(state);
-  assert.equal(collapsed.ariaLabel, 'Toggle Ali Helper panel');
+  assert.equal(collapsed.ariaLabel, 'Expand Ali Helper panel.');
   assert.equal(collapsed.ariaExpanded, 'false');
   assert.equal(collapsed.symbol, '+');
   assert.equal(collapsed.tooltip, 'Expand Ali Helper panel.');
 
   state = core.togglePanelLayoutState(state);
   const expanded = core.panelToggleView(state);
-  assert.equal(expanded.ariaLabel, collapsed.ariaLabel);
+  assert.equal(expanded.ariaLabel, 'Collapse Ali Helper panel.');
   assert.equal(expanded.ariaExpanded, 'true');
   assert.equal(expanded.symbol, '—');
   assert.equal(expanded.tooltip, 'Collapse Ali Helper panel.');
@@ -353,8 +356,9 @@ test('toggle view exposes a stable name and synchronized accessible state', () =
   assert.match(bindSource, /toggle\.setAttribute\('aria-expanded', toggleView\.ariaExpanded\)/);
   assert.match(bindSource, /toggle\.dataset\.tooltip = toggleView\.tooltip/);
   assert.doesNotMatch(bindSource, /toggle\.title|setAttribute\(['"]title/);
-  const nativeToggle = /<button type="button" class="icon" data-action="toggle">—<\/button>/g;
-  assert.equal((source.match(nativeToggle) || []).length, 2);
+  assert.equal((source.match(/\$\{renderPanelHeader\(\)\}/g) || []).length, 2);
+  const header = core.renderPanelHeader();
+  assert.ok(header.indexOf('data-action="language"') < header.indexOf('data-action="toggle"'));
 });
 
 test('panel builders contain no request-producing or purchase-control behavior', () => {
@@ -372,9 +376,9 @@ test('panel builders contain no request-producing or purchase-control behavior',
   const reviewActions = [...source.slice(reviewsStart, reviewsEnd).matchAll(/action === '([^']+)'/g)]
     .map((match) => match[1]);
   assert.deepEqual(productActions, [
-    'toggle', 'clean-url', 'market', 'product', 'variants', 'chatgpt', 'description', 'shipping-debug',
+    'language', 'toggle', 'clean-url', 'market', 'product', 'variants', 'chatgpt', 'description', 'shipping-debug',
   ]);
-  assert.deepEqual(reviewActions, ['toggle', 'reviews', 'reviews-chatgpt']);
+  assert.deepEqual(reviewActions, ['language', 'toggle', 'reviews', 'reviews-chatgpt']);
 });
 
 test('each existing Product action keeps exactly one original handler mapping', () => {
@@ -383,12 +387,12 @@ test('each existing Product action keeps exactly one original handler mapping', 
   const productSource = source.slice(productStart, productEnd);
   assert.equal((productSource.match(/shadow\.addEventListener\('click'/g) || []).length, 1);
   const mappings = [
-    ['clean-url', /copyWithFeedback\(normalizeItemUrl\(location\.href\)\.href, 'Clean URL'\)/g],
+    ['clean-url', /copyWithFeedback\(normalizeItemUrl\(location\.href\)\.href, 'copy\.cleanUrlSuccess'\)/g],
     ['market', /location\.assign\(toggleMarketUrl\(location\.href\)\.href\)/g],
-    ['product', /copyWithFeedback\(exportProduct\(product\), 'Product JSON'\)/g],
-    ['variants', /copyWithFeedback\(exportVariants\(product\), 'Variants'\)/g],
-    ['chatgpt', /copyWithFeedback\(exportForChatGPT\(product\), 'Product'\)/g],
-    ['description', /copyWithFeedback\(exportDescription\(product\), 'Description'\)/g],
+    ['product', /copyWithFeedback\(exportProduct\(product\), 'copy\.productJsonSuccess'\)/g],
+    ['variants', /copyWithFeedback\(exportVariants\(product\), 'copy\.variantsSuccess'\)/g],
+    ['chatgpt', /copyWithFeedback\(exportForChatGPT\(product\), 'copy\.productChatgptSuccess'\)/g],
+    ['description', /copyWithFeedback\(exportDescription\(product\), 'copy\.descriptionSuccess'\)/g],
   ];
   mappings.forEach(([actionId, operation]) => {
     assert.equal((productSource.match(new RegExp(`action === '${actionId}'`, 'g')) || []).length, 1, actionId);
@@ -402,7 +406,8 @@ test('shared shell is neutral, status is live but lightweight, and footer brandi
   const headerRule = source.match(/header \{([^}]*)\}/)?.[1] || '';
   assert.doesNotMatch(headerRule, /(?:^|;)\s*height:/);
   assert.match(source, /strong \{[^}]*font-size:14px;[^}]*font-weight:600;/);
-  assert.equal((source.match(/<header><strong>Ali Helper<\/strong><button type="button" class="icon" data-action="toggle">—<\/button><\/header>/g) || []).length, 2);
+  assert.equal((source.match(/\$\{renderPanelHeader\(\)\}/g) || []).length, 2);
+  assert.match(core.renderPanelHeader(), /data-action="language"[\s\S]*data-action="toggle"/);
   assert.match(source, /button\.primary \{ color:#fff; background:#365f8c; border-color:#365f8c; \}/);
   assert.match(source, /\.status \{[^}]*border-bottom:1px solid #e4e9ef;/);
   assert.doesNotMatch(source, /\.status \{[^}]*border-radius|\.status \{[^}]*background:/);
@@ -411,5 +416,5 @@ test('shared shell is neutral, status is live but lightweight, and footer brandi
   assert.equal((source.match(/role="status" aria-live="polite" aria-atomic="true"/g) || []).length, 2);
   assert.equal((source.match(/href="https:\/\/bigbensoft\.com\/"/g) || []).length, 2);
   assert.equal((source.match(/target="_blank" rel="noopener noreferrer">bigbensoft\.com<\/a>/g) || []).length, 2);
-  assert.equal(core.VERSION, '0.1.26');
+  assert.equal(core.VERSION, '0.1.27');
 });
