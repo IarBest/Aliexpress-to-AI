@@ -191,6 +191,134 @@ test('native review forwarding contains no settings or cap-dependent branch', ()
   assert.match(interceptorSource, /return result/);
 });
 
+test('native review observer reports one bounded pending lifecycle without changing the returned request', async () => {
+  const { pageWindow, calls } = createFetchHarness();
+  const states = [];
+  const batches = [];
+  const subscription = core.installNativeReviewInterceptor(
+    pageWindow,
+    '100',
+    (value, sequence) => batches.push({ value, sequence }),
+    () => assert.fail('valid request must not diagnose'),
+    (state) => states.push(state),
+  );
+  const init = { method: 'POST', body: JSON.stringify(reviewRequest()) };
+  const returned = pageWindow.fetch(REVIEW_URL, init);
+  assert.equal(returned, calls[0].promise);
+  assert.deepEqual(states, [{
+    kind: 'request-start',
+    sequence: 1,
+    itemId: '100',
+    contextKey: core.createReviewContextKey('100', core.normalizeNativeReviewRequest(reviewRequest(), '100')),
+    pageNum: 2,
+  }]);
+  await returned;
+  await flushHelperWork();
+  await flushHelperWork();
+  assert.equal(batches.length, 1);
+  assert.deepEqual(states, [
+    {
+      kind: 'request-start',
+      sequence: 1,
+      itemId: '100',
+      contextKey: core.createReviewContextKey('100', core.normalizeNativeReviewRequest(reviewRequest(), '100')),
+      pageNum: 2,
+    },
+    {
+      kind: 'request-outcome',
+      sequence: 1,
+      outcomeType: 'page',
+      itemId: '100',
+      contextKey: core.createReviewContextKey('100', core.normalizeNativeReviewRequest(reviewRequest(), '100')),
+      pageNum: 2,
+      fingerprint: '[]',
+    },
+  ]);
+  assert.equal(calls.length, 1);
+  subscription.dispose();
+  await pageWindow.fetch(REVIEW_URL, init);
+  await flushHelperWork();
+  await flushHelperWork();
+  assert.equal(states.length, 2, 'disposing removes lifecycle observation without removing passive forwarding');
+  assert.equal(batches.length, 2, 'passive cache admission remains subscribed');
+  assert.equal(calls.length, 2);
+});
+
+test('review lifecycle is monotonic and sanitized while subscriber failures cannot break fetch or cache admission', async () => {
+  const { pageWindow, calls } = createFetchHarness();
+  let cache = core.createReviewCache('100', 30);
+  const events = [];
+  core.installNativeReviewInterceptor(
+    pageWindow,
+    '100',
+    (batch, sequence) => { cache = core.applyNativeReviewBatch(cache, batch, sequence); },
+    () => {},
+    (event) => {
+      events.push(event);
+      if (event.kind === 'request-start') throw new Error('workflow subscriber failed');
+    },
+  );
+  const init = { method: 'POST', body: JSON.stringify(reviewRequest()) };
+  const first = pageWindow.fetch(REVIEW_URL, init);
+  const second = pageWindow.fetch(REVIEW_URL, init);
+  const unrelated = pageWindow.fetch(UNRELATED_URL, { body: 'token=must-not-appear' });
+  assert.equal(await first, calls[0].response);
+  assert.equal(await second, calls[1].response);
+  assert.equal(await unrelated, calls[2].response);
+  await flushHelperWork();
+  await flushHelperWork();
+  assert.deepEqual(events.map(({ kind, sequence }) => ({ kind, sequence })), [
+    { kind: 'request-start', sequence: 1 },
+    { kind: 'request-start', sequence: 2 },
+    { kind: 'request-outcome', sequence: 1 },
+    { kind: 'request-outcome', sequence: 2 },
+  ]);
+  assert.equal(core.getActiveReviewPage(cache).itemId, '100');
+  assert.equal(calls.length, 3);
+  for (const event of events) {
+    assert.deepEqual(
+      Object.keys(event).filter((key) => /url|body|header|credential|token|cookie/i.test(key)),
+      [],
+    );
+  }
+});
+
+test('review lifecycle distinguishes native rejection and parser outcomes without changing native semantics', async () => {
+  for (const mode of ['request-error', 'parser-error']) {
+    const nativeError = new Error(mode);
+    const nativePromise = mode === 'request-error'
+      ? Promise.reject(nativeError)
+      : Promise.resolve({ clone: () => ({ json: async () => { throw nativeError; } }) });
+    let nativeCalls = 0;
+    const events = [];
+    const pageWindow = {
+      location: { href: PAGE_URL },
+      fetch() { nativeCalls += 1; return nativePromise; },
+    };
+    core.installNativeReviewInterceptor(
+      pageWindow,
+      '100',
+      () => assert.fail('invalid outcome must not admit a page'),
+      () => {},
+      (event) => events.push(event),
+    );
+    const returned = pageWindow.fetch(REVIEW_URL, {
+      method: 'POST',
+      body: JSON.stringify(reviewRequest()),
+    });
+    assert.equal(returned, nativePromise);
+    if (mode === 'request-error') await assert.rejects(returned, (error) => error === nativeError);
+    else assert.equal(await returned, await nativePromise);
+    await flushHelperWork();
+    await flushHelperWork();
+    assert.equal(nativeCalls, 1);
+    assert.deepEqual(events.map(({ kind }) => kind), [
+      'request-start',
+      mode === 'request-error' ? 'request-error' : 'parser-outcome',
+    ]);
+  }
+});
+
 function makeFetchCases() {
   const controller = new AbortController();
   const productInput = new Request(PRODUCT_URL, { method: 'POST' });

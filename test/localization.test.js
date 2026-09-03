@@ -166,10 +166,11 @@ test('EN and RU dictionaries have exact plain-string parity, safe interpolation,
 });
 
 test('accepted Product and Reviews label tables preserve exact action IDs, order, and primary geometry', () => {
-  const productIds = ['chatgpt', 'product', 'variants', 'description', 'clean-url', 'market'];
+  const productIds = ['review-workflow', 'chatgpt', 'product', 'variants', 'description', 'clean-url', 'market'];
   const productKeys = core.PRODUCT_PANEL_CONTRACT.actions.map(({ labelKey }) => labelKey);
   assert.deepEqual(core.PRODUCT_PANEL_CONTRACT.actions.map(({ id }) => id), productIds);
   assert.deepEqual(productKeys.map((key) => core.t('en', key)), [
+    'Collect reviews for ChatGPT',
     'Copy product for ChatGPT',
     'Copy product JSON',
     'Copy variants',
@@ -178,6 +179,7 @@ test('accepted Product and Reviews label tables preserve exact action IDs, order
     'RU / COM',
   ]);
   assert.deepEqual(productKeys.map((key) => core.t('ru', key)), [
+    'Собрать отзывы для ChatGPT',
     'Скопировать товар для ChatGPT',
     'JSON товара',
     'Варианты',
@@ -185,7 +187,7 @@ test('accepted Product and Reviews label tables preserve exact action IDs, order
     'Чистый URL',
     'RU / COM',
   ]);
-  assert.deepEqual(core.PRODUCT_PANEL_CONTRACT.actions.filter(({ primary }) => primary).map(({ id }) => id), ['chatgpt']);
+  assert.deepEqual(core.PRODUCT_PANEL_CONTRACT.actions.filter(({ primary }) => primary).map(({ id }) => id), ['review-workflow']);
 
   const reviewKeys = core.REVIEWS_PANEL_CONTRACT.actions.map(({ labelKey }) => labelKey);
   assert.deepEqual(core.REVIEWS_PANEL_CONTRACT.actions.map(({ id }) => id), ['reviews', 'reviews-chatgpt']);
@@ -392,8 +394,8 @@ test('panel locale updates are in-place and retain the accepted shell/network bo
 test('metadata and safe text application keep release-finalization files and version out of scope', () => {
   assert.match(source, /^\/\/ @description:ru Помощник AliExpress только для чтения:/m);
   assert.doesNotMatch(source, /^\/\/ @name:ru/m);
-  assert.match(source, /^\/\/ @version\s+0\.1\.27$/m);
-  assert.equal(core.VERSION, '0.1.27');
+  assert.match(source, /^\/\/ @version\s+0\.1\.28$/m);
+  assert.equal(core.VERSION, '0.1.28');
   const localeApplyStart = source.indexOf('function applyPanelActionLocale');
   const localeApplyEnd = source.indexOf('function bindResponsivePanel', localeApplyStart);
   const localeApplySource = source.slice(localeApplyStart, localeApplyEnd);

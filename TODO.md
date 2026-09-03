@@ -559,6 +559,15 @@ capture cap, gaps/conflicts, follow-ups и active-context export реализо�
       подавляет и не отменяет native AliExpress review requests; export schema
       не меняется.
 
+#### Bounded two-click Review collection — completed
+
+- [x] Добавить явное Product action, одну same-tab навигацию в Reviews и второе
+      явное Reviews action `Start review collection`, которое только после
+      подтверждения разрешает bounded document scroll с hard bounds и Cancel.
+      Возникающие Review requests создаёт AliExpress; прямые Helper Review API
+      requests остаются равны 0. Результат Product + Reviews копируется только
+      отдельным явным действием.
+
 #### Optional active-loading research — deferred
 
 - [ ] **Deferred research:** добавить explicit `Load reviews` / next-page sender
@@ -751,10 +760,10 @@ Acceptance: основной export остаётся читаемым и огр�
       принят как overlay behavior; production не inspect/measure/move/hide/modify
       purchase controls.
 - [x] Корректно обновлять panel после SPA item/SKU changes.
-- [x] Завершить responsive organization/layout существующих actions без
-      перегрузки панели. Desktop сохраняет принятый direct-action layout; narrow
-      mode использует три ряда по две кнопки, и все шесть Product actions остаются
-      напрямую доступны. Новые active network actions и menu не добавлены.
+- [x] Завершить responsive organization/layout actions без перегрузки панели.
+      Desktop сохраняет принятый direct-action layout; narrow mode оставляет
+      напрямую доступными шесть прежних Product actions и новое bounded Review
+      workflow action. Direct Review sender и menu не добавлены.
 - [ ] **Conditional:** если будет одобрено ещё одно persistent action и action
       set вырастет, рассмотреть sections/menu или equivalent grouping в рамках
       соответствующего UI pass; отдельная реализация сейчас не требуется.
@@ -970,8 +979,10 @@ follow-up semantics, а также scoped third-party DOM exclusion.
       storage, с fallback на English. Переключение происходит in place и
       локализует actions, accessibility names, tooltips, statuses, disclosures,
       settings и footer. Общая ширина остаётся 320px, Product сохраняет шесть
-      actions, Reviews — две, exports побайтово одинаковы в обоих языках, а
-      passive ProductData/Shipping/Reviews network contract остаётся 0/0/0.
+      прежних actions и bounded Review workflow action, Reviews — две постоянные
+      actions и contextual workflow controls, а exports побайтово одинаковы в
+      обоих языках. Переключение языка само не запускает workflow или network
+      activity.
 - [ ] **Deferred research:** Bulk shipping calculation только по явному действию
       и с hard cap, после доказательства безопасного active shipping
       sender/runtime boundary.

@@ -2991,12 +2991,15 @@ test('deduplicates identical same-key records and keeps first source occurrence'
   assert.equal(result.reviews[0].id, 'relay-review-1');
 });
 
-test('fails a candidate on conflicting duplicate content for the same stable key', () => {
+test('deduplicates same-root content variation inside one candidate and keeps the first valid content', () => {
   const fixture = loadFixture('reviews-ssr-1005008195850531.json');
+  const firstText = fixture.widget.props.reviews[0].root.text;
   const conflict = clone(fixture.widget.props.reviews[0]);
   conflict.root.text = 'Conflicting content.';
   fixture.widget.props.reviews.push(conflict);
-  assert.equal(core.extractReviewsPageFromSsrData(fixture, fixture.itemId), null);
+  const result = core.extractReviewsPageFromSsrData(fixture, fixture.itemId);
+  assert.equal(result.reviews.length, 5);
+  assert.equal(result.reviews[0].initial.text, firstText);
 });
 
 test('does not deduplicate equal content when review IDs differ', () => {
@@ -3008,13 +3011,17 @@ test('does not deduplicate equal content when review IDs differ', () => {
   assert.equal(result.reviews.length, 6);
 });
 
-test('accepts identical multiple SSR candidates and rejects candidate conflicts', () => {
+test('SSR candidates reconcile content by ordered root identity and retain the first traversed candidate', () => {
   const fixture = loadFixture('reviews-ssr-1005008195850531.json');
   const identical = { one: fixture.widget, elsewhere: { two: clone(fixture.widget) } };
   assert.equal(core.extractReviewsPageFromSsrData(identical, fixture.itemId).reviews.length, 5);
-  const conflicting = clone(fixture.widget);
-  conflicting.props.reviews[0].root.text = 'Candidate conflict.';
-  assert.equal(core.extractReviewsPageFromSsrData({ one: fixture.widget, two: conflicting }, fixture.itemId), null);
+  const changedContent = clone(fixture.widget);
+  changedContent.props.reviews[0].root.text = 'Candidate content refresh.';
+  const reconciled = core.extractReviewsPageFromSsrData({ one: fixture.widget, two: changedContent }, fixture.itemId);
+  assert.equal(reconciled.reviews[0].initial.text, 'Candidate content refresh.');
+  const conflictingIdentity = clone(fixture.widget);
+  conflictingIdentity.props.reviews[0].root.id = 'different-root-id';
+  assert.equal(core.extractReviewsPageFromSsrData({ one: fixture.widget, two: conflictingIdentity }, fixture.itemId), null);
   const reordered = clone(fixture.widget);
   reordered.props.reviews.reverse();
   assert.equal(core.extractReviewsPageFromSsrData({ one: fixture.widget, two: reordered }, fixture.itemId), null);
@@ -3101,7 +3108,7 @@ test('SSR review inspection distinguishes safe failure diagnostics without raw d
   const malformed = clone(fixture);
   delete malformed.widget.props.reviews[0].root.id;
   const conflicting = clone(fixture.widget);
-  conflicting.props.reviews[0].root.text = 'Synthetic conflict.';
+  conflicting.props.reviews[0].root.id = 'different-root-id';
   const cases = [
     [core.inspectReviewsPageFromSsrData(fixture, null), 'invalid-item-id'],
     [core.inspectReviewsPageFromSsrData(fixture, 'not-an-item-id'), 'invalid-item-id'],
@@ -3397,7 +3404,7 @@ test('empty newer context remains active after a late older response', () => {
   assert.equal(active.loadedCount, 0);
 });
 
-test('review cache is page-stable, rejects conflicts, and restores preserved contexts', () => {
+test('review cache is identity-stable, retains first same-page content, and rejects identity conflicts', () => {
   const fixture = loadFixture('reviews-ssr-1005009452926938.json');
   const ssrPage = core.extractReviewsPageFromSsrData(fixture, fixture.itemId);
   let cache = core.seedReviewCacheFromSsr(core.createReviewCache(fixture.itemId), ssrPage);
@@ -3406,8 +3413,13 @@ test('review cache is page-stable, rejects conflicts, and restores preserved con
   const stable = core.applyNativeReviewBatch(cache, nativeReviewBatch(fixture.itemId, 2, defaultPage2));
   assert.equal(stable, cache);
   const conflicting = clone(defaultPage2);
-  conflicting[0].initial.text = 'Conflict';
+  conflicting[0].initial.text = 'Refreshed content';
   cache = core.applyNativeReviewBatch(cache, nativeReviewBatch(fixture.itemId, 2, conflicting));
+  assert.equal(Object.hasOwn(core.getActiveReviewPage(cache), 'diagnostic'), false);
+  assert.equal(core.getActiveReviewPage(cache).reviews.at(-2).initial.text, defaultPage2[0].initial.text);
+  const changedIdentity = clone(defaultPage2);
+  changedIdentity[0].id = 'different-page-root';
+  cache = core.applyNativeReviewBatch(cache, nativeReviewBatch(fixture.itemId, 2, changedIdentity));
   assert.equal(core.getActiveReviewPage(cache).diagnostic, 'page-conflict');
   const photos = nativeReviewBatch(fixture.itemId, 1, ssrPage.reviews.slice(0, 1), { filters: [1] });
   cache = core.applyNativeReviewBatch(cache, photos);
@@ -3441,7 +3453,7 @@ test('review cache keeps sort, SKU, Additional, and empty combined contexts inde
   assert.deepEqual(core.getActiveReviewPage(emptyConflict).reviews, []);
 });
 
-test('cross-page review dedupe keeps identical records, fails conflicts, and keeps equal text with distinct IDs', () => {
+test('cross-page root dedupe keeps first content and does not treat content variation as a conflict', () => {
   const fixture = loadFixture('reviews-ssr-1005009452926938.json');
   const records = core.normalizeReviewCandidate(fixture.widget.props.reviews.slice(0, 2), fixture.itemId);
   let cache = core.createReviewCache(fixture.itemId);
@@ -3454,8 +3466,9 @@ test('cross-page review dedupe keeps identical records, fails conflicts, and kee
   conflictCache = core.applyNativeReviewBatch(conflictCache, nativeReviewBatch(fixture.itemId, 1, records));
   conflictCache = core.applyNativeReviewBatch(conflictCache, nativeReviewBatch(fixture.itemId, 2, [conflict]));
   const conflicted = core.getActiveReviewPage(conflictCache);
-  assert.equal(conflicted.diagnostic, 'review-conflict');
-  assert.deepEqual(conflicted.reviews, []);
+  assert.equal(Object.hasOwn(conflicted, 'diagnostic'), false);
+  assert.equal(conflicted.loadedCount, 2);
+  assert.equal(conflicted.reviews[0].initial.text, records[0].initial.text);
 });
 
 test('review merge with a page gap exports only the contiguous prefix until the gap is filled', () => {

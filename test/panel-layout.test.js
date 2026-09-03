@@ -66,9 +66,10 @@ test('desktop toggles update only the desktop collapse preference', () => {
   assert.equal(core.panelCollapsedPreferenceToPersist(state), null);
 });
 
-test('product action contract keeps exactly six unique existing identities and labels', () => {
+test('product action contract adds one workflow before the six existing identities and labels', () => {
   const actions = core.PRODUCT_PANEL_CONTRACT.actions;
   assert.deepEqual(actions.map(({ id, label }) => [id, label]), [
+    ['review-workflow', 'Collect reviews for ChatGPT'],
     ['chatgpt', 'Copy product for ChatGPT'],
     ['product', 'Copy product JSON'],
     ['variants', 'Copy variants'],
@@ -76,16 +77,16 @@ test('product action contract keeps exactly six unique existing identities and l
     ['clean-url', 'Copy clean URL'],
     ['market', 'RU / COM'],
   ]);
-  assert.equal(actions.length, 6);
-  assert.equal(new Set(actions.map(({ id }) => id)).size, 6);
-  assert.deepEqual(actions.filter(({ primary }) => primary).map(({ id }) => id), ['chatgpt']);
+  assert.equal(actions.length, 7);
+  assert.equal(new Set(actions.map(({ id }) => id)).size, 7);
+  assert.deepEqual(actions.filter(({ primary }) => primary).map(({ id }) => id), ['review-workflow']);
 });
 
 test('product-data gate remains limited to product, variants, ChatGPT, and description', () => {
   const gated = core.PRODUCT_PANEL_CONTRACT.actions
     .filter(({ requiresProduct }) => requiresProduct)
     .map(({ id }) => id);
-  assert.deepEqual(gated, ['chatgpt', 'product', 'variants', 'description']);
+  assert.deepEqual(gated, ['review-workflow', 'chatgpt', 'product', 'variants', 'description']);
   assert.equal(core.PRODUCT_PANEL_CONTRACT.actions.find(({ id }) => id === 'clean-url').requiresProduct, false);
   assert.equal(core.PRODUCT_PANEL_CONTRACT.actions.find(({ id }) => id === 'market').requiresProduct, false);
 });
@@ -94,7 +95,7 @@ test('Product renders two captionless accessible clusters in exact DOM and focus
   assert.deepEqual(
     core.PRODUCT_PANEL_GROUPS.map(({ id, ariaLabel, actionIds }) => [id, ariaLabel, actionIds]),
     [
-      ['export', 'Product export', ['chatgpt', 'product', 'variants', 'description']],
+      ['export', 'Product export', ['review-workflow', 'chatgpt', 'product', 'variants', 'description']],
       ['quick', 'Quick actions', ['clean-url', 'market']],
     ],
   );
@@ -106,6 +107,7 @@ test('Product renders two captionless accessible clusters in exact DOM and focus
   assert.deepEqual(
     core.PRODUCT_PANEL_CONTRACT.actions.map(({ id, desktopWide }) => [id, desktopWide]),
     [
+      ['review-workflow', true],
       ['chatgpt', true],
       ['product', false],
       ['variants', false],
@@ -117,13 +119,15 @@ test('Product renders two captionless accessible clusters in exact DOM and focus
   const html = core.renderProductActionGroups();
   assert.deepEqual(
     [...html.matchAll(/data-action="([^"]+)"/g)].map((match) => match[1]),
-    ['chatgpt', 'product', 'variants', 'description', 'clean-url', 'market'],
+    ['review-workflow', 'chatgpt', 'product', 'variants', 'description', 'clean-url', 'market'],
   );
   assert.equal((html.match(/role="group"/g) || []).length, 2);
   assert.match(html, /class="action-group action-group-export" data-action-group="export" role="group" aria-label="Product export"/);
   assert.match(html, /class="action-group action-group-quick" data-action-group="quick" role="group" aria-label="Quick actions"/);
   assert.doesNotMatch(html, /<h[1-6]\b|group-label|>\s*Quick actions\s*<|>\s*Product export\s*</);
-  assert.match(html, /class="wide primary" data-action="chatgpt"/);
+  assert.match(html, /class="wide primary" data-action="review-workflow"/);
+  assert.match(html, /class="wide" data-action="chatgpt"/);
+  assert.match(html, /data-action="review-workflow" aria-label="Open Reviews and prepare bounded collection; explicitly start automatic collection on the Reviews page\."/);
   assert.match(html, /class="wide" data-action="description"/);
   assert.doesNotMatch(html, /class="[^"]*wide[^"]*" data-action="(?:product|variants|clean-url|market)"/);
   const productStart = source.indexOf('function createPanel(runtime)');
@@ -147,7 +151,7 @@ test('Product actions precede disclosures in the same order used by keyboard nav
   const renderedActions = core.renderProductActionGroups();
   const focusOrder = [...renderedActions.matchAll(/<button[^>]*data-action="([^"]+)"/g)]
     .map((match) => match[1]);
-  assert.deepEqual(focusOrder, ['chatgpt', 'product', 'variants', 'description', 'clean-url', 'market']);
+  assert.deepEqual(focusOrder, ['review-workflow', 'chatgpt', 'product', 'variants', 'description', 'clean-url', 'market']);
   assert.ok(productSource.indexOf('renderProductActionGroups(false)') < productSource.indexOf('data-section-disclosure hidden'));
   assert.ok(productSource.indexOf('data-section-disclosure hidden') < productSource.indexOf('data-product-settings'));
 });
@@ -221,7 +225,7 @@ test('responsive transitions retain one state and one unchanged action contract'
     state = core.setPanelLayoutViewport(state, width);
     assert.deepEqual(Object.keys(state).sort(), ['desktopCollapsed', 'mode', 'narrowCollapsed']);
     assert.equal(core.PRODUCT_PANEL_CONTRACT.actions, actions);
-    assert.equal(new Set(actions.map(({ id }) => id)).size, 6);
+    assert.equal(new Set(actions.map(({ id }) => id)).size, 7);
   }
 
   const bindStart = source.indexOf('function bindResponsivePanel');
@@ -376,9 +380,11 @@ test('panel builders contain no request-producing or purchase-control behavior',
   const reviewActions = [...source.slice(reviewsStart, reviewsEnd).matchAll(/action === '([^']+)'/g)]
     .map((match) => match[1]);
   assert.deepEqual(productActions, [
-    'language', 'toggle', 'clean-url', 'market', 'product', 'variants', 'chatgpt', 'description', 'shipping-debug',
+    'language', 'toggle', 'clean-url', 'market', 'review-workflow', 'product', 'variants', 'chatgpt', 'description', 'shipping-debug',
   ]);
-  assert.deepEqual(reviewActions, ['language', 'toggle', 'reviews', 'reviews-chatgpt']);
+  assert.deepEqual(reviewActions, [
+    'language', 'toggle', 'review-workflow-start', 'review-workflow-cancel', 'review-workflow-copy', 'reviews', 'reviews-chatgpt',
+  ]);
 });
 
 test('each existing Product action keeps exactly one original handler mapping', () => {
@@ -416,5 +422,5 @@ test('shared shell is neutral, status is live but lightweight, and footer brandi
   assert.equal((source.match(/role="status" aria-live="polite" aria-atomic="true"/g) || []).length, 2);
   assert.equal((source.match(/href="https:\/\/bigbensoft\.com\/"/g) || []).length, 2);
   assert.equal((source.match(/target="_blank" rel="noopener noreferrer">bigbensoft\.com<\/a>/g) || []).length, 2);
-  assert.equal(core.VERSION, '0.1.27');
+  assert.equal(core.VERSION, '0.1.28');
 });

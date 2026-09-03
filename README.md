@@ -1,6 +1,6 @@
 # Ali Helper
 
-Минимальный read-only Tampermonkey userscript для страниц товаров AliExpress. Текущая итерация очищает и переключает URL, перехватывает `productData`, строит единую модель вариантов/SKU и копирует данные в обычном или ChatGPT-friendly виде.
+Минимальный Tampermonkey userscript для страниц товаров и отзывов AliExpress. Он очищает и переключает URL, перехватывает уже загружаемые данные, строит единую модель вариантов/SKU, поддерживает ограниченный сбор Reviews и копирует данные в обычном или ChatGPT-friendly виде.
 
 ## Установка
 
@@ -8,7 +8,7 @@
 2. Вставьте содержимое файла целиком и сохраните.
 3. Откройте страницу вида `https://aliexpress.ru/item/ITEM_ID.html`.
 
-Скрипт не покупает, не добавляет в корзину, не отправляет сообщения и не изменяет аккаунт. Он только читает уже загружаемые страницей данные, копирует текст и выполняет явную навигацию RU/COM.
+Скрипт не покупает, не добавляет в корзину, не отправляет сообщения и не изменяет аккаунт. Он читает загружаемые страницей данные, копирует текст, выполняет только явную навигацию RU/COM или Product → Reviews и после отдельного подтверждения может ограниченно прокручивать документ Reviews.
 
 ## Язык интерфейса
 
@@ -20,7 +20,25 @@ Ali Helper поддерживает английский и русский ин�
 
 `EN/RU` меняет только интерфейс helper. Product action `RU / COM` независимо
 переключает рынок AliExpress. Язык интерфейса не меняет Product/Reviews exports,
-не добавляет сбор Reviews и не создаёт дополнительный network traffic.
+не запускает, не перезапускает, не продлевает и не изменяет сбор Reviews; само
+переключение языка не создаёт network traffic.
+
+## Ограниченный сбор Reviews в 0.1.28
+
+Workflow намеренно требует два явных клика:
+
+1. На Product нажмите `Collect reviews for ChatGPT` / `Собрать отзывы для ChatGPT`. Helper сохраняет ограниченный Product snapshot и один раз открывает соответствующий Reviews route в той же вкладке.
+2. На Reviews нажмите `Start review collection` / `Начать сбор отзывов`. Только этот второй клик разрешает автоматическую прокрутку Reviews.
+
+Открытие, восстановление или reload Reviews сами по себе никогда не запускают
+прокрутку. Helper не формирует и не отправляет прямые Review API requests. После
+второго клика bounded document scroll может вызвать native Review requests самой
+страницы AliExpress. Сбор можно отменить; максимум — 9 helper scroll activations,
+15 секунд на шаг и до 120 секунд на автоматический run в пределах срока handoff.
+Retention presets: 10/30/50/100, по умолчанию 30; coverage может быть частичным.
+
+Combined Product + Reviews export записывается в clipboard только после
+отдельного явного copy action и сам не вызывает Review requests или прокрутку.
 
 ## Архитектура первой итерации
 
@@ -28,6 +46,7 @@ Ali Helper поддерживает английский и русский ин�
 - `Sources`: перехват `fetch`/XHR `productData` на `document-start`; затем SSR JSON и React props как fallback.
 - `Normalize`: единая модель `product`; комбинации берутся только из `priceList`, а значения связываются через `skuPropIds`.
 - `Export`: отдельные чистые форматтеры для вариантов и ChatGPT — без зависимости от DOM.
+- `Reviews`: двухкликовый bounded workflow использует только document scroll и native AliExpress Review requests, без собственного sender.
 - `UI`: изолированная floating panel в Shadow DOM; настройки хранятся через Tampermonkey storage.
 
 ## Проверка

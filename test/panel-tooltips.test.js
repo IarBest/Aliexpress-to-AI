@@ -136,6 +136,7 @@ test('tooltip copy is result-oriented and the delay is fixed at 1300ms', () => {
   assert.deepEqual(
     core.PRODUCT_PANEL_CONTRACT.actions.map(({ id, tooltip }) => [id, tooltip]),
     [
+      ['review-workflow', 'Opens Reviews and prepares bounded collection. Start the automatic collection on the Reviews page.'],
       ['chatgpt', 'Copies a concise product summary ready to paste into ChatGPT.'],
       ['product', 'Copies the normalized product data as JSON.'],
       ['variants', 'Copies every real SKU combination in a readable text export.'],
