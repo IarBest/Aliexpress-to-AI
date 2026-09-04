@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ali Helper
 // @namespace    https://github.com/local/ali-helper
-// @version      0.1.28
+// @version      0.1.29
 // @description  Read-only AliExpress URL cleaner and product/variant exporter
 // @description:ru Помощник AliExpress только для чтения: очистка URL и экспорт товара и вариантов
 // @match        https://aliexpress.ru/item/*
@@ -19,11 +19,12 @@
 (function factory(root) {
   'use strict';
 
-  const VERSION = '0.1.28';
+  const VERSION = '0.1.29';
   const SETTINGS_KEY = 'ali-helper:settings:v1';
   const REVIEW_WORKFLOW_STORAGE_KEY = 'ali-helper:review-workflow:v1';
   const REVIEW_WORKFLOW_VERSION = 1;
   const REVIEW_WORKFLOW_TTL_MS = 15 * 60 * 1000;
+  const REVIEW_WORKFLOW_AUTO_START_WINDOW_MS = 60 * 1000;
   const REVIEW_WORKFLOW_PRODUCT_TEXT_MAX_BYTES = 256 * 1024;
   const REVIEW_WORKFLOW_STEP_TIMEOUT_MS = 15 * 1000;
   const REVIEW_WORKFLOW_TOTAL_TIMEOUT_MS = 120 * 1000;
@@ -76,6 +77,8 @@
   const PRODUCT_BOUGHT_COUNT_SELECTOR = '[class*="HazeProductDescription__buyCounter"]';
   const REVIEW_ANCHOR_SELECTOR = '#reviews_anchor';
   const REVIEW_TABS_SELECTOR = '[class*="RedReviewsTabs__desktop__"]';
+  const REVIEW_STANDALONE_ROOT_SELECTOR = '[class*="RedReviewsProductFeedbackList_RedReviewsProductFeedbackList__reviewList__"]';
+  const REVIEW_STANDALONE_LIST_SELECTOR = '[class*="RedReviewsProductFeedbackList_ReviewList__reviewList__"]';
   const REVIEW_RATING_ROOT_SELECTOR = '[class*="GlowReviewsProductRating_MainSection__mainSection__"]';
   const REVIEW_GRADE_GROUP_SELECTOR = '[class*="GlowReviewsProductRating_AdditionalSection__grade__"]';
   const REVIEW_COUNT_GROUP_SELECTOR = '[class*="GlowReviewsProductRating_AdditionalSection__gradeCount__"]';
@@ -111,7 +114,7 @@
       'panel.collapse': 'Collapse Ali Helper panel.',
       'language.aria': 'Interface language: English. Switch to Russian.',
       'language.tooltip': 'Switch the Ali Helper interface to Russian.',
-      'action.reviewWorkflow': 'Collect reviews for ChatGPT',
+      'action.reviewWorkflow': 'Collect product + reviews for ChatGPT',
       'action.productChatgpt': 'Copy product for ChatGPT',
       'action.productJson': 'Copy product JSON',
       'action.variants': 'Copy variants',
@@ -121,8 +124,8 @@
       'action.reviewsJson': 'Copy reviews JSON',
       'action.reviewsChatgpt': 'Copy reviews for ChatGPT',
       'action.shippingDebug': 'Copy shipping debug',
-      'tooltip.reviewWorkflow': 'Opens Reviews and prepares bounded collection. Start the automatic collection on the Reviews page.',
-      'aria.reviewWorkflow': 'Open Reviews and prepare bounded collection; explicitly start automatic collection on the Reviews page.',
+      'tooltip.reviewWorkflow': 'Collects the product and bounded Reviews for a combined ChatGPT export.',
+      'aria.reviewWorkflow': 'Collect product and bounded Reviews for a combined ChatGPT export.',
       'tooltip.productChatgpt': 'Copies a concise product summary ready to paste into ChatGPT.',
       'tooltip.productJson': 'Copies the normalized product data as JSON.',
       'tooltip.variants': 'Copies every real SKU combination in a readable text export.',
@@ -158,8 +161,6 @@
       'diagnostic.schemaMismatch': 'schema-mismatch',
       'diagnostic.traversalLimit': 'traversal-limit',
       'diagnostic.reviewConflict': 'review-conflict',
-      'product.waiting': 'Waiting for productData…',
-      'product.changedWaiting': 'Product changed; waiting for productData…',
       'product.normalizationFailed': 'productData found but normalization failed: {error}',
       'product.notFound': 'productData not found yet. Reload the page with Ali Helper enabled; SSR contains no SKU data.',
       'settings.title': 'Settings',
@@ -176,7 +177,7 @@
       'workflow.product.storageFailed': 'Review collection could not start because the temporary Product handoff could not be saved.',
       'workflow.product.navigationFailed': 'Review collection could not open the Reviews page: {error}',
       'settings.saved': 'Settings saved.',
-      'footer.safety': 'Read/copy/navigation only · v{version}',
+      'footer.safety': 'Read/copy/navigation/scroll · v{version}',
       'reviews.waiting': 'Waiting for first-page SSR reviews…',
       'reviews.settings.title': 'Review settings',
       'reviews.retention.label': 'Passive review retention per context',
@@ -214,6 +215,7 @@
       'workflow.cancel': 'Cancel collection',
       'workflow.copyCombined': 'Copy product & reviews for ChatGPT',
       'workflow.copyPartial': 'Copy partial result for ChatGPT',
+      'workflow.copyCurrent': 'Copy product + current reviews for ChatGPT',
       'workflow.copySuccess': 'Product and reviews copied for ChatGPT.',
       'workflow.waiting': 'Waiting for the first Review context…',
       'workflow.endObserved': 'End of Reviews observed · {count} retained.',
@@ -226,6 +228,7 @@
       'workflow.itemChanged': 'Collection stopped because the Reviews item changed. The current result may be partial.',
       'workflow.documentHidden': 'Collection stopped because the document became hidden. The current result may be partial.',
       'workflow.scrollOwner': 'Collection stopped because the Review scroll owner could not be verified safely. The current result may be partial.',
+      'workflow.scrollOwnerBeforeStart': 'Automatic review scrolling could not start. The current Reviews can still be copied.',
       'workflow.nativeActivity': 'Collection stopped because native Review activity could not be correlated safely. The current result may be partial.',
       'workflow.nativeCascade': 'Collection stopped because multiple native Review requests followed one helper scroll. The current result may be partial.',
       'workflow.cancelled': 'Collection stopped. The current partial result can be copied.',
@@ -243,7 +246,7 @@
       'panel.collapse': 'Свернуть панель Ali Helper.',
       'language.aria': 'Язык интерфейса: русский. Переключить на английский.',
       'language.tooltip': 'Переключить интерфейс Ali Helper на английский.',
-      'action.reviewWorkflow': 'Собрать отзывы для ChatGPT',
+      'action.reviewWorkflow': 'Собрать товар + отзывы для ChatGPT',
       'action.productChatgpt': 'Скопировать товар для ChatGPT',
       'action.productJson': 'JSON товара',
       'action.variants': 'Варианты',
@@ -253,8 +256,8 @@
       'action.reviewsJson': 'Скопировать отзывы в JSON',
       'action.reviewsChatgpt': 'Скопировать отзывы для ChatGPT',
       'action.shippingDebug': 'Скопировать диагностику доставки',
-      'tooltip.reviewWorkflow': 'Открывает отзывы и подготавливает ограниченный сбор. Автоматический сбор запускается на странице отзывов.',
-      'aria.reviewWorkflow': 'Открыть отзывы и подготовить ограниченный сбор; явно запустить автоматический сбор на странице отзывов.',
+      'tooltip.reviewWorkflow': 'Собирает товар и ограниченный набор отзывов для объединённого экспорта в ChatGPT.',
+      'aria.reviewWorkflow': 'Собрать товар и ограниченный набор отзывов для объединённого экспорта в ChatGPT.',
       'tooltip.productChatgpt': 'Копирует краткую сводку о товаре, готовую для вставки в ChatGPT.',
       'tooltip.productJson': 'Копирует данные товара в формате JSON.',
       'tooltip.variants': 'Копирует все реальные комбинации SKU в удобном текстовом формате.',
@@ -290,8 +293,6 @@
       'diagnostic.schemaMismatch': 'неподдерживаемый формат данных',
       'diagnostic.traversalLimit': 'достигнут предел безопасной проверки',
       'diagnostic.reviewConflict': 'конфликт данных отзывов',
-      'product.waiting': 'Ожидание данных о товаре…',
-      'product.changedWaiting': 'Товар изменился; ожидаем данные…',
       'product.normalizationFailed': 'Данные товара получены, но их не удалось обработать: {error}',
       'product.notFound': 'Данные товара пока не найдены. Перезагрузите страницу с включённым Ali Helper; в данных страницы нет SKU.',
       'settings.title': 'Настройки',
@@ -308,7 +309,7 @@
       'workflow.product.storageFailed': 'Не удалось начать сбор отзывов: временные данные товара не удалось сохранить.',
       'workflow.product.navigationFailed': 'Не удалось открыть страницу отзывов: {error}',
       'settings.saved': 'Настройки сохранены.',
-      'footer.safety': 'Только чтение, копирование и переходы · v{version}',
+      'footer.safety': 'Чтение/копирование/переходы/прокрутка · v{version}',
       'reviews.waiting': 'Ожидание первой страницы отзывов…',
       'reviews.settings.title': 'Настройки отзывов',
       'reviews.retention.label': 'Лимит отзывов для каждого набора фильтров',
@@ -346,6 +347,7 @@
       'workflow.cancel': 'Отменить сбор',
       'workflow.copyCombined': 'Скопировать товар и отзывы для ChatGPT',
       'workflow.copyPartial': 'Скопировать неполный результат для ChatGPT',
+      'workflow.copyCurrent': 'Скопировать товар + текущие отзывы для ChatGPT',
       'workflow.copySuccess': 'Товар и отзывы для ChatGPT скопированы.',
       'workflow.waiting': 'Ожидание первого набора отзывов…',
       'workflow.endObserved': 'Обнаружен конец отзывов · Сохранено: {count}.',
@@ -358,6 +360,7 @@
       'workflow.itemChanged': 'Сбор остановлен из-за смены товара на странице отзывов. Текущий результат может быть неполным.',
       'workflow.documentHidden': 'Сбор остановлен, потому что вкладка стала невидимой. Текущий результат может быть неполным.',
       'workflow.scrollOwner': 'Сбор остановлен: не удалось безопасно подтвердить область прокрутки отзывов. Текущий результат может быть неполным.',
+      'workflow.scrollOwnerBeforeStart': 'Не удалось запустить автоматическую прокрутку отзывов. Текущие отзывы всё равно можно скопировать.',
       'workflow.nativeActivity': 'Сбор остановлен: нативную активность отзывов не удалось безопасно связать с автопрокруткой. Текущий результат может быть неполным.',
       'workflow.nativeCascade': 'Сбор остановлен: после одной автопрокрутки началось несколько нативных запросов отзывов. Текущий результат может быть неполным.',
       'workflow.cancelled': 'Сбор остановлен. Текущий неполный результат можно скопировать.',
@@ -457,11 +460,11 @@
   const PRODUCT_PANEL_ACTIONS = Object.freeze([
     {
       id: 'review-workflow',
-      label: 'Collect reviews for ChatGPT',
+      label: 'Collect product + reviews for ChatGPT',
       labelKey: 'action.reviewWorkflow',
-      tooltip: 'Opens Reviews and prepares bounded collection. Start the automatic collection on the Reviews page.',
+      tooltip: 'Collects the product and bounded Reviews for a combined ChatGPT export.',
       tooltipKey: 'tooltip.reviewWorkflow',
-      ariaLabel: 'Open Reviews and prepare bounded collection; explicitly start automatic collection on the Reviews page.',
+      ariaLabel: 'Collect product and bounded Reviews for a combined ChatGPT export.',
       ariaLabelKey: 'aria.reviewWorkflow',
       requiresProduct: true,
       desktopWide: true,
@@ -1485,15 +1488,22 @@
 
   function createReviewWorkflowHandoff(input) {
     const startedAt = input?.startedAt;
+    const expiresAt = Number.isSafeInteger(startedAt)
+      && startedAt <= Number.MAX_SAFE_INTEGER - REVIEW_WORKFLOW_TTL_MS
+      ? startedAt + REVIEW_WORKFLOW_TTL_MS
+      : null;
     const record = {
       version: REVIEW_WORKFLOW_VERSION,
       workflowId: input?.workflowId,
-      phase: 'pending-confirmation',
+      phase: 'pending-auto-start',
       itemId: input?.itemId,
       originProductUrl: input?.originProductUrl,
       originSelectedSkuId: input?.originSelectedSkuId ?? null,
       startedAt,
-      expiresAt: startedAt + REVIEW_WORKFLOW_TTL_MS,
+      autoStartUntil: Number.isSafeInteger(expiresAt)
+        ? Math.min(startedAt + REVIEW_WORKFLOW_AUTO_START_WINDOW_MS, expiresAt)
+        : null,
+      expiresAt,
       productChatgptText: input?.productChatgptText,
     };
     return validateReviewWorkflowHandoff(record, input?.reviewsUrl, startedAt).record;
@@ -1503,12 +1513,12 @@
     const result = { record: null, reason: 'invalid' };
     if (!isStrictPlainObject(value)) return result;
     const expectedKeys = [
-      'expiresAt', 'itemId', 'originProductUrl', 'originSelectedSkuId', 'phase',
+      'autoStartUntil', 'expiresAt', 'itemId', 'originProductUrl', 'originSelectedSkuId', 'phase',
       'productChatgptText', 'startedAt', 'version', 'workflowId',
     ];
     if (Object.keys(value).sort().join('\n') !== expectedKeys.join('\n')
       || value.version !== REVIEW_WORKFLOW_VERSION
-      || (value.phase !== 'pending-confirmation' && value.phase !== 'active'
+      || (value.phase !== 'pending-auto-start' && value.phase !== 'active'
         && !REVIEW_WORKFLOW_TERMINAL_PHASES.includes(value.phase))
       || typeof value.workflowId !== 'string' || !/^[A-Za-z0-9-]{8,128}$/.test(value.workflowId)
       || !isBoundedAliExpressId(value.itemId)
@@ -1517,10 +1527,16 @@
         && !isBoundedAliExpressId(value.originSelectedSkuId))
       || typeof value.productChatgptText !== 'string'
       || !Number.isSafeInteger(value.startedAt) || value.startedAt < 0
+      || !Number.isSafeInteger(value.autoStartUntil) || value.autoStartUntil < 0
       || !Number.isSafeInteger(value.expiresAt) || value.expiresAt < 0
       || !Number.isSafeInteger(now) || now < 0
       || value.expiresAt <= value.startedAt
       || value.expiresAt - value.startedAt > REVIEW_WORKFLOW_TTL_MS
+      || value.autoStartUntil !== Math.min(
+        value.startedAt + REVIEW_WORKFLOW_AUTO_START_WINDOW_MS,
+        value.expiresAt,
+      )
+      || value.autoStartUntil <= value.startedAt
       || value.startedAt > now
       || utf8ByteLength(value.productChatgptText) > REVIEW_WORKFLOW_PRODUCT_TEXT_MAX_BYTES) return result;
     try {
@@ -1580,29 +1596,38 @@
     try {
       raw = storage?.getItem?.(REVIEW_WORKFLOW_STORAGE_KEY);
     } catch (_) {
-      return { present: false, record: null, requiresUserStart: false, reason: 'storage-read-failed' };
+      return {
+        present: false, record: null, requiresAutoStart: false, requiresUserStart: false, reason: 'storage-read-failed',
+      };
     }
     if (raw === null || raw === undefined) {
-      return { present: false, record: null, requiresUserStart: false, reason: null };
+      return {
+        present: false, record: null, requiresAutoStart: false, requiresUserStart: false, reason: null,
+      };
     }
     let parsed;
     try { parsed = JSON.parse(raw); } catch (_) { parsed = null; }
     const validation = validateReviewWorkflowHandoff(parsed, reviewsUrl, now);
     if (!validation.record) {
-      if (isStrictPlainObject(parsed) && parsed.phase === 'pending-confirmation') {
+      if (isStrictPlainObject(parsed) && parsed.phase === 'pending-auto-start') {
         terminalizeReviewWorkflowHandoff(storage, parsed, 'aborted');
       }
       removeReviewWorkflowHandoff(storage);
-      return { present: true, record: null, requiresUserStart: false, reason: validation.reason };
+      return {
+        present: true, record: null, requiresAutoStart: false, requiresUserStart: false, reason: validation.reason,
+      };
     }
     if (REVIEW_WORKFLOW_TERMINAL_PHASES.includes(validation.record.phase)) {
       removeReviewWorkflowHandoff(storage);
-      return { present: true, record: null, requiresUserStart: false, reason: 'terminal' };
+      return {
+        present: true, record: null, requiresAutoStart: false, requiresUserStart: false, reason: 'terminal',
+      };
     }
     if (validation.record.phase === 'active') {
       return {
         present: true,
         record: validation.record,
+        requiresAutoStart: false,
         requiresUserStart: false,
         reason: 'reload-interrupted',
       };
@@ -1610,14 +1635,15 @@
     return {
       present: true,
       record: validation.record,
-      requiresUserStart: true,
+      requiresAutoStart: now < validation.record.autoStartUntil,
+      requiresUserStart: now >= validation.record.autoStartUntil,
       reason: null,
     };
   }
 
   function activateReviewWorkflowHandoff(storage, pendingHandoff, reviewsUrl, now = Date.now()) {
     const validation = validateReviewWorkflowHandoff(pendingHandoff, reviewsUrl, now);
-    if (!validation.record || validation.record.phase !== 'pending-confirmation') {
+    if (!validation.record || validation.record.phase !== 'pending-auto-start') {
       return { ok: false, record: null, reason: validation.reason || 'not-pending' };
     }
     let storedRaw;
@@ -1625,7 +1651,7 @@
       storedRaw = storage?.getItem?.(REVIEW_WORKFLOW_STORAGE_KEY);
       const stored = JSON.parse(storedRaw);
       const storedValidation = validateReviewWorkflowHandoff(stored, reviewsUrl, now);
-      if (!storedValidation.record || storedValidation.record.phase !== 'pending-confirmation'
+      if (!storedValidation.record || storedValidation.record.phase !== 'pending-auto-start'
         || JSON.stringify(storedValidation.record) !== JSON.stringify(validation.record)) {
         return { ok: false, record: null, reason: 'pending-readback-mismatch' };
       }
@@ -3244,29 +3270,7 @@
     ].join('\n');
   }
 
-  function inspectReviewsScrollBoundary(documentLike, getComputedStyleLike) {
-    let boundary;
-    try {
-      if (typeof documentLike?.querySelector !== 'function') {
-        return { status: 'uncertain', owner: null, reason: 'reviews-root-unavailable' };
-      }
-      boundary = documentLike.querySelector(REVIEW_ANCHOR_SELECTOR)
-        || documentLike.querySelector(REVIEW_TABS_SELECTOR);
-    } catch (_) {
-      return { status: 'uncertain', owner: null, reason: 'reviews-root-unavailable' };
-    }
-    if (!boundary) return { status: 'uncertain', owner: null, reason: 'reviews-root-unavailable' };
-    if (typeof getComputedStyleLike !== 'function') {
-      return { status: 'uncertain', owner: null, reason: 'reviews-style-unavailable' };
-    }
-    let scrollingElement;
-    try { scrollingElement = documentLike.scrollingElement; }
-    catch (_) {
-      return { status: 'uncertain', owner: null, reason: 'reviews-owner-ambiguous' };
-    }
-    if (!scrollingElement) {
-      return { status: 'uncertain', owner: null, reason: 'reviews-owner-ambiguous' };
-    }
+  function inspectReviewScrollBoundary(boundary, scrollingElement, getComputedStyleLike) {
     let element = boundary;
     const seen = new Set();
     while (element && element !== scrollingElement) {
@@ -3303,6 +3307,89 @@
     }
     if (element !== scrollingElement) {
       return { status: 'uncertain', owner: null, reason: 'reviews-owner-ambiguous' };
+    }
+    return { status: 'document', owner: scrollingElement, reason: null };
+  }
+
+  function inspectReviewsScrollBoundary(documentLike, getComputedStyleLike) {
+    let boundaries = [];
+    try {
+      if (typeof documentLike?.querySelector !== 'function') {
+        return { status: 'uncertain', owner: null, reason: 'reviews-root-unavailable' };
+      }
+      const queryAll = (selector) => {
+        if (typeof documentLike.querySelectorAll === 'function') {
+          return Array.from(documentLike.querySelectorAll(selector));
+        }
+        const match = documentLike.querySelector(selector);
+        return match ? [match] : [];
+      };
+      for (const selector of [REVIEW_ANCHOR_SELECTOR, REVIEW_TABS_SELECTOR]) {
+        for (const embeddedBoundary of queryAll(selector)) {
+          if (embeddedBoundary?.isConnected === false) {
+            return { status: 'uncertain', owner: null, reason: 'reviews-root-unavailable' };
+          }
+          if (!boundaries.includes(embeddedBoundary)) boundaries.push(embeddedBoundary);
+        }
+      }
+      const standaloneRoots = queryAll(REVIEW_STANDALONE_ROOT_SELECTOR);
+      const standaloneLists = queryAll(REVIEW_STANDALONE_LIST_SELECTOR);
+      if (standaloneRoots.length || standaloneLists.length) {
+        if (standaloneRoots.length !== 1 || standaloneLists.length !== 1) {
+          return { status: 'uncertain', owner: null, reason: 'reviews-owner-ambiguous' };
+        }
+        const [standaloneRoot] = standaloneRoots;
+        const [standaloneList] = standaloneLists;
+        if (standaloneRoot?.isConnected === false || standaloneList?.isConnected === false) {
+          return { status: 'uncertain', owner: null, reason: 'reviews-root-unavailable' };
+        }
+        let containsList = false;
+        if (typeof standaloneRoot?.contains === 'function') {
+          containsList = standaloneRoot.contains(standaloneList);
+        } else {
+          const seen = new Set();
+          let candidate = standaloneList;
+          while (candidate && !seen.has(candidate)) {
+            if (candidate === standaloneRoot) {
+              containsList = true;
+              break;
+            }
+            seen.add(candidate);
+            candidate = candidate.parentElement;
+          }
+        }
+        if (!containsList) {
+          return { status: 'uncertain', owner: null, reason: 'reviews-owner-ambiguous' };
+        }
+        if (!boundaries.includes(standaloneList)) boundaries.push(standaloneList);
+        if (!boundaries.includes(standaloneRoot)) boundaries.push(standaloneRoot);
+      }
+    } catch (_) {
+      return { status: 'uncertain', owner: null, reason: 'reviews-root-unavailable' };
+    }
+    if (!boundaries.length) {
+      return { status: 'uncertain', owner: null, reason: 'reviews-root-unavailable' };
+    }
+    if (typeof getComputedStyleLike !== 'function') {
+      return { status: 'uncertain', owner: null, reason: 'reviews-style-unavailable' };
+    }
+    let scrollingElement;
+    try { scrollingElement = documentLike.scrollingElement; }
+    catch (_) {
+      return { status: 'uncertain', owner: null, reason: 'reviews-owner-ambiguous' };
+    }
+    if (!scrollingElement) {
+      return { status: 'uncertain', owner: null, reason: 'reviews-owner-ambiguous' };
+    }
+    for (const boundary of boundaries) {
+      const inspection = inspectReviewScrollBoundary(
+        boundary,
+        scrollingElement,
+        getComputedStyleLike,
+      );
+      if (inspection.status !== 'document' || inspection.owner !== scrollingElement) {
+        return inspection;
+      }
     }
     return { status: 'document', owner: scrollingElement, reason: null };
   }
@@ -3410,7 +3497,10 @@
     const timers = options.timers || globalThis;
     const handoff = options.handoff;
     const restoredActive = handoff?.phase === 'active';
-    let phase = restoredActive ? 'ready' : 'pending-confirmation';
+    const autoStartPending = !restoredActive && options.autoStart === true;
+    let phase = restoredActive
+      ? 'ready'
+      : (autoStartPending ? 'pending-auto-start' : 'pending-manual-start');
     let coverage = restoredActive ? 'partial-reload-interrupted' : null;
     let stopReason = restoredActive ? 'reload-interrupted' : null;
     let runContextKey = null;
@@ -3438,7 +3528,7 @@
     let revision = 0;
     let copyPending = false;
     let currentReviewPage = null;
-    let explicitStartAuthorized = false;
+    let runAuthorized = false;
 
     const readNow = () => {
       try {
@@ -3489,7 +3579,11 @@
     };
     const view = () => {
       const effective = effectiveResult();
-      const message = phase === 'pending-confirmation'
+      const readyMessageKey = effective.coverage === 'partial-scroll-owner'
+        && scrollActivations === 0
+        ? 'workflow.scrollOwnerBeforeStart'
+        : workflowMessageForCoverage(effective.coverage);
+      const message = phase === 'pending-manual-start'
         ? createUiMessage('workflow.readyToStart')
         : (phase === 'waiting'
           ? createUiMessage('workflow.waiting')
@@ -3500,9 +3594,12 @@
               count: currentReviewPage?.loadedCount ?? retainedCount,
             })
             : (phase === 'ready' ? createUiMessage(
-              workflowMessageForCoverage(effective.coverage),
+              readyMessageKey,
               { count: effective.count },
             ) : null)));
+      const partial = Boolean(effective.coverage
+        && effective.coverage !== 'terminal-empty-page'
+        && effective.coverage !== 'cap-boundary');
       return {
         phase,
         coverage: effective.coverage,
@@ -3514,12 +3611,13 @@
         correlatedRequestStarts,
         correlatedNativeOutcomes,
         uncorrelatedNativeEvents,
-        canStart: phase === 'pending-confirmation',
-        canCancel: phase === 'pending-confirmation' || phase === 'waiting' || phase === 'running',
+        canStart: phase === 'pending-manual-start',
+        canCancel: phase === 'pending-manual-start' || phase === 'waiting' || phase === 'running',
         canCopy: phase === 'ready' && routeIsCurrent() && reviewPageIsExportable(currentReviewPage),
-        partial: Boolean(effective.coverage
-          && effective.coverage !== 'terminal-empty-page'
-          && effective.coverage !== 'cap-boundary'),
+        partial,
+        copyCurrentReviews: phase === 'ready'
+          && partial
+          && scrollActivations === 0,
         copyPending,
         message,
       };
@@ -3794,11 +3892,12 @@
 
     const observe = (cache, reviewPage, event = {}) => {
       if (phase === 'disposed' || phase === 'expired') return;
-      if (phase === 'ready' && explicitStartAuthorized && !runContextKey) return;
+      if (phase === 'ready' && runAuthorized && !runContextKey) return;
       if ((phase === 'waiting' || phase === 'running') && enforceAbsoluteDeadlines()) return;
       currentReviewPage = reviewPage || null;
       retainedCount = reviewPage?.loadedCount || 0;
-      if (phase === 'pending-confirmation') return notify();
+      if (phase === 'pending-auto-start' || phase === 'pending-manual-start'
+        || phase === 'starting') return notify();
       if (phase === 'ready') return notify();
       if (!routeIsCurrent()) return stop('partial-item-changed', 'item-changed');
       if (documentIsHidden()) return stop('partial-document-hidden', 'document-hidden');
@@ -3968,57 +4067,69 @@
       notify();
       return false;
     };
+    const startRun = (source) => {
+      const expectedPhase = source === 'auto-start'
+        ? 'pending-auto-start'
+        : 'pending-manual-start';
+      if (phase !== expectedPhase) return false;
+      phase = 'starting';
+      revision += 1;
+      const startAt = readNow();
+      if (startAt === null) return failBeforeScroll('partial-diagnostic', 'invalid-clock');
+      if (startAt >= handoff.expiresAt) {
+        expire();
+        return false;
+      }
+      if (source === 'auto-start' && startAt >= handoff.autoStartUntil) {
+        phase = 'pending-manual-start';
+        notify();
+        return false;
+      }
+      if (!routeIsCurrent()) return failBeforeScroll('partial-item-changed', 'item-changed');
+      if (documentIsHidden()) return failBeforeScroll('partial-document-hidden', 'document-hidden');
+      if (typeof handoff?.productChatgptText !== 'string') {
+        return failBeforeScroll('partial-diagnostic', 'missing-product-snapshot');
+      }
+      let activation;
+      try { activation = options.activateHandoff?.(startAt); }
+      catch (_) { activation = null; }
+      const expectedActive = { ...handoff, phase: 'active' };
+      if (!activation?.ok || activation.record?.phase !== 'active'
+        || JSON.stringify(activation.record) !== JSON.stringify(expectedActive)) {
+        return failBeforeScroll('partial-diagnostic', activation?.reason || 'active-persistence-failed');
+      }
+      runAuthorized = true;
+      totalDeadline = Math.min(
+        startAt + REVIEW_WORKFLOW_TOTAL_TIMEOUT_MS,
+        handoff.expiresAt,
+      );
+      phase = 'waiting';
+      coverage = null;
+      stopReason = null;
+      scheduleTotalDeadlineWake();
+      notify();
+      let cache;
+      try { cache = options.getCache(); }
+      catch (_) { return failBeforeScroll('partial-diagnostic', 'cache-unavailable'); }
+      observe(cache, getActiveReviewPage(cache), { source });
+      return true;
+    };
     const initialNow = readNow();
     if (initialNow === null) {
       failBeforeScroll('partial-diagnostic', 'invalid-clock');
     } else {
       scheduleExpiryWake();
+      if (autoStartPending) startRun('auto-start');
     }
     notify();
     return {
       get state() { return view(); },
       observe,
       start() {
-        if (phase !== 'pending-confirmation') return false;
-        phase = 'starting';
-        revision += 1;
-        const startAt = readNow();
-        if (startAt === null) return failBeforeScroll('partial-diagnostic', 'invalid-clock');
-        if (startAt >= handoff.expiresAt) {
-          expire();
-          return false;
-        }
-        if (!routeIsCurrent()) return failBeforeScroll('partial-item-changed', 'item-changed');
-        if (documentIsHidden()) return failBeforeScroll('partial-document-hidden', 'document-hidden');
-        if (typeof handoff?.productChatgptText !== 'string') {
-          return failBeforeScroll('partial-diagnostic', 'missing-product-snapshot');
-        }
-        let activation;
-        try { activation = options.activateHandoff?.(startAt); }
-        catch (_) { activation = null; }
-        const expectedActive = { ...handoff, phase: 'active' };
-        if (!activation?.ok || activation.record?.phase !== 'active'
-          || JSON.stringify(activation.record) !== JSON.stringify(expectedActive)) {
-          return failBeforeScroll('partial-diagnostic', activation?.reason || 'active-persistence-failed');
-        }
-        explicitStartAuthorized = true;
-        totalDeadline = Math.min(
-          startAt + REVIEW_WORKFLOW_TOTAL_TIMEOUT_MS,
-          handoff.expiresAt,
-        );
-        phase = 'waiting';
-        coverage = null;
-        stopReason = null;
-        scheduleTotalDeadlineWake();
-        notify();
-        let cache;
-        try { cache = options.getCache(); }
-        catch (_) { return failBeforeScroll('partial-diagnostic', 'cache-unavailable'); }
-        observe(cache, getActiveReviewPage(cache), { source: 'explicit-start' });
-        return true;
+        return startRun('manual-start');
       },
       cancel() {
-        if (phase === 'pending-confirmation') {
+        if (phase === 'pending-manual-start') {
           revision += 1;
           clearRunTimers();
           clearTimer('expiryTimer');
@@ -5999,6 +6110,7 @@
     REVIEW_WORKFLOW_STORAGE_KEY,
     REVIEW_WORKFLOW_VERSION,
     REVIEW_WORKFLOW_TTL_MS,
+    REVIEW_WORKFLOW_AUTO_START_WINDOW_MS,
     REVIEW_WORKFLOW_PRODUCT_TEXT_MAX_BYTES,
     REVIEW_WORKFLOW_STEP_TIMEOUT_MS,
     REVIEW_WORKFLOW_TOTAL_TIMEOUT_MS,
@@ -6827,7 +6939,7 @@
     statusController = createProductStatusController(status, {
       formatMessage: (message) => formatUiMessage(locale, message),
     });
-    statusController.showPersistent(createUiMessage('product.waiting'));
+    statusController.clear();
     autoRedirect.checked = runtime.settings.autoRedirectComToRu;
     shippingDebug.disabled = !runtime.shippingCapture;
 
@@ -6889,11 +7001,13 @@
     (document.body || document.documentElement).appendChild(host);
     return {
       setProduct(product) {
-        currentProduct = product;
+        currentProduct = product || null;
         productButtons.forEach((button) => {
-          button.disabled = button === reviewWorkflowButton && runtime.reviewWorkflowStarter?.started;
+          button.disabled = !currentProduct
+            || (button === reviewWorkflowButton && runtime.reviewWorkflowStarter?.started);
         });
-        renderProductSectionDisclosure(sectionDisclosure, product, locale);
+        if (currentProduct) renderProductSectionDisclosure(sectionDisclosure, currentProduct, locale);
+        else sectionDisclosure.hidden = true;
         statusController.clear();
       },
       setShippingCapture(capture) {
@@ -7005,7 +7119,7 @@
 
     function renderWorkflowView() {
       const visible = workflowView
-        && (workflowView.phase === 'pending-confirmation'
+        && (workflowView.phase === 'pending-manual-start'
           || workflowView.phase === 'waiting' || workflowView.phase === 'running'
           || workflowView.phase === 'ready');
       workflowRoot.hidden = !visible;
@@ -7028,9 +7142,9 @@
       workflowCancel.textContent = t(locale, 'workflow.cancel');
       workflowCopy.hidden = !workflowView.canCopy;
       workflowCopy.disabled = Boolean(workflowView.copyPending);
-      workflowCopy.textContent = t(locale, workflowView.partial
-        ? 'workflow.copyPartial'
-        : 'workflow.copyCombined');
+      workflowCopy.textContent = t(locale, workflowView.copyCurrentReviews
+        ? 'workflow.copyCurrent'
+        : (workflowView.partial ? 'workflow.copyPartial' : 'workflow.copyCombined'));
     }
 
     applyLocale(locale);
@@ -7151,6 +7265,7 @@
       reviewWorkflow: null,
       reviewLifecycleSubscription: null,
       visibilityHandler: null,
+      workflowDomReady: false,
       workflowNotice: restoredWorkflow.present && !restoredWorkflow.record,
       dispose() {
         if (!runtime.active) return;
@@ -7169,6 +7284,7 @@
     if (restoredWorkflow.record) {
       runtime.reviewWorkflow = createReviewAutoScrollWorkflow({
         handoff: restoredWorkflow.record,
+        autoStart: restoredWorkflow.requiresAutoStart,
         timers: pageWindow,
         now: () => Date.now(),
         document,
@@ -7202,14 +7318,24 @@
       runtime.reviewCache = nextCache;
       runtime.reviewPage = getActiveReviewPage(nextCache);
       if (runtime.reviewPage) runtime.ui?.setReviews(runtime.reviewPage);
-      runtime.reviewWorkflow?.observe(nextCache, runtime.reviewPage, { batch, sequence });
+      if (runtime.workflowDomReady) {
+        runtime.reviewWorkflow?.observe(nextCache, runtime.reviewPage, { batch, sequence });
+      }
     }, null, (event) => runtime.reviewWorkflow?.observeNativeLifecycle(event));
     const mount = () => {
       if (!runtime.active || !document.body || document.getElementById('ali-helper-host')) return;
       runtime.domReadyHandler = null;
+      runtime.workflowDomReady = true;
       runtime.ui = createReviewsPanel(runtime);
       if (runtime.reviewPage) runtime.ui.setReviews(runtime.reviewPage);
-      if (runtime.reviewWorkflow) runtime.ui.setWorkflow(runtime.reviewWorkflow.state);
+      if (runtime.reviewWorkflow) {
+        runtime.ui.setWorkflow(runtime.reviewWorkflow.state);
+        runtime.reviewWorkflow.observe(
+          runtime.reviewCache,
+          runtime.reviewPage,
+          { source: 'reviews-dom-ready' },
+        );
+      }
       else if (runtime.workflowNotice) runtime.ui.setStatus(createUiMessage('workflow.invalidHandoff'), true);
     };
     if (document.readyState === 'loading') {
@@ -7226,7 +7352,9 @@
         runtime.ssrSeeded = true;
         runtime.reviewPage = getActiveReviewPage(runtime.reviewCache);
         runtime.ui?.setReviews(runtime.reviewPage);
-        runtime.reviewWorkflow?.observe(runtime.reviewCache, runtime.reviewPage, { source: 'ssr' });
+        if (runtime.workflowDomReady) {
+          runtime.reviewWorkflow?.observe(runtime.reviewCache, runtime.reviewPage, { source: 'ssr' });
+        }
       },
       (diagnostic) => {
         if (runtime.active) {
@@ -7433,7 +7561,7 @@
         runtime.product = null;
         runtime.shippingCapture = null;
         runtime.ui?.setShippingCapture(null);
-        runtime.ui?.setStatus(createUiMessage('product.changedWaiting'));
+        runtime.ui?.setProduct(null);
         return runtime.product;
       }
       if (runtime.product) {

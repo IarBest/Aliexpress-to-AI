@@ -61,8 +61,8 @@ function createFakeTimers() {
   };
 }
 
-test('complete Product state clears the live region and reserves no idle status space', () => {
-  const status = createStatus('Waiting for productData…');
+test('Product preload keeps the live region hidden and reserves no idle status space', () => {
+  const status = createStatus('stale diagnostic');
   const controller = core.createProductStatusController(status);
 
   controller.clear();
@@ -83,10 +83,13 @@ test('complete Product state clears the live region and reserves no idle status 
   assert.match(setProductSource, /statusController\.clear\(\)/);
   assert.doesNotMatch(setProductSource, /formatProductStatus|Complete|combinations|source: API/);
   assert.match(productSource, /dispose\(\) \{\s+statusController\.dispose\(\);/);
+  assert.match(productSource, /statusController = createProductStatusController[\s\S]*statusController\.clear\(\);/);
+  assert.doesNotMatch(productSource, /product\.waiting|product\.changedWaiting/);
+  assert.match(source, /runtime\.ui\?\.setProduct\(null\)/);
 });
 
-test('initial DOM loading notice survives a transient overlay', () => {
-  const status = createStatus('Waiting for productData…');
+test('an existing meaningful diagnostic survives a transient overlay', () => {
+  const status = createStatus('Existing diagnostic.');
   const timers = createFakeTimers();
   const controller = core.createProductStatusController(status, timers);
 
@@ -98,7 +101,7 @@ test('initial DOM loading notice survives a transient overlay', () => {
   assert.equal(status.classList.contains('error'), false);
 
   timers.run(handle);
-  assert.equal(status.textContent, 'Waiting for productData…');
+  assert.equal(status.textContent, 'Existing diagnostic.');
   assert.equal(status.hidden, false);
   assert.equal(status.classList.contains('error'), false);
 });
@@ -118,17 +121,17 @@ test('controller captures an initial persistent error from the existing DOM', ()
   assert.equal(status.classList.contains('error'), true);
 });
 
-test('explicit persistent loading is restored after transient expiry', () => {
+test('an explicit persistent diagnostic is restored after transient expiry', () => {
   const status = createStatus();
   const timers = createFakeTimers();
   const controller = core.createProductStatusController(status, timers);
 
-  controller.showPersistent('Product changed; waiting for productData…');
+  controller.showPersistent('Product data is unavailable.');
   controller.showTransient('Clean URL copied.');
   const handle = [...timers.pending.keys()][0];
   timers.run(handle);
 
-  assert.equal(status.textContent, 'Product changed; waiting for productData…');
+  assert.equal(status.textContent, 'Product data is unavailable.');
   assert.equal(status.hidden, false);
   assert.equal(status.classList.contains('error'), false);
 });
@@ -169,7 +172,7 @@ test('new persistent state interrupts a transient and its stale callback is iner
 });
 
 test('newer transient is protected from a captured callback owned by the earlier transient', () => {
-  const status = createStatus('Waiting for productData…');
+  const status = createStatus('Existing diagnostic.');
   const timers = createFakeTimers();
   const controller = core.createProductStatusController(status, timers);
 
@@ -186,7 +189,7 @@ test('newer transient is protected from a captured callback owned by the earlier
   assert.equal(status.classList.contains('error'), false);
 
   assert.equal(timers.run(secondHandle), true);
-  assert.equal(status.textContent, 'Waiting for productData…');
+  assert.equal(status.textContent, 'Existing diagnostic.');
   assert.equal(status.hidden, false);
 });
 
@@ -195,7 +198,7 @@ test('clear removes base and transient state and defeats a captured callback', (
   const timers = createFakeTimers();
   const controller = core.createProductStatusController(status, timers);
 
-  controller.showPersistent('Product changed; waiting for productData…');
+  controller.showPersistent('Product data is unavailable.');
   controller.showTransient('Product copied.');
   const handle = [...timers.pending.keys()][0];
   controller.clear();
@@ -214,7 +217,7 @@ test('dispose invalidates a captured callback, clears all state, and remains ide
   const timers = createFakeTimers();
   const controller = core.createProductStatusController(status, timers);
 
-  controller.showPersistent('Waiting for productData…');
+  controller.showPersistent('Existing diagnostic.');
   controller.showTransient('Description copied.');
   const handle = [...timers.pending.keys()][0];
   controller.dispose();
@@ -262,23 +265,24 @@ test('transient feedback never restores a product summary cleared on successful 
   assert.doesNotMatch(status.textContent, /Complete|combinations|source:/);
 });
 
-test('Product panel wiring exposes the initial loading and Clean URL transient path', () => {
+test('Product panel wiring starts status hidden and keeps the Clean URL transient path', () => {
   const productStart = source.indexOf('function createPanel(runtime)');
   const productEnd = source.indexOf('function createReviewsPanel(runtime)');
   const productSource = source.slice(productStart, productEnd);
   const markupIndex = productSource.indexOf('class="status product-status"');
   const controllerIndex = productSource.indexOf('createProductStatusController(status, {');
-  const waitingIndex = productSource.indexOf("showPersistent(createUiMessage('product.waiting'))");
-  assert.ok(markupIndex >= 0 && controllerIndex > markupIndex && waitingIndex > controllerIndex);
+  const clearIndex = productSource.indexOf('statusController.clear();', controllerIndex);
+  assert.ok(markupIndex >= 0 && controllerIndex > markupIndex && clearIndex > controllerIndex);
   assert.match(productSource, /copyWithFeedback\(normalizeItemUrl\(location\.href\)\.href, 'copy\.cleanUrlSuccess'\)/);
   assert.match(productSource, /statusController\.showTransient\(createUiMessage\(successKey\)\)/);
 
-  const status = createStatus('Waiting for productData…');
+  const status = createStatus();
   const timers = createFakeTimers();
   const controller = core.createProductStatusController(status, timers);
+  controller.clear();
   controller.showTransient('Clean URL copied.');
   const handle = [...timers.pending.keys()][0];
   timers.run(handle);
-  assert.equal(status.textContent, 'Waiting for productData…');
-  assert.equal(status.hidden, false);
+  assert.equal(status.textContent, '');
+  assert.equal(status.hidden, true);
 });

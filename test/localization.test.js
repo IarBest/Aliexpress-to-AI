@@ -170,7 +170,7 @@ test('accepted Product and Reviews label tables preserve exact action IDs, order
   const productKeys = core.PRODUCT_PANEL_CONTRACT.actions.map(({ labelKey }) => labelKey);
   assert.deepEqual(core.PRODUCT_PANEL_CONTRACT.actions.map(({ id }) => id), productIds);
   assert.deepEqual(productKeys.map((key) => core.t('en', key)), [
-    'Collect reviews for ChatGPT',
+    'Collect product + reviews for ChatGPT',
     'Copy product for ChatGPT',
     'Copy product JSON',
     'Copy variants',
@@ -179,7 +179,7 @@ test('accepted Product and Reviews label tables preserve exact action IDs, order
     'RU / COM',
   ]);
   assert.deepEqual(productKeys.map((key) => core.t('ru', key)), [
-    'Собрать отзывы для ChatGPT',
+    'Собрать товар + отзывы для ChatGPT',
     'Скопировать товар для ChatGPT',
     'JSON товара',
     'Варианты',
@@ -188,6 +188,14 @@ test('accepted Product and Reviews label tables preserve exact action IDs, order
     'RU / COM',
   ]);
   assert.deepEqual(core.PRODUCT_PANEL_CONTRACT.actions.filter(({ primary }) => primary).map(({ id }) => id), ['review-workflow']);
+  assert.equal(
+    core.t('en', 'tooltip.reviewWorkflow'),
+    'Collects the product and bounded Reviews for a combined ChatGPT export.',
+  );
+  assert.equal(
+    core.t('ru', 'tooltip.reviewWorkflow'),
+    'Собирает товар и ограниченный набор отзывов для объединённого экспорта в ChatGPT.',
+  );
 
   const reviewKeys = core.REVIEWS_PANEL_CONTRACT.actions.map(({ labelKey }) => labelKey);
   assert.deepEqual(core.REVIEWS_PANEL_CONTRACT.actions.map(({ id }) => id), ['reviews', 'reviews-chatgpt']);
@@ -257,7 +265,7 @@ test('Product status descriptors retranslate persistent and transient layers wit
     formatMessage: (message) => core.formatUiMessage(locale, message),
   });
 
-  controller.showPersistent(core.createUiMessage('product.changedWaiting'));
+  controller.showPersistent(core.createUiMessage('product.normalizationFailed', { error: 'raw detail' }), true);
   controller.showTransient(core.createUiMessage('copy.productJsonSuccess'));
   const handle = [...timers.pending.keys()][0];
   assert.equal(status.textContent, 'Product JSON copied.');
@@ -269,7 +277,8 @@ test('Product status descriptors retranslate persistent and transient layers wit
   assert.deepEqual([...timers.pending.keys()], [handle]);
   assert.deepEqual(timers.delays, [2800]);
   timers.run(handle);
-  assert.equal(status.textContent, 'Товар изменился; ожидаем данные…');
+  assert.equal(status.textContent, 'Данные товара получены, но их не удалось обработать: raw detail');
+  assert.equal(status.classList.contains('error'), true);
 
   controller.showPersistent(core.createUiMessage('product.normalizationFailed', { error: 'raw detail' }), true);
   assert.equal(status.textContent, 'Данные товара получены, но их не удалось обработать: raw detail');
@@ -394,8 +403,10 @@ test('panel locale updates are in-place and retain the accepted shell/network bo
 test('metadata and safe text application keep release-finalization files and version out of scope', () => {
   assert.match(source, /^\/\/ @description:ru Помощник AliExpress только для чтения:/m);
   assert.doesNotMatch(source, /^\/\/ @name:ru/m);
-  assert.match(source, /^\/\/ @version\s+0\.1\.28$/m);
-  assert.equal(core.VERSION, '0.1.28');
+  assert.match(source, /^\/\/ @version\s+0\.1\.29$/m);
+  assert.equal(core.VERSION, '0.1.29');
+  assert.equal(core.t('en', 'footer.safety', { version: core.VERSION }), 'Read/copy/navigation/scroll · v0.1.29');
+  assert.equal(core.t('ru', 'footer.safety', { version: core.VERSION }), 'Чтение/копирование/переходы/прокрутка · v0.1.29');
   const localeApplyStart = source.indexOf('function applyPanelActionLocale');
   const localeApplyEnd = source.indexOf('function bindResponsivePanel', localeApplyStart);
   const localeApplySource = source.slice(localeApplyStart, localeApplyEnd);

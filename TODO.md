@@ -559,14 +559,20 @@ capture cap, gaps/conflicts, follow-ups и active-context export реализо�
       подавляет и не отменяет native AliExpress review requests; export schema
       не меняется.
 
-#### Bounded two-click Review collection — completed
+#### Bounded one-click Review collection with fallback — completed in 0.1.29
 
-- [x] Добавить явное Product action, одну same-tab навигацию в Reviews и второе
-      явное Reviews action `Start review collection`, которое только после
-      подтверждения разрешает bounded document scroll с hard bounds и Cancel.
-      Возникающие Review requests создаёт AliExpress; прямые Helper Review API
-      requests остаются равны 0. Результат Product + Reviews копируется только
-      отдельным явным действием.
+- [x] Сделать `Collect product + reviews for ChatGPT` / `Собрать товар + отзывы
+      для ChatGPT` первым и единственным primary Product action. Один явный
+      Product click создаёт bounded Product snapshot, выполняет одну same-tab
+      навигацию в Reviews того же item и автоматически запускает недавний exact
+      handoff в пределах 60 секунд от создания workflow и полного handoff expiry.
+      После истечения auto-start окна, пока handoff ещё валиден, остаётся явный
+      fallback `Start review collection` / `Начать сбор отзывов`. Embedded и
+      standalone Reviews layouts используют проверенный document scroll owner с
+      hard bounds и Cancel; native next-page requests создаёт AliExpress, а
+      прямые Helper Review API requests остаются равны 0. Product + Reviews
+      копируется только отдельным явным действием; reload активного automatic
+      workflow его не возобновляет.
 
 #### Optional active-loading research — deferred
 
@@ -763,7 +769,10 @@ Acceptance: основной export остаётся читаемым и огр�
 - [x] Завершить responsive organization/layout actions без перегрузки панели.
       Desktop сохраняет принятый direct-action layout; narrow mode оставляет
       напрямую доступными шесть прежних Product actions и новое bounded Review
-      workflow action. Direct Review sender и menu не добавлены.
+      workflow action. В 0.1.29 combined Product + Reviews action находится
+      первым и является единственным primary action; обычные status rows вроде
+      `Waiting for productData…` и preload-status rows не занимают layout. Direct
+      Review sender и menu не добавлены.
 - [ ] **Conditional:** если будет одобрено ещё одно persistent action и action
       set вырастет, рассмотреть sections/menu или equivalent grouping в рамках
       соответствующего UI pass; отдельная реализация сейчас не требуется.

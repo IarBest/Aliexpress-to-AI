@@ -90,7 +90,7 @@ function fakeTimers() {
   };
 }
 
-function makeHandoff(now = 1000, phase = 'pending-confirmation') {
+function makeHandoff(now = 1000, phase = 'pending-auto-start') {
   const handoff = core.createReviewWorkflowHandoff({
     workflowId: 'workflow-test-0001',
     itemId: ITEM_ID,
@@ -113,8 +113,9 @@ function workflowHarness({
   handoff = null,
   workflowStorage = null,
   activateHandoff = null,
+  autoStart = false,
 } = {}) {
-  let now = 1000;
+  let now = handoff?.startedAt ?? 1000;
   let pageUrl = REVIEWS_URL;
   let cache = core.createReviewCache(ITEM_ID, cap);
   let sequence = 1;
@@ -155,6 +156,7 @@ function workflowHarness({
   const storage = workflowStorage || memoryStorage(JSON.stringify(workflowHandoff));
   const controller = core.createReviewAutoScrollWorkflow({
     handoff: workflowHandoff,
+    autoStart,
     timers,
     now: () => now,
     document: documentLike,
@@ -269,13 +271,15 @@ test('Reviews URL is exact, same-origin, tracking-free, and preserves only the p
   assert.equal(core.buildReviewsWorkflowUrl(PRODUCT_URL, { ...product(), itemId: '1' }), null);
 });
 
-test('handoff schema is exact, 15-minute bounded, same-origin/item-bound, and contains no Review or request data', () => {
+test('handoff schema is exact, has a 60-second auto-start window, stays 15-minute bounded, and contains no Review or request data', () => {
   const now = 5000;
   const handoff = makeHandoff(now);
+  assert.equal(handoff.phase, 'pending-auto-start');
+  assert.equal(handoff.autoStartUntil - handoff.startedAt, core.REVIEW_WORKFLOW_AUTO_START_WINDOW_MS);
   assert.equal(handoff.expiresAt - handoff.startedAt, 15 * 60 * 1000);
   assert.deepEqual(Object.keys(handoff), [
     'version', 'workflowId', 'phase', 'itemId', 'originProductUrl', 'originSelectedSkuId',
-    'startedAt', 'expiresAt', 'productChatgptText',
+    'startedAt', 'autoStartUntil', 'expiresAt', 'productChatgptText',
   ]);
   assert.deepEqual(core.validateReviewWorkflowHandoff(handoff, REVIEWS_URL, now).record, handoff);
   const serialized = JSON.stringify(handoff);
@@ -284,6 +288,7 @@ test('handoff schema is exact, 15-minute bounded, same-origin/item-bound, and co
   assert.equal(core.validateReviewWorkflowHandoff({ ...handoff, extra: true }, REVIEWS_URL, now).record, null);
   assert.equal(core.validateReviewWorkflowHandoff({ ...handoff, version: 2 }, REVIEWS_URL, now).record, null);
   assert.equal(core.validateReviewWorkflowHandoff({ ...handoff, startedAt: now + 1 }, REVIEWS_URL, now).record, null);
+  assert.equal(core.validateReviewWorkflowHandoff({ ...handoff, autoStartUntil: handoff.autoStartUntil + 1 }, REVIEWS_URL, now).record, null);
   assert.ok(core.validateReviewWorkflowHandoff({ ...handoff, expiresAt: handoff.expiresAt - 1 }, REVIEWS_URL, now).record);
   assert.equal(core.validateReviewWorkflowHandoff({ ...handoff, originProductUrl: `${handoff.originProductUrl}&token=secret` }, REVIEWS_URL, now).record, null);
   assert.equal(core.validateReviewWorkflowHandoff(handoff, REVIEWS_URL, handoff.expiresAt).record, null);
@@ -332,6 +337,9 @@ test('workflow IDs, timestamps, and AliExpress hosts are strictly bounded', () =
 
   const invalidTimes = [
     { startedAt: now + 0.5 },
+    { autoStartUntil: handoff.autoStartUntil + 0.5 },
+    { autoStartUntil: handoff.startedAt },
+    { autoStartUntil: handoff.autoStartUntil + 1 },
     { expiresAt: handoff.expiresAt + 0.5 },
     { startedAt: -1 },
     { startedAt: Number.MAX_SAFE_INTEGER + 1 },
@@ -356,7 +364,7 @@ test('workflow IDs, timestamps, and AliExpress hosts are strictly bounded', () =
   }, REVIEWS_URL, now).record, null);
 });
 
-test('pending Reviews restoration is passive across first load, reload, stale fragments, and old provenance', () => {
+test('pending Reviews restoration auto-starts only inside 60 seconds and exposes manual fallback afterward', () => {
   const now = 12_000;
   const pending = makeHandoff(now);
   const cases = [
@@ -373,25 +381,46 @@ test('pending Reviews restoration is passive across first load, reload, stale fr
       documentReferrer: PRODUCT_URL,
     }],
   ];
-  const storage = memoryStorage(JSON.stringify(pending));
   for (const [label, url, obsoleteProvenance] of cases) {
+    const storage = memoryStorage(JSON.stringify(pending));
     const restored = core.restoreReviewWorkflowHandoff(storage, url, now, obsoleteProvenance);
-    assert.equal(restored.record?.phase, 'pending-confirmation', label);
-    assert.equal(restored.requiresUserStart, true, label);
-    assert.equal(Object.hasOwn(restored, 'autoStart'), false, label);
-    assert.equal(JSON.parse(storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY)).phase, 'pending-confirmation', label);
+    assert.equal(restored.record?.phase, 'pending-auto-start', label);
+    assert.equal(restored.requiresAutoStart, true, label);
+    assert.equal(restored.requiresUserStart, false, label);
+    assert.equal(JSON.parse(storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY)).phase, 'pending-auto-start', label);
     const harness = workflowHarness({
       explicitStart: false,
       handoff: restored.record,
       workflowStorage: storage,
+      autoStart: restored.requiresAutoStart,
     });
-    assert.equal(harness.controller.state.phase, 'pending-confirmation', label);
-    assert.equal(harness.controller.state.canStart, true, label);
-    assert.equal(harness.scrolls.length, 0, label);
+    assert.equal(harness.controller.state.phase, 'running', label);
+    assert.equal(harness.controller.state.canStart, false, label);
+    assert.equal(harness.scrolls.length, 1, label);
+    assert.equal(JSON.parse(storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY)).phase, 'active', label);
     harness.controller.dispose();
   }
-  assert.equal(storage.writes, 0);
-  assert.equal(storage.removed, 0);
+
+  const fallbackStorage = memoryStorage(JSON.stringify(pending));
+  const fallback = core.restoreReviewWorkflowHandoff(
+    fallbackStorage,
+    REVIEWS_URL,
+    pending.autoStartUntil,
+  );
+  assert.equal(fallback.requiresAutoStart, false);
+  assert.equal(fallback.requiresUserStart, true);
+  const fallbackHarness = workflowHarness({
+    explicitStart: false,
+    handoff: fallback.record,
+    workflowStorage: fallbackStorage,
+    autoStart: fallback.requiresAutoStart,
+  });
+  fallbackHarness.setNow(pending.autoStartUntil);
+  assert.equal(fallbackHarness.controller.state.phase, 'pending-manual-start');
+  assert.equal(fallbackHarness.controller.state.canStart, true);
+  assert.equal(fallbackHarness.scrolls.length, 0);
+  assert.equal(fallbackHarness.controller.start(), true);
+  assert.equal(fallbackHarness.scrolls.length, 1);
 });
 
 test('all non-pending restoration cases remain zero-scroll and active reload remains partial-interrupted', () => {
@@ -431,7 +460,7 @@ test('all non-pending restoration cases remain zero-scroll and active reload rem
   }
 });
 
-test('explicit activation changes the exact pending record to active only after exact persistence readback', () => {
+test('activation changes the exact pending-auto-start record to active only after exact persistence readback', () => {
   const now = 13_500;
   const pending = makeHandoff(now);
   const storage = memoryStorage(JSON.stringify(pending));
@@ -453,9 +482,21 @@ test('explicit activation changes the exact pending record to active only after 
   const originalSet = wrongReadback.setItem.bind(wrongReadback);
   wrongReadback.setItem = (key, value) => originalSet(key, JSON.stringify({ ...JSON.parse(value), workflowId: 'workflow-wrong-0003' }));
   assert.equal(core.activateReviewWorkflowHandoff(wrongReadback, pending, REVIEWS_URL, now).reason, 'active-persistence-failed');
+
+  const noOpWrite = memoryStorage(JSON.stringify(pending));
+  noOpWrite.setItem = function setItem() { this.writes += 1; };
+  assert.equal(core.activateReviewWorkflowHandoff(noOpWrite, pending, REVIEWS_URL, now).reason, 'active-persistence-failed');
+  assert.equal(JSON.parse(noOpWrite.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY)).phase, 'pending-auto-start');
 });
 
-test('only explicit Start can begin once, and persistence failures, expiry, route drift, disposal, or cancellation stay zero-scroll', () => {
+test('automatic start is normal, fallback Start is one-shot, and activation failures stay zero-scroll', () => {
+  const automatic = workflowHarness({ explicitStart: false, autoStart: true });
+  assert.equal(automatic.controller.state.phase, 'running');
+  assert.equal(automatic.controller.state.canStart, false);
+  assert.equal(automatic.scrolls.length, 1);
+  assert.equal(JSON.parse(automatic.storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY)).phase, 'active');
+  assert.equal(automatic.controller.start(), false);
+
   const successful = workflowHarness();
   assert.equal(successful.startResult, true);
   assert.equal(successful.scrolls.length, 1);
@@ -466,23 +507,26 @@ test('only explicit Start can begin once, and persistence failures, expiry, rout
 
   const setItemThrows = memoryStorage(JSON.stringify(makeHandoff()));
   setItemThrows.setItem = () => { throw new Error('quota'); };
-  const failedWrite = workflowHarness({ workflowStorage: setItemThrows });
-  assert.equal(failedWrite.startResult, false);
+  const failedWrite = workflowHarness({
+    explicitStart: false, autoStart: true, workflowStorage: setItemThrows,
+  });
   assert.equal(failedWrite.scrolls.length, 0);
 
   const missingReadback = memoryStorage(JSON.stringify(makeHandoff()));
   missingReadback.setItem = function setItem() { this.writes += 1; this.values.delete(core.REVIEW_WORKFLOW_STORAGE_KEY); };
-  const failedReadback = workflowHarness({ workflowStorage: missingReadback });
-  assert.equal(failedReadback.startResult, false);
+  const failedReadback = workflowHarness({
+    explicitStart: false, autoStart: true, workflowStorage: missingReadback,
+  });
   assert.equal(failedReadback.scrolls.length, 0);
 
   const mismatchedActivation = workflowHarness({
+    explicitStart: false,
+    autoStart: true,
     activateHandoff: () => ({
       ok: true,
       record: { ...makeHandoff(), phase: 'active', itemId: '1005000000000001' },
     }),
   });
-  assert.equal(mismatchedActivation.startResult, false);
   assert.equal(mismatchedActivation.scrolls.length, 0);
 
   const expires = workflowHarness({ explicitStart: false });
@@ -508,7 +552,7 @@ test('only explicit Start can begin once, and persistence failures, expiry, rout
   assert.deepEqual(cancelled.terminalPhases, ['cancelled']);
 });
 
-test('Start binds an existing context safely or starts waiting and its 120-second deadline at the click', () => {
+test('successful active transition binds an existing context or starts waiting with a fresh 120-second deadline', () => {
   const preloadedAtCap = workflowHarness({ cap: 10 });
   assert.equal(preloadedAtCap.startResult, true);
   assert.equal(preloadedAtCap.scrolls.length, 0);
@@ -516,7 +560,7 @@ test('Start binds an existing context safely or starts waiting and its 120-secon
   assert.equal(preloadedAtCap.controller.state.coverage, 'cap-boundary');
 
   const waiting = workflowHarness({ explicitStart: false, initialPages: [] });
-  assert.equal(waiting.controller.state.phase, 'pending-confirmation');
+  assert.equal(waiting.controller.state.phase, 'pending-manual-start');
   assert.equal(waiting.scrolls.length, 0);
   assert.equal([...waiting.timers.pending.values()].some((timer) => timer.delay === core.REVIEW_WORKFLOW_TOTAL_TIMEOUT_MS), false);
   waiting.setNow(50_000);
@@ -526,14 +570,14 @@ test('Start binds an existing context safely or starts waiting and its 120-secon
   assert.equal([...waiting.timers.pending.values()].some((timer) => timer.delay === core.REVIEW_WORKFLOW_TOTAL_TIMEOUT_MS), true);
 });
 
-test('stale pending authorization and failed cleanup never scroll until an explicit Start persistence attempt', () => {
+test('manual fallback after the auto window remains zero-scroll until its exact active persistence attempt', () => {
   const now = 1000;
   const pending = makeHandoff(now);
   const blocked = memoryStorage(JSON.stringify(pending));
   blocked.setItem = () => { throw new Error('all writes blocked'); };
   blocked.removeItem = () => { throw new Error('cleanup blocked'); };
   const staleUrl = `${REVIEWS_URL}#ali-helper-review-workflow=${pending.workflowId}`;
-  const restored = core.restoreReviewWorkflowHandoff(blocked, staleUrl, now, {
+  const restored = core.restoreReviewWorkflowHandoff(blocked, staleUrl, pending.autoStartUntil, {
     replaceUrl: () => { throw new Error('history blocked'); },
     navigationEntries: [{ entryType: 'navigation', type: 'navigate', name: staleUrl }],
     documentReferrer: PRODUCT_URL,
@@ -544,7 +588,8 @@ test('stale pending authorization and failed cleanup never scroll until an expli
     workflowStorage: blocked,
   });
   assert.equal(passive.scrolls.length, 0);
-  assert.equal(passive.controller.state.phase, 'pending-confirmation');
+  passive.setNow(pending.autoStartUntil);
+  assert.equal(passive.controller.state.phase, 'pending-manual-start');
   assert.equal(passive.controller.start(), false);
   assert.equal(passive.scrolls.length, 0, 'failed active persistence must remain zero-scroll');
 
@@ -553,9 +598,10 @@ test('stale pending authorization and failed cleanup never scroll until an expli
     handoff: pending,
     workflowStorage: memoryStorage(JSON.stringify(pending)),
   });
+  healthy.setNow(pending.autoStartUntil);
   assert.equal(healthy.scrolls.length, 0);
   assert.equal(healthy.controller.start(), true);
-  assert.equal(healthy.scrolls.length, 1, 'only the explicit Reviews click begins the bounded run');
+  assert.equal(healthy.scrolls.length, 1, 'the delayed fallback click begins the bounded run');
 });
 
 test('navigation failure terminalizes before removal and cannot produce a later ordinary Reviews auto-start', () => {
@@ -580,10 +626,19 @@ test('navigation failure terminalizes before removal and cannot produce a later 
     assert.equal(starter.start(), false);
     assert.equal(starter.started, false);
     const persisted = JSON.parse(storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY));
-    assert.equal(persisted.phase, failureMode === 'remove' ? 'aborted' : 'pending-confirmation');
+    assert.equal(persisted.phase, failureMode === 'remove' ? 'aborted' : 'pending-auto-start');
     const restored = core.restoreReviewWorkflowHandoff(storage, REVIEWS_URL, 500);
-    assert.equal(restored.record ? restored.record.phase : null, failureMode === 'remove' ? null : 'pending-confirmation');
-    assert.equal(restored.requiresUserStart, failureMode === 'terminal-and-remove');
+    assert.equal(restored.record ? restored.record.phase : null, failureMode === 'remove' ? null : 'pending-auto-start');
+    assert.equal(restored.requiresAutoStart, failureMode === 'terminal-and-remove');
+    if (restored.record) {
+      const harness = workflowHarness({
+        explicitStart: false,
+        autoStart: restored.requiresAutoStart,
+        handoff: restored.record,
+        workflowStorage: storage,
+      });
+      assert.equal(harness.scrolls.length, 0, 'blocked active persistence must fail before scrolling');
+    }
   }
 });
 
@@ -610,7 +665,8 @@ test('Product starter acquires one guard, writes once, navigates once, and keeps
   assert.equal(new URL(navigations[0]).hash, '');
   assert.deepEqual(errors, []);
   const persisted = JSON.parse(storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY));
-  assert.equal(persisted.phase, 'pending-confirmation');
+  assert.equal(persisted.phase, 'pending-auto-start');
+  assert.equal(persisted.autoStartUntil, persisted.startedAt + core.REVIEW_WORKFLOW_AUTO_START_WINDOW_MS);
   assert.equal(persisted.productChatgptText, 'EXACT PRODUCT EXPORT');
   assert.match(source, /action === 'chatgpt'[\s\S]*copyWithFeedback\(exportForChatGPT\(product\), 'copy\.productChatgptSuccess'\)/);
 });
@@ -1082,7 +1138,7 @@ test('absolute total and step deadlines win even when timeout callbacks are dela
   assert.equal(totalWins.controller.state.coverage, 'partial-total-timeout');
   assert.equal(totalWins.controller.state.stopReason, 'total-timeout');
 
-  const earlyExpiryHandoff = { ...makeHandoff(1000), expiresAt: 5000 };
+  const earlyExpiryHandoff = { ...makeHandoff(1000), autoStartUntil: 5000, expiresAt: 5000 };
   const expiryWins = workflowHarness({
     handoff: earlyExpiryHandoff,
     pageOperationPending: true,
@@ -1209,6 +1265,92 @@ test('scroll-owner checks fail closed on visibility, finite geometry, replacemen
     querySelector: (selector) => selector === '#reviews_anchor' ? reviewsRoot : null,
   };
   assert.deepEqual(core.validateReviewScrollOwner(doc, owner, () => ({ overflowY: 'visible' })), { valid: true, owner });
+
+  const embeddedAnchor = {
+    isConnected: true, scrollHeight: 200, clientHeight: 200, parentElement: body,
+  };
+  const embeddedTabs = {
+    isConnected: true, scrollHeight: 200, clientHeight: 200, parentElement: body,
+  };
+  const embeddedDoc = {
+    ...doc,
+    querySelector(selector) {
+      if (selector === '#reviews_anchor') return embeddedAnchor;
+      if (selector.includes('RedReviewsTabs__desktop__')) return embeddedTabs;
+      return null;
+    },
+    querySelectorAll(selector) {
+      if (selector === '#reviews_anchor') return [embeddedAnchor];
+      if (selector.includes('RedReviewsTabs__desktop__')) return [embeddedTabs];
+      return [];
+    },
+  };
+  assert.deepEqual(
+    core.validateReviewScrollOwner(embeddedDoc, owner, () => ({ overflowY: 'visible' })),
+    { valid: true, owner },
+  );
+
+  const embeddedTabsOnlyDoc = {
+    ...doc,
+    querySelector: (selector) => selector.includes('RedReviewsTabs__desktop__') ? embeddedTabs : null,
+    querySelectorAll(selector) {
+      return selector.includes('RedReviewsTabs__desktop__') ? [embeddedTabs] : [];
+    },
+  };
+  assert.deepEqual(
+    core.validateReviewScrollOwner(embeddedTabsOnlyDoc, owner, () => ({ overflowY: 'visible' })),
+    { valid: true, owner },
+  );
+
+  const dedicatedEmbeddedTabs = { ...embeddedTabs, scrollHeight: 900, clientHeight: 200 };
+  const inconsistentEmbeddedDoc = {
+    ...embeddedDoc,
+    querySelector(selector) {
+      if (selector === '#reviews_anchor') return embeddedAnchor;
+      if (selector.includes('RedReviewsTabs__desktop__')) return dedicatedEmbeddedTabs;
+      return null;
+    },
+    querySelectorAll(selector) {
+      if (selector === '#reviews_anchor') return [embeddedAnchor];
+      if (selector.includes('RedReviewsTabs__desktop__')) return [dedicatedEmbeddedTabs];
+      return [];
+    },
+  };
+  assert.equal(
+    core.validateReviewScrollOwner(
+      inconsistentEmbeddedDoc,
+      owner,
+      (element) => ({ overflowY: element === dedicatedEmbeddedTabs ? 'auto' : 'visible' }),
+    ).reason,
+    'dedicated-scroll-owner',
+  );
+  assert.equal(
+    core.validateReviewScrollOwner(
+      {
+        ...embeddedDoc,
+        querySelectorAll(selector) {
+          if (selector === '#reviews_anchor') return [embeddedAnchor];
+          if (selector.includes('RedReviewsTabs__desktop__')) {
+            return [embeddedTabs, dedicatedEmbeddedTabs];
+          }
+          return [];
+        },
+      },
+      owner,
+      (element) => ({ overflowY: element === dedicatedEmbeddedTabs ? 'auto' : 'visible' }),
+    ).reason,
+    'dedicated-scroll-owner',
+  );
+  assert.equal(
+    core.validateReviewScrollOwner(
+      { ...embeddedDoc, querySelectorAll: (selector) => selector === '#reviews_anchor'
+        ? [{ ...embeddedAnchor, isConnected: false }]
+        : [] },
+      owner,
+      () => ({ overflowY: 'visible' }),
+    ).reason,
+    'reviews-root-unavailable',
+  );
   for (const hiddenDoc of [
     { ...doc, hidden: true },
     { ...doc, visibilityState: 'hidden' },
@@ -1254,6 +1396,138 @@ test('scroll-owner checks fail closed on visibility, finite geometry, replacemen
     owner,
     (element) => ({ overflowY: element === harmlessWidget ? 'auto' : 'visible' }),
   ).valid, true);
+
+  const standaloneRoot = {
+    isConnected: true,
+    scrollHeight: 1023,
+    clientHeight: 1023,
+    parentElement: body,
+    contains(node) { return node === standaloneList; },
+  };
+  const standaloneList = {
+    isConnected: true,
+    scrollHeight: 900,
+    clientHeight: 900,
+    parentElement: standaloneRoot,
+  };
+  const standaloneDoc = {
+    ...doc,
+    querySelector: () => null,
+    querySelectorAll(selector) {
+      if (selector.includes('RedReviewsProductFeedbackList_RedReviewsProductFeedbackList__reviewList__')) {
+        return [standaloneRoot];
+      }
+      if (selector.includes('RedReviewsProductFeedbackList_ReviewList__reviewList__')) {
+        return [standaloneList];
+      }
+      return [];
+    },
+  };
+  assert.deepEqual(
+    core.validateReviewScrollOwner(standaloneDoc, owner, () => ({ overflowY: 'visible' })),
+    { valid: true, owner },
+  );
+  standaloneList.clientHeight = 200;
+  assert.equal(
+    core.validateReviewScrollOwner(
+      standaloneDoc,
+      owner,
+      (element) => ({ overflowY: element === standaloneList ? 'auto' : 'visible' }),
+    ).reason,
+    'dedicated-scroll-owner',
+  );
+  standaloneList.clientHeight = 900;
+
+  const standaloneVariant = (roots, lists) => ({
+    ...standaloneDoc,
+    querySelectorAll(selector) {
+      if (selector.includes('RedReviewsProductFeedbackList_RedReviewsProductFeedbackList__reviewList__')) {
+        return roots;
+      }
+      if (selector.includes('RedReviewsProductFeedbackList_ReviewList__reviewList__')) {
+        return lists;
+      }
+      return [];
+    },
+  });
+  const outsideStandaloneList = {
+    ...standaloneList,
+    parentElement: body,
+  };
+  for (const [roots, lists, reason] of [
+    [[standaloneRoot, { ...standaloneRoot }], [standaloneList], 'reviews-owner-ambiguous'],
+    [[standaloneRoot], [standaloneList, { ...standaloneList }], 'reviews-owner-ambiguous'],
+    [[standaloneRoot], [], 'reviews-owner-ambiguous'],
+    [[standaloneRoot], [outsideStandaloneList], 'reviews-owner-ambiguous'],
+    [[{ ...standaloneRoot, isConnected: false }], [standaloneList], 'reviews-root-unavailable'],
+  ]) {
+    assert.equal(
+      core.validateReviewScrollOwner(
+        standaloneVariant(roots, lists),
+        owner,
+        () => ({ overflowY: 'visible' }),
+      ).reason,
+      reason,
+    );
+  }
+});
+
+test('production workflow rejects a dedicated standalone inner list and a second dedicated embedded boundary', () => {
+  const standalone = workflowHarness({
+    pageOperationPending: true,
+    getComputedStyle: (element) => ({ overflowY: element?.testOverflowY || 'visible' }),
+  });
+  const standaloneList = {
+    isConnected: true,
+    scrollHeight: 900,
+    clientHeight: 200,
+    parentElement: null,
+    testOverflowY: 'auto',
+  };
+  const standaloneRoot = {
+    isConnected: true,
+    scrollHeight: 1000,
+    clientHeight: 1000,
+    parentElement: standalone.body,
+    contains(node) { return node === standaloneList; },
+  };
+  standaloneList.parentElement = standaloneRoot;
+  standalone.documentLike.querySelector = () => null;
+  standalone.documentLike.querySelectorAll = (selector) => {
+    if (selector.includes('RedReviewsProductFeedbackList_RedReviewsProductFeedbackList__reviewList__')) {
+      return [standaloneRoot];
+    }
+    if (selector.includes('RedReviewsProductFeedbackList_ReviewList__reviewList__')) {
+      return [standaloneList];
+    }
+    return [];
+  };
+  standalone.controller.setPageOperationPending(false);
+  assert.equal(standalone.scrolls.length, 0);
+  assert.equal(standalone.controller.state.coverage, 'partial-scroll-owner');
+  assert.equal(standalone.controller.state.stopReason, 'dedicated-scroll-owner');
+
+  const embedded = workflowHarness({
+    pageOperationPending: true,
+    getComputedStyle: (element) => ({ overflowY: element?.testOverflowY || 'visible' }),
+  });
+  embedded.reviewsRoot.isConnected = true;
+  const dedicatedTabs = {
+    isConnected: true,
+    scrollHeight: 900,
+    clientHeight: 200,
+    parentElement: embedded.body,
+    testOverflowY: 'auto',
+  };
+  embedded.documentLike.querySelectorAll = (selector) => {
+    if (selector === '#reviews_anchor') return [embedded.reviewsRoot];
+    if (selector.includes('RedReviewsTabs__desktop__')) return [dedicatedTabs];
+    return [];
+  };
+  embedded.controller.setPageOperationPending(false);
+  assert.equal(embedded.scrolls.length, 0);
+  assert.equal(embedded.controller.state.coverage, 'partial-scroll-owner');
+  assert.equal(embedded.controller.state.stopReason, 'dedicated-scroll-owner');
 });
 
 test('production workflow requires positive Reviews-root and style evidence before scrolling', () => {
@@ -1289,6 +1563,27 @@ test('production workflow requires positive Reviews-root and style evidence befo
   malformedVisibility.controller.setPageOperationPending(false);
   assert.equal(malformedVisibility.scrolls.length, 0);
   assert.equal(malformedVisibility.controller.state.coverage, 'partial-document-hidden');
+
+  const zeroScrollOwner = workflowHarness({ pageOperationPending: true });
+  zeroScrollOwner.documentLike.querySelector = () => null;
+  zeroScrollOwner.controller.setPageOperationPending(false);
+  assert.equal(zeroScrollOwner.controller.state.scrollActivations, 0);
+  assert.equal(zeroScrollOwner.controller.state.copyCurrentReviews, true);
+  assert.equal(zeroScrollOwner.controller.state.canCopy, true);
+  assert.equal(
+    core.formatUiMessage('en', zeroScrollOwner.controller.state.message),
+    'Automatic review scrolling could not start. The current Reviews can still be copied.',
+  );
+  assert.equal(
+    core.formatUiMessage('ru', zeroScrollOwner.controller.state.message),
+    'Не удалось запустить автоматическую прокрутку отзывов. Текущие отзывы всё равно можно скопировать.',
+  );
+
+  const laterPartial = workflowHarness();
+  assert.equal(laterPartial.scrolls.length, 1);
+  laterPartial.controller.cancel();
+  assert.equal(laterPartial.controller.state.partial, true);
+  assert.equal(laterPartial.controller.state.copyCurrentReviews, false);
 });
 
 test('hidden or invalid scroll-owner states make zero further scroll calls and never auto-resume', () => {
@@ -1448,13 +1743,14 @@ test('workflow UI is contextual and safety source contains no direct Review requ
   assert.match(reviewsUi, /data-action="review-workflow-start"/);
   assert.match(reviewsUi, /data-action="review-workflow-cancel"/);
   assert.match(reviewsUi, /data-action="review-workflow-copy"/);
-  assert.match(reviewsUi, /workflowView\.phase === 'pending-confirmation'/);
+  assert.match(reviewsUi, /workflowView\.phase === 'pending-manual-start'/);
   assert.match(reviewsUi, /workflowView\.phase === 'waiting'/);
   assert.match(reviewsUi, /workflowRoot\.dataset\.scrollActivations/);
   assert.match(reviewsUi, /workflowRoot\.dataset\.correlatedRequestStarts/);
   assert.match(reviewsUi, /workflowRoot\.dataset\.correlatedNativeOutcomes/);
   assert.match(reviewsUi, /workflowRoot\.dataset\.uncorrelatedNativeEvents/);
   assert.match(reviewsUi, /workflowRoot\.dataset\.coverage/);
+  assert.match(reviewsUi, /workflowView\.copyCurrentReviews/);
   assert.doesNotMatch(reviewsUi, /data-action="(?:collect|retry)"/);
 
   const workflowSource = String(core.createReviewAutoScrollWorkflow);
@@ -1464,6 +1760,13 @@ test('workflow UI is contextual and safety source contains no direct Review requ
   assert.match(workflowSource, /observeNativeLifecycle/);
   assert.match(workflowSource, /preScrollSequence/);
   assert.doesNotMatch(source, /GM_xmlhttpRequest|@grant\s+GM_xmlhttpRequest/);
+  const runtimeSource = source.slice(
+    source.indexOf('function startReviewsPage'),
+    source.indexOf('function startProductPage'),
+  );
+  assert.match(runtimeSource, /workflowDomReady: false/);
+  assert.match(runtimeSource, /runtime\.workflowDomReady = true;[\s\S]*source: 'reviews-dom-ready'/);
+  assert.match(runtimeSource, /if \(runtime\.workflowDomReady\) \{\s+runtime\.reviewWorkflow\?\.observe/);
 });
 
 test('workflow localization has exact required EN/RU wording and preserves responsive shell constants', () => {
@@ -1471,6 +1774,8 @@ test('workflow localization has exact required EN/RU wording and preserves respo
   assert.equal(core.t('ru', 'workflow.readyToStart'), 'Готово к сбору отзывов.');
   assert.equal(core.t('en', 'workflow.start'), 'Start review collection');
   assert.equal(core.t('ru', 'workflow.start'), 'Начать сбор отзывов');
+  assert.equal(core.t('en', 'workflow.copyCurrent'), 'Copy product + current reviews for ChatGPT');
+  assert.equal(core.t('ru', 'workflow.copyCurrent'), 'Скопировать товар + текущие отзывы для ChatGPT');
   assert.equal(core.t('en', 'workflow.collecting', { page: 2, maxPage: 5, count: 18 }), 'Collecting reviews · page 2/5 · 18 retained');
   assert.equal(core.t('ru', 'workflow.collecting', { page: 2, maxPage: 5, count: 18 }), 'Собираем отзывы · страница 2/5 · сохранено: 18');
   assert.equal(core.t('en', 'workflow.endObserved', { count: 18 }), 'End of Reviews observed · 18 retained.');

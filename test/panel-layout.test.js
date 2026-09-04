@@ -69,7 +69,7 @@ test('desktop toggles update only the desktop collapse preference', () => {
 test('product action contract adds one workflow before the six existing identities and labels', () => {
   const actions = core.PRODUCT_PANEL_CONTRACT.actions;
   assert.deepEqual(actions.map(({ id, label }) => [id, label]), [
-    ['review-workflow', 'Collect reviews for ChatGPT'],
+    ['review-workflow', 'Collect product + reviews for ChatGPT'],
     ['chatgpt', 'Copy product for ChatGPT'],
     ['product', 'Copy product JSON'],
     ['variants', 'Copy variants'],
@@ -127,7 +127,7 @@ test('Product renders two captionless accessible clusters in exact DOM and focus
   assert.doesNotMatch(html, /<h[1-6]\b|group-label|>\s*Quick actions\s*<|>\s*Product export\s*</);
   assert.match(html, /class="wide primary" data-action="review-workflow"/);
   assert.match(html, /class="wide" data-action="chatgpt"/);
-  assert.match(html, /data-action="review-workflow" aria-label="Open Reviews and prepare bounded collection; explicitly start automatic collection on the Reviews page\."/);
+  assert.match(html, /data-action="review-workflow" aria-label="Collect product and bounded Reviews for a combined ChatGPT export\."/);
   assert.match(html, /class="wide" data-action="description"/);
   assert.doesNotMatch(html, /class="[^"]*wide[^"]*" data-action="(?:product|variants|clean-url|market)"/);
   const productStart = source.indexOf('function createPanel(runtime)');
@@ -422,5 +422,5 @@ test('shared shell is neutral, status is live but lightweight, and footer brandi
   assert.equal((source.match(/role="status" aria-live="polite" aria-atomic="true"/g) || []).length, 2);
   assert.equal((source.match(/href="https:\/\/bigbensoft\.com\/"/g) || []).length, 2);
   assert.equal((source.match(/target="_blank" rel="noopener noreferrer">bigbensoft\.com<\/a>/g) || []).length, 2);
-  assert.equal(core.VERSION, '0.1.28');
+  assert.equal(core.VERSION, '0.1.29');
 });
