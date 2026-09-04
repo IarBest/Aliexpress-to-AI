@@ -172,7 +172,40 @@ test('Reviews uses the shared shell contract and retains its existing two stacke
   assert.equal((reviewsSource.match(/SHARED_PANEL_STYLES/g) || []).length, 1);
   assert.equal((reviewsSource.match(/bindResponsivePanel\(/g) || []).length, 1);
   assert.match(reviewsSource, /\.actions \{ display:flex; flex-direction:column; gap:7px; \}/);
-  assert.match(reviewsSource, /renderPanelActionButtons\(REVIEWS_PANEL_CONTRACT\.actions, 'action', false\)/);
+  assert.match(reviewsSource, /renderReviewsPanelMainContent\(\)/);
+  assert.match(core.renderReviewsPanelMainContent(), /data-action="reviews"[\s\S]*data-action="reviews-chatgpt"/);
+});
+
+test('Reviews production markup keeps contextual workflow actions ahead of both statuses and permanent actions', () => {
+  const html = core.renderReviewsPanelMainContent();
+  const position = (marker) => {
+    const index = html.indexOf(marker);
+    assert.notEqual(index, -1, marker);
+    return index;
+  };
+  const workflowStart = position('data-action="review-workflow-start"');
+  const workflowCancel = position('data-action="review-workflow-cancel"');
+  const workflowCopy = position('data-action="review-workflow-copy"');
+  const workflowStatus = position('data-review-workflow-status');
+  const reviewsStatus = position('class="status"');
+  const permanentActions = position('class="actions"');
+
+  assert.ok(workflowCopy < workflowStatus, 'ready combined-copy precedes workflow status');
+  assert.ok(workflowStatus < reviewsStatus, 'workflow status precedes general Reviews status');
+  assert.ok(reviewsStatus < permanentActions, 'general Reviews status precedes permanent actions');
+  assert.ok(workflowStart < workflowStatus && workflowStart < reviewsStatus, 'manual Start uses the top workflow action area');
+  assert.ok(workflowCancel < workflowStatus, 'running Cancel precedes workflow progress/status');
+});
+
+test('hidden Reviews workflow leaves the ordinary status/action flow intact', () => {
+  const html = core.renderReviewsPanelMainContent();
+  assert.match(html, /<section class="review-workflow" data-review-workflow hidden>/);
+  assert.ok(html.indexOf('class="status"') < html.indexOf('class="actions"'));
+  assert.deepEqual(
+    [...html.matchAll(/data-action="([^"]+)"/g)].map((match) => match[1]),
+    ['review-workflow-start', 'review-workflow-cancel', 'review-workflow-copy', 'reviews', 'reviews-chatgpt'],
+  );
+  assert.match(source, /\.review-workflow\[hidden\] \{ display:none; \}/);
 });
 
 test('Reviews owns one passive settings disclosure with exactly the four presets', () => {
@@ -422,5 +455,5 @@ test('shared shell is neutral, status is live but lightweight, and footer brandi
   assert.equal((source.match(/role="status" aria-live="polite" aria-atomic="true"/g) || []).length, 2);
   assert.equal((source.match(/href="https:\/\/bigbensoft\.com\/"/g) || []).length, 2);
   assert.equal((source.match(/target="_blank" rel="noopener noreferrer">bigbensoft\.com<\/a>/g) || []).length, 2);
-  assert.equal(core.VERSION, '0.1.29');
+  assert.equal(core.VERSION, '0.1.30');
 });

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ali Helper
 // @namespace    https://github.com/local/ali-helper
-// @version      0.1.29
+// @version      0.1.30
 // @description  Read-only AliExpress URL cleaner and product/variant exporter
 // @description:ru Помощник AliExpress только для чтения: очистка URL и экспорт товара и вариантов
 // @match        https://aliexpress.ru/item/*
@@ -19,7 +19,7 @@
 (function factory(root) {
   'use strict';
 
-  const VERSION = '0.1.29';
+  const VERSION = '0.1.30';
   const SETTINGS_KEY = 'ali-helper:settings:v1';
   const REVIEW_WORKFLOW_STORAGE_KEY = 'ali-helper:review-workflow:v1';
   const REVIEW_WORKFLOW_VERSION = 1;
@@ -6141,6 +6141,7 @@
     renderPanelHeader,
     renderPanelActionButtons,
     renderProductActionGroups,
+    renderReviewsPanelMainContent,
     applyPanelActionLocale,
     applyLanguageControl,
     applySharedPanelLocale,
@@ -6768,6 +6769,19 @@
     }).join('');
   }
 
+  function renderReviewsPanelMainContent() {
+    return `<section class="review-workflow" data-review-workflow hidden>
+      <button type="button" class="primary" data-action="review-workflow-start" hidden></button>
+      <button type="button" data-action="review-workflow-cancel" hidden></button>
+      <button type="button" class="primary" data-action="review-workflow-copy" hidden></button>
+      <p class="review-workflow-status" data-review-workflow-status></p>
+    </section>
+    <div class="status" role="status" aria-live="polite" aria-atomic="true"></div>
+    <div class="actions">
+      ${renderPanelActionButtons(REVIEWS_PANEL_CONTRACT.actions, 'action', false)}
+    </div>`;
+  }
+
   function applyPanelActionLocale(root, actions, locale) {
     actions.forEach((action) => {
       const button = root.querySelector(`[data-action="${action.id}"]`);
@@ -7046,16 +7060,7 @@
       <section class="panel">
         ${renderPanelHeader()}
         <div class="body">
-          <div class="status" role="status" aria-live="polite" aria-atomic="true"></div>
-          <section class="review-workflow" data-review-workflow hidden>
-            <p class="review-workflow-status" data-review-workflow-status></p>
-            <button type="button" class="primary" data-action="review-workflow-start" hidden></button>
-            <button type="button" data-action="review-workflow-cancel" hidden></button>
-            <button type="button" class="primary" data-action="review-workflow-copy" hidden></button>
-          </section>
-          <div class="actions">
-            ${renderPanelActionButtons(REVIEWS_PANEL_CONTRACT.actions, 'action', false)}
-          </div>
+          ${renderReviewsPanelMainContent()}
           <details class="review-settings">
             <summary data-review-settings-summary></summary>
             <label class="review-setting-control">

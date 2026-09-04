@@ -769,8 +769,9 @@ Acceptance: основной export остаётся читаемым и огр�
 - [x] Завершить responsive organization/layout actions без перегрузки панели.
       Desktop сохраняет принятый direct-action layout; narrow mode оставляет
       напрямую доступными шесть прежних Product actions и новое bounded Review
-      workflow action. В 0.1.29 combined Product + Reviews action находится
-      первым и является единственным primary action; обычные status rows вроде
+      workflow action. Combined Product + Reviews action находится первым и
+      является единственным primary action; на Reviews текущее contextual action
+      находится над workflow и general Reviews status. Обычные status rows вроде
       `Waiting for productData…` и preload-status rows не занимают layout. Direct
       Review sender и menu не добавлены.
 - [ ] **Conditional:** если будет одобрено ещё одно persistent action и action

@@ -23,7 +23,7 @@ Ali Helper поддерживает английский и русский ин�
 не запускает, не перезапускает, не продлевает и не изменяет сбор Reviews; само
 переключение языка меняет только представление панели и не запускает Product/Reviews workflow, навигацию или прокрутку.
 
-## Ограниченный сбор Reviews в 0.1.29
+## Ограниченный сбор Reviews
 
 Основное Product action — `Collect product + reviews for ChatGPT` / `Собрать товар + отзывы для ChatGPT`. Нормальный workflow требует один явный пользовательский клик:
 
@@ -36,6 +36,8 @@ Ali Helper поддерживает английский и русский ин�
 Прямых Helper Review API requests — 0. После автоматической или fallback-авторизации Helper выполняет только bounded verified document scrolling; возникающие из-за прокрутки native Review requests создаёт сама страница AliExpress. Ограничения: максимум 9 helper scroll activations, 15 секунд на шаг, до 120 секунд на automatic run в пределах срока handoff, retention presets 10/30/50/100 с default 30. Coverage может оставаться частичным; reload уже активного automatic workflow его не возобновляет.
 
 Combined Product + Reviews output записывается в clipboard только отдельным явным copy action. Копирование само не запускает Review requests или прокрутку и не утверждает, что собраны все Reviews.
+
+На Reviews текущее contextual workflow action — Start, Cancel или combined copy — показывается над workflow/status text, чтобы основное действие оставалось рядом с позицией primary action на Product.
 
 ## Архитектура первой итерации
 

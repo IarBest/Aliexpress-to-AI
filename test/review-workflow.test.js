@@ -1737,12 +1737,13 @@ test('workflow UI is contextual and safety source contains no direct Review requ
   const reviewsStart = source.indexOf('function createReviewsPanel(runtime)');
   const reviewsEnd = source.indexOf('function startReviewsPage');
   const reviewsUi = source.slice(reviewsStart, reviewsEnd);
-  assert.ok(reviewsUi.indexOf('data-review-workflow') < reviewsUi.indexOf('class="actions"'));
+  const reviewsMarkup = core.renderReviewsPanelMainContent();
+  assert.ok(reviewsMarkup.indexOf('data-review-workflow') < reviewsMarkup.indexOf('class="actions"'));
   assert.equal(core.REVIEWS_PANEL_CONTRACT.actions.length, 2);
   assert.doesNotMatch(core.REVIEWS_PANEL_CONTRACT.actions.map(({ id }) => id).join(' '), /collect|retry/i);
-  assert.match(reviewsUi, /data-action="review-workflow-start"/);
-  assert.match(reviewsUi, /data-action="review-workflow-cancel"/);
-  assert.match(reviewsUi, /data-action="review-workflow-copy"/);
+  assert.match(reviewsMarkup, /data-action="review-workflow-start"/);
+  assert.match(reviewsMarkup, /data-action="review-workflow-cancel"/);
+  assert.match(reviewsMarkup, /data-action="review-workflow-copy"/);
   assert.match(reviewsUi, /workflowView\.phase === 'pending-manual-start'/);
   assert.match(reviewsUi, /workflowView\.phase === 'waiting'/);
   assert.match(reviewsUi, /workflowRoot\.dataset\.scrollActivations/);
@@ -1751,7 +1752,7 @@ test('workflow UI is contextual and safety source contains no direct Review requ
   assert.match(reviewsUi, /workflowRoot\.dataset\.uncorrelatedNativeEvents/);
   assert.match(reviewsUi, /workflowRoot\.dataset\.coverage/);
   assert.match(reviewsUi, /workflowView\.copyCurrentReviews/);
-  assert.doesNotMatch(reviewsUi, /data-action="(?:collect|retry)"/);
+  assert.doesNotMatch(reviewsMarkup, /data-action="(?:collect|retry)"/);
 
   const workflowSource = String(core.createReviewAutoScrollWorkflow);
   assert.match(workflowSource, /owner\.scrollTo\(\{ top: ownerCheck\.owner\.scrollHeight, behavior: 'auto' \}\)/);
