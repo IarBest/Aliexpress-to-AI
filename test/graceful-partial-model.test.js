@@ -108,7 +108,9 @@ test('not-observed sections produce deterministic partial warnings while safe pr
   const chatgpt = core.exportForChatGPT(product);
   assert.match(chatgpt, /Data status: PARTIAL\nNot observed: Delivery/);
   assert.match(chatgpt, /Title: ZIGBEE Smart Switch/);
-  assert.match(chatgpt, /Image: https:\/\/example\.test\/safe\.jpg/);
+  assert.match(chatgpt, /GALLERY:\nImages: 1\nVideos: 0/);
+  assert.doesNotMatch(chatgpt, /https:\/\/example\.test\/safe\.jpg/);
+  assert.equal(full.gallery.items[0].imageUrl, 'https://example.test/safe.jpg');
   assert.doesNotMatch(chatgpt, /"state"|"sources"|section diagnostics/i);
   assert.equal(
     core.formatProductStatus(product),

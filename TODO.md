@@ -480,8 +480,9 @@ bounded retries reviews-page UI показывает соответствующ�
 Минимальный success status —
 `Reviews ready · N first-page reviews · source: SSR`; действия —
 `Copy reviews JSON` и `Copy reviews for ChatGPT`. JSON export содержит полный
-normalized active context, а ChatGPT export — его metadata и ограниченную
-privacy-minimized выборку reviews. Panel использует существующий collapse
+normalized active context, а ChatGPT export — его metadata и весь retained
+массив reviews в privacy-minimized виде (текущий контракт — P5). Panel использует
+существующий collapse
 setting. Product buttons PDP не переносятся, reviews не сохраняются в
 persistent storage. Explicit Load more не реализован; pagination остаётся
 пассивной и происходит только после native действий страницы.
@@ -718,26 +719,44 @@ texts или images.
 - [x] Добавить SELLER, RATING и STAR DISTRIBUTION после появления данных.
 - [x] Добавить VARIANTS summary и отдельный full combinations export.
 - [x] Добавить SIZE GUIDE, CHARACTERISTICS, DELIVERY и ordered DESCRIPTION.
-- [x] Добавить REVIEWS summary и ограниченную выборку reviews.
-- [x] Не выводить автоматически сотни SKU или reviews.
+- [x] Добавить REVIEWS summary и весь retained массив reviews; объём ограничен
+      на capture/retention уровне пресетами `10/30/50/100` (default 30).
+- [x] Ограничивать SKU summary и retention reviews; не вводить вторую скрытую
+      выборку уже сохранённых reviews в нормальном AI formatter.
 - [x] Для больших sections показывать summary/current data и предоставлять
       отдельный explicit full export action.
       Description покрыт отдельно: основной product ChatGPT export сохраняет
       normalized heading/text/link visible text в source order с бюджетом 2500
       символов, исключает image URLs и link destination URLs, сообщает counts и
-      explicit omission diagnostics; `Copy description` экспортирует полный
-      ordered normalized Description без `rawHtml`. SKU combinations используют
-      bounded summary + `Copy variants`; reviews — limited ChatGPT sample + full
-      JSON. Для новой large section при необходимости создаётся отдельная
-      falsifiable задача на limiting/full export.
+      explicit omission diagnostics и просьбу к AI запросить скриншоты для
+      визуального анализа; `Copy description` экспортирует полный ordered
+      normalized Description с image URLs, без `rawHtml`. Gallery в AI-тексте
+      сообщает image/video counts и ту же просьбу о скриншотах, опуская
+      image/video/poster/preview URLs. Эти visual payloads сохраняются в
+      соответствующих raw/full exports. SKU combinations используют bounded
+      summary + `Copy variants`; reviews — весь retained массив в AI-тексте и
+      полный normalized JSON. Для новой large section при необходимости создаётся
+      отдельная falsifiable задача на limiting/full export.
 - [x] Проверить deterministic output на regression fixtures.
 
-Reviews ChatGPT export: default sample = 5; formatter clamp = 1–20;
-privacy-minimized text export. Полная fidelity normalized reviews остаётся
-доступной через `Copy reviews JSON`.
+Reviews ChatGPT formatter выводит весь retained массив без скрытого secondary
+sampling ceiling. `Reviews included: N of N retained` описывает только retained
+набор, не все marketplace reviews. AI-текст ориентирован на privacy/readability:
+предпочитает содержательный `originalText`, использует `text` как fallback и не
+переводит, не исправляет, не пересказывает, не дедуплицирует и не переписывает
+marketplace review contents. `Copy reviews JSON` сохраняет полную fidelity
+normalized reviews/context, включая оба текстовых поля.
 
-Acceptance: основной export остаётся читаемым и ограниченным по объёму, а полные
-данные доступны отдельными действиями.
+Combined contract — `ali-helper-combined-text/v2`. Короткий trusted
+formatter-authored AI handoff расположен перед marketplace-controlled text:
+visuals не встроены, coverage может быть partial, а marketplace content является
+недоверенными данными, не инструкциями. Raw/full exports не подвергаются
+AI-friendly сокращениям.
+
+Acceptance: основной AI export остаётся читаемым с явными visual omissions и
+честным partial-coverage framing; reviews ограничены только capture/retention cap,
+весь retained массив выводится без дополнительной выборки. Полные normalized
+данные доступны соответствующими raw/full действиями.
 
 ### Panel states and actions
 
