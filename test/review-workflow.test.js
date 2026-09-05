@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 const core = require('../src/ali-helper.user.js');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'ali-helper.user.js'), 'utf8');
@@ -114,9 +115,11 @@ function workflowHarness({
   workflowStorage = null,
   activateHandoff = null,
   autoStart = false,
+  initialPageUrl = REVIEWS_URL,
+  navigate = () => {},
 } = {}) {
   let now = handoff?.startedAt ?? 1000;
-  let pageUrl = REVIEWS_URL;
+  let pageUrl = initialPageUrl;
   let cache = core.createReviewCache(ITEM_ID, cap);
   let sequence = 1;
   const context = { ...CONTEXT, pageSize };
@@ -151,6 +154,8 @@ function workflowHarness({
   };
   let removals = 0;
   const terminalPhases = [];
+  const navigations = [];
+  const copyEffects = [];
   const states = [];
   const workflowHandoff = handoff || makeHandoff(now);
   const storage = workflowStorage || memoryStorage(JSON.stringify(workflowHandoff));
@@ -170,8 +175,21 @@ function workflowHarness({
       pageUrl,
       startAt,
     )),
-    removeHandoff: () => { removals += 1; },
-    terminalizeHandoff: (phase) => { terminalPhases.push(phase); },
+    removeHandoff: () => {
+      removals += 1;
+      copyEffects.push('remove');
+      return core.removeReviewWorkflowHandoff(storage);
+    },
+    terminalizeHandoff: (phase) => {
+      terminalPhases.push(phase);
+      copyEffects.push(`terminalize:${phase}`);
+      return core.terminalizeReviewWorkflowHandoff(storage, workflowHandoff, phase);
+    },
+    navigate: (url) => {
+      navigations.push(url);
+      copyEffects.push('navigate');
+      return navigate(url);
+    },
     onChange: (state) => states.push(state),
   });
   if (pageOperationPending) controller.setPageOperationPending(true);
@@ -197,6 +215,8 @@ function workflowHarness({
     documentLike,
     states,
     storage,
+    navigations,
+    copyEffects,
     startResult,
     get cache() { return cache; },
     get removals() { return removals; },
@@ -204,6 +224,7 @@ function workflowHarness({
     get nextSequence() { return sequence; },
     setNow(value) { now = value; },
     setPageUrl(value) { pageUrl = value; },
+    observe,
     lifecycle(event) { controller.observeNativeLifecycle(event); },
     startNative(pageNum, eventContext = context, eventSequence = sequence++) {
       const event = lifecycleEvent('request-start', pageNum, eventSequence, eventContext);
@@ -244,6 +265,32 @@ function workflowHarness({
       while (frames.length) frames.shift()();
       timers.runDelay(0);
     },
+  };
+}
+
+function reviewsClickHandler({ controller, reviewPage, copyText, locale = 'en' }) {
+  const panelStart = source.indexOf('function createReviewsPanel(runtime)');
+  const handlerStart = source.indexOf("shadow.addEventListener('click', async (event) => {", panelStart);
+  const handlerEnd = source.indexOf('\n    (document.body || document.documentElement).appendChild(host);', handlerStart);
+  assert.ok(panelStart >= 0 && handlerStart > panelStart && handlerEnd > handlerStart);
+  let handler;
+  const flashes = [];
+  vm.runInNewContext(source.slice(handlerStart, handlerEnd), {
+    shadow: { addEventListener(type, listener) { assert.equal(type, 'click'); handler = listener; } },
+    runtime: { reviewWorkflow: controller, reviewPage },
+    copyText,
+    exportReviewsPage: core.exportReviewsPage,
+    formatReviewsForChatGPT: core.formatReviewsForChatGPT,
+    createUiMessage: core.createUiMessage,
+    flash(message, isError = false) {
+      flashes.push({ text: core.formatUiMessage(locale, message), isError });
+    },
+    location: { assign() { assert.fail('UI must delegate Product navigation to the workflow'); } },
+    history: new Proxy({}, { get() { assert.fail('history navigation is forbidden'); } }),
+  });
+  return {
+    flashes,
+    click(action) { return handler({ target: { closest: () => ({ dataset: { action } }) } }); },
   };
 }
 
@@ -1764,6 +1811,719 @@ test('combined copy uses only the current active canonical context and marks cha
   assert.doesNotMatch(output, /Reviews retained: 12/);
 });
 
+for (const [label, setup, expectedCoverage, expectedPartial, expectedCurrent] of [
+  ['complete', (harness) => harness.accept(2, []), 'terminal-empty-page', false, false],
+  ['partial', (harness) => harness.controller.cancel(), 'partial-cancelled', true, false],
+  ['current Reviews', (harness) => {
+    harness.documentLike.querySelector = () => null;
+    harness.controller.setPageOperationPending(false);
+  }, 'partial-scroll-owner', true, true],
+]) {
+  test(`${label} combined copy completes clipboard once, terminalizes, and returns once to the accepted Product`, async () => {
+    const harness = workflowHarness({ pageOperationPending: label === 'current Reviews' });
+    setup(harness);
+    assert.equal(harness.controller.state.coverage, expectedCoverage);
+    assert.equal(harness.controller.state.partial, expectedPartial);
+    assert.equal(harness.controller.state.copyCurrentReviews, expectedCurrent);
+    assert.deepEqual(harness.navigations, []);
+    harness.copyEffects.length = 0;
+    const copied = [];
+    const result = await harness.controller.copy(async (text) => {
+      copied.push(text);
+      harness.copyEffects.push('clipboard');
+      assert.deepEqual(harness.navigations, []);
+    });
+    assert.deepEqual(result, { ok: true });
+    assert.equal(copied.length, 1);
+    assert.match(copied[0], new RegExp(`Review coverage: ${expectedCoverage}`));
+    assert.deepEqual(harness.copyEffects, ['clipboard', 'terminalize:completed', 'remove', 'navigate']);
+    assert.deepEqual(harness.navigations, [makeHandoff().originProductUrl]);
+    assert.equal(harness.storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY), null);
+  });
+}
+
+test('pending combined clipboard blocks return, cleanup, and duplicate user action until successful completion', async () => {
+  const harness = workflowHarness({ cap: 10 });
+  const storedBefore = harness.storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY);
+  harness.copyEffects.length = 0;
+  let finishCopy;
+  let writes = 0;
+  const pending = harness.controller.copy(() => new Promise((resolve) => {
+    writes += 1;
+    finishCopy = resolve;
+  }));
+  assert.equal(harness.controller.state.copyPending, true);
+  assert.equal(writes, 1);
+  assert.deepEqual(harness.navigations, []);
+  assert.deepEqual(harness.copyEffects, []);
+  assert.equal(harness.storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY), storedBefore);
+  assert.deepEqual(await harness.controller.copy(() => assert.fail('duplicate clipboard write')), {
+    ok: false, reason: 'unavailable',
+  });
+  finishCopy();
+  assert.deepEqual(await pending, { ok: true });
+  assert.equal(writes, 1);
+  assert.deepEqual(harness.navigations, [makeHandoff().originProductUrl]);
+  assert.deepEqual(harness.copyEffects, ['terminalize:completed', 'remove', 'navigate']);
+  assert.equal(harness.controller.state.copyPending, false);
+  assert.deepEqual(await harness.controller.copy(async () => { writes += 1; }), { ok: true });
+  assert.equal(writes, 2);
+  assert.deepEqual(harness.navigations, [makeHandoff().originProductUrl, makeHandoff().originProductUrl]);
+});
+
+test('combined clipboard completion has a separate 5000ms bound and timeout leaves the handoff retryable', async () => {
+  assert.equal(core.REVIEW_WORKFLOW_CLIPBOARD_COMPLETION_TIMEOUT_MS, 5000);
+  const harness = workflowHarness({ cap: 10 });
+  const storedBefore = harness.storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY);
+  let writes = 0;
+  const pending = harness.controller.copy(() => {
+    writes += 1;
+    return new Promise(() => {});
+  });
+  assert.equal(harness.controller.state.copyPending, true);
+  assert.equal([...harness.timers.pending.values()].filter(({ delay }) => delay === 5000).length, 1);
+  harness.setNow(6000);
+  harness.timers.runDelay(5000);
+  assert.deepEqual(await pending, { ok: false, reason: 'copy-timeout' });
+  assert.equal(writes, 1);
+  assert.equal(harness.controller.state.copyPending, false);
+  assert.equal(harness.controller.state.canCopy, true);
+  assert.equal(harness.controller.state.phase, 'ready');
+  assert.equal(harness.storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY), storedBefore);
+  assert.deepEqual(harness.copyEffects, []);
+  assert.deepEqual(harness.terminalPhases, []);
+  assert.deepEqual(harness.navigations, []);
+});
+
+test('late completion after timeout cannot clean up, navigate, notify, or change the settled result', async () => {
+  const harness = workflowHarness({ cap: 10 });
+  let finishCopy;
+  const pending = harness.controller.copy(() => new Promise((resolve) => { finishCopy = resolve; }));
+  harness.setNow(6000);
+  harness.timers.runDelay(core.REVIEW_WORKFLOW_CLIPBOARD_COMPLETION_TIMEOUT_MS);
+  const result = await pending;
+  const statesBefore = harness.states.slice();
+  const stateBefore = harness.controller.state;
+  const storedBefore = harness.storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY);
+  const writesBefore = harness.storage.writes;
+  finishCopy();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(await pending, result);
+  assert.deepEqual(result, { ok: false, reason: 'copy-timeout' });
+  assert.deepEqual(harness.states, statesBefore);
+  assert.deepEqual(harness.controller.state, stateBefore);
+  assert.equal(harness.storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY), storedBefore);
+  assert.equal(harness.storage.writes, writesBefore);
+  assert.deepEqual(harness.copyEffects, []);
+  assert.deepEqual(harness.navigations, []);
+});
+
+test('timed-out attempt cannot release or otherwise alter a pending successful retry', async () => {
+  const harness = workflowHarness({ cap: 10 });
+  const completions = [];
+  const copied = [];
+  const copy = (text) => new Promise((resolve) => {
+    copied.push(text);
+    completions.push(resolve);
+  });
+  const first = harness.controller.copy(copy);
+  harness.setNow(6000);
+  harness.timers.runDelay(core.REVIEW_WORKFLOW_CLIPBOARD_COMPLETION_TIMEOUT_MS);
+  assert.deepEqual(await first, { ok: false, reason: 'copy-timeout' });
+  const second = harness.controller.copy(copy);
+  assert.equal(copied.length, 2, 'each explicit attempt writes exactly once');
+  const statesBefore = harness.states.slice();
+  const stateBefore = harness.controller.state;
+  const storedBefore = harness.storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY);
+  completions[0]();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(harness.states, statesBefore);
+  assert.deepEqual(harness.controller.state, stateBefore);
+  assert.equal(harness.controller.state.copyPending, true);
+  assert.equal(harness.storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY), storedBefore);
+  assert.deepEqual(harness.copyEffects, []);
+  assert.deepEqual(await harness.controller.copy(() => assert.fail('retry remains pending')), {
+    ok: false, reason: 'unavailable',
+  });
+  completions[1]();
+  assert.deepEqual(await second, { ok: true });
+  assert.equal(harness.controller.state.copyPending, false);
+  assert.deepEqual(harness.copyEffects, ['terminalize:completed', 'remove', 'navigate']);
+  assert.deepEqual(harness.navigations, [makeHandoff().originProductUrl]);
+  assert.equal(harness.storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY), null);
+  assert.equal(copied.length, 2);
+});
+
+for (const [label, changedUrl, withoutSku = false] of [
+  ['Product route', makeHandoff().originProductUrl],
+  ['non-Reviews route', 'https://aliexpress.ru/'],
+  ['different item', 'https://aliexpress.ru/item/1005008195850531/reviews?sku_id=12000049151727540'],
+  ['different SKU', `https://aliexpress.ru/item/${ITEM_ID}/reviews?sku_id=12000049151727541`],
+  ['removed SKU', `https://aliexpress.ru/item/${ITEM_ID}/reviews`],
+  ['added SKU', REVIEWS_URL, true],
+  ['different market', `https://aliexpress.com/item/${ITEM_ID}/reviews?sku_id=12000049151727540`],
+  ['different accepted origin', `https://www.aliexpress.com/item/${ITEM_ID}/reviews?sku_id=12000049151727540`],
+]) {
+  test(`observed ${label} then original Reviews restored permanently cancels pending copy return`, async () => {
+    const initialPageUrl = withoutSku ? `https://aliexpress.ru/item/${ITEM_ID}/reviews` : REVIEWS_URL;
+    const handoff = withoutSku ? {
+      ...makeHandoff(),
+      originProductUrl: `https://aliexpress.ru/item/${ITEM_ID}.html`,
+      originSelectedSkuId: null,
+    } : makeHandoff();
+    const harness = workflowHarness({ cap: 10, handoff, initialPageUrl });
+    assert.equal(harness.controller.state.phase, 'ready');
+    let finishCopy;
+    let writes = 0;
+    const pending = harness.controller.copy(() => new Promise((resolve) => {
+      writes += 1;
+      finishCopy = resolve;
+    }));
+    // Exercise observe() itself: no state getter or final callback sees the temporary route.
+    harness.setPageUrl(changedUrl);
+    harness.observe({ source: 'route-observation' });
+    harness.setPageUrl(initialPageUrl);
+    harness.observe({ source: 'route-observation' });
+    finishCopy();
+    assert.deepEqual(await pending, { ok: true, reason: 'navigation-skipped-stale' });
+    assert.equal(writes, 1);
+    assert.deepEqual(harness.copyEffects, ['terminalize:completed', 'remove']);
+    assert.deepEqual(harness.terminalPhases, ['completed']);
+    assert.deepEqual(harness.navigations, []);
+    assert.equal(harness.controller.state.copyPending, false);
+    const restored = core.restoreReviewWorkflowHandoff(harness.storage, initialPageUrl, 1001);
+    assert.equal(restored.record, null);
+    assert.equal(restored.requiresAutoStart, false);
+    assert.equal(restored.requiresUserStart, false);
+  });
+}
+
+for (const ending of ['expiry', 'disposal']) {
+  test(`pending clipboard ${ending} still settles by 5000ms and late completion cannot revive the workflow`, async () => {
+    const handoff = { ...makeHandoff(), autoStartUntil: 3000, expiresAt: 3000 };
+    const harness = workflowHarness({ cap: 10, handoff });
+    let finishCopy;
+    const pending = harness.controller.copy(() => new Promise((resolve) => { finishCopy = resolve; }));
+    if (ending === 'expiry') {
+      harness.setNow(3000);
+      harness.timers.runDelay(2000);
+      assert.deepEqual(harness.terminalPhases, ['expired']);
+      assert.equal(harness.storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY), null);
+    } else {
+      harness.controller.dispose();
+    }
+    harness.setNow(6000);
+    harness.timers.runDelay(core.REVIEW_WORKFLOW_CLIPBOARD_COMPLETION_TIMEOUT_MS);
+    assert.deepEqual(await pending, { ok: false, reason: 'copy-timeout' });
+    assert.equal(harness.controller.state.copyPending, false);
+    assert.equal(harness.controller.state.phase, ending === 'expiry' ? 'expired' : 'disposed');
+    assert.equal(harness.controller.state.canCopy, false);
+    const stateBefore = harness.controller.state;
+    const effectsBefore = harness.copyEffects.slice();
+    finishCopy();
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.deepEqual(harness.controller.state, stateBefore);
+    assert.deepEqual(harness.copyEffects, effectsBefore);
+    assert.deepEqual(harness.navigations, []);
+    assert.equal(harness.terminalPhases.includes('completed'), false);
+    const restored = core.restoreReviewWorkflowHandoff(harness.storage, REVIEWS_URL, 6000);
+    assert.equal(restored.record, null);
+    assert.equal(restored.requiresAutoStart, false);
+    assert.equal(restored.requiresUserStart, false);
+  });
+}
+
+for (const removalFails of [false, true]) {
+  test(`clipboard confirmed after expiry preserves its only terminalization when removal ${removalFails ? 'fails' : 'succeeds'}`, async () => {
+    const handoff = { ...makeHandoff(), autoStartUntil: 3000, expiresAt: 3000 };
+    const storage = memoryStorage(JSON.stringify(handoff));
+    if (removalFails) storage.removeItem = () => {
+      storage.removed += 1;
+      throw new Error('removal blocked');
+    };
+    const harness = workflowHarness({ cap: 10, handoff, workflowStorage: storage });
+    let finishCopy;
+    let writes = 0;
+    const pending = harness.controller.copy(() => new Promise((resolve) => {
+      writes += 1;
+      harness.copyEffects.push('clipboard:pending');
+      finishCopy = () => {
+        harness.copyEffects.push('clipboard:confirmed');
+        resolve();
+      };
+    }));
+    harness.setNow(3000);
+    harness.timers.runDelay(2000);
+    assert.equal(harness.controller.state.copyPending, true);
+    assert.deepEqual(harness.terminalPhases, ['expired']);
+    assert.deepEqual(harness.copyEffects, ['clipboard:pending', 'terminalize:expired', 'remove']);
+    const storedAfterExpiry = storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY);
+    if (removalFails) assert.equal(JSON.parse(storedAfterExpiry).phase, 'expired');
+    else assert.equal(storedAfterExpiry, null);
+    const storageWritesAfterExpiry = storage.writes;
+    harness.setNow(3001); // Confirmation is still before the attempt's 6000ms deadline.
+    finishCopy();
+    assert.deepEqual(await pending, { ok: true, reason: 'navigation-skipped-expired' });
+    assert.equal(writes, 1);
+    assert.equal(harness.controller.state.phase, 'expired');
+    assert.equal(harness.controller.state.stopReason, 'workflow-expired');
+    assert.equal(harness.controller.state.copyPending, false);
+    assert.equal(harness.controller.state.canCopy, false);
+    assert.deepEqual(harness.terminalPhases, ['expired']);
+    assert.deepEqual(harness.copyEffects, [
+      'clipboard:pending', 'terminalize:expired', 'remove', 'clipboard:confirmed',
+    ]);
+    assert.equal(storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY), storedAfterExpiry);
+    if (removalFails) assert.equal(JSON.parse(storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY)).phase, 'expired');
+    assert.equal(storage.writes, storageWritesAfterExpiry);
+    assert.equal(storage.removed, 1);
+    assert.equal(harness.timers.pending.size, 0);
+    assert.deepEqual(harness.navigations, []);
+    assert.deepEqual(await harness.controller.copy(() => assert.fail('expired workflow cannot copy again')), {
+      ok: false, reason: 'unavailable',
+    });
+    const restored = core.restoreReviewWorkflowHandoff(storage, REVIEWS_URL, 3001);
+    assert.equal(restored.record, null);
+    assert.equal(restored.requiresAutoStart, false);
+    assert.equal(restored.requiresUserStart, false);
+  });
+}
+
+for (const confirmedAt of [3000, 3001]) {
+  test(`absolute expiry wins at ${confirmedAt}ms even before its timer callback is processed`, async () => {
+    const handoff = { ...makeHandoff(), autoStartUntil: 3000, expiresAt: 3000 };
+    const harness = workflowHarness({ cap: 10, handoff });
+    let finishCopy;
+    const pending = harness.controller.copy(() => new Promise((resolve) => { finishCopy = resolve; }));
+    assert.equal(harness.controller.state.phase, 'ready');
+    assert.deepEqual(harness.terminalPhases, []);
+    assert.ok([...harness.timers.pending.values()].some(({ delay }) => delay === 2000));
+    // Settle only the clipboard; deliberately leave the scheduled expiry callback queued.
+    harness.setNow(confirmedAt);
+    finishCopy();
+    assert.deepEqual(await pending, { ok: true, reason: 'navigation-skipped-expired' });
+    assert.equal(harness.controller.state.phase, 'expired');
+    assert.equal(harness.controller.state.copyPending, false);
+    assert.equal(harness.controller.state.canCopy, false);
+    assert.deepEqual(harness.terminalPhases, ['expired']);
+    assert.deepEqual(harness.copyEffects, ['terminalize:expired', 'remove']);
+    assert.equal(harness.storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY), null);
+    assert.equal(harness.storage.removed, 1);
+    assert.equal(harness.timers.pending.size, 0);
+    assert.deepEqual(harness.navigations, []);
+  });
+}
+
+test('clipboard confirmation immediately before absolute expiry completes and returns to the exact Product origin', async () => {
+  const handoff = { ...makeHandoff(), autoStartUntil: 3000, expiresAt: 3000 };
+  const harness = workflowHarness({ cap: 10, handoff });
+  let finishCopy;
+  let writes = 0;
+  const pending = harness.controller.copy(() => new Promise((resolve) => {
+    writes += 1;
+    finishCopy = resolve;
+  }));
+  harness.setNow(2999);
+  finishCopy();
+  assert.deepEqual(await pending, { ok: true });
+  assert.equal(writes, 1);
+  assert.equal(harness.controller.state.copyPending, false);
+  assert.deepEqual(harness.terminalPhases, ['completed']);
+  assert.deepEqual(harness.copyEffects, ['terminalize:completed', 'remove', 'navigate']);
+  assert.equal(harness.storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY), null);
+  assert.equal(harness.storage.removed, 1);
+  assert.deepEqual(harness.navigations, [handoff.originProductUrl]);
+});
+
+for (const settledClock of [2999, Number.NaN]) {
+  test(`processed expiry still owns the copy after disposal and a ${Number.isNaN(settledClock) ? 'invalid' : 'rolled-back'} clock`, async () => {
+    const handoff = { ...makeHandoff(), autoStartUntil: 3000, expiresAt: 3000 };
+    const harness = workflowHarness({ cap: 10, handoff });
+    let finishCopy;
+    const pending = harness.controller.copy(() => new Promise((resolve) => { finishCopy = resolve; }));
+    harness.setNow(3000);
+    harness.timers.runDelay(2000);
+    harness.controller.dispose();
+    harness.setNow(settledClock);
+    finishCopy();
+    assert.deepEqual(await pending, { ok: true, reason: 'navigation-skipped-expired' });
+    assert.deepEqual(harness.terminalPhases, ['expired']);
+    assert.deepEqual(harness.copyEffects, ['terminalize:expired', 'remove']);
+    assert.deepEqual(harness.navigations, []);
+    assert.equal(harness.controller.state.phase, 'disposed');
+    assert.equal(harness.controller.state.copyPending, false);
+    assert.equal(harness.controller.state.canCopy, false);
+  });
+}
+
+test('pending combined copy returns to the origin accepted at the user action despite later handoff object mutation', async () => {
+  const handoff = makeHandoff();
+  const acceptedOrigin = handoff.originProductUrl;
+  const harness = workflowHarness({ cap: 10, handoff });
+  let finishCopy;
+  let writes = 0;
+  const pending = harness.controller.copy(() => new Promise((resolve) => {
+    writes += 1;
+    finishCopy = resolve;
+  }));
+  handoff.originProductUrl = `https://aliexpress.com/item/${ITEM_ID}.html?sku_id=12000049151727541`;
+  handoff.originSelectedSkuId = '12000049151727541';
+  assert.deepEqual(harness.navigations, []);
+  finishCopy();
+  assert.deepEqual(await pending, { ok: true });
+  assert.equal(writes, 1);
+  assert.deepEqual(harness.navigations, [acceptedOrigin]);
+  assert.equal(harness.storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY), null);
+});
+
+for (const [label, invalidate, expectedReason = 'navigation-skipped-stale', terminalPhase = 'completed'] of [
+  ['workflow disposal', (harness) => harness.controller.dispose()],
+  ['item drift', (harness) => harness.setPageUrl('https://aliexpress.ru/item/1005008195850531/reviews')],
+  ['market drift', (harness) => harness.setPageUrl(`https://aliexpress.com/item/${ITEM_ID}/reviews?sku_id=12000049151727540`)],
+  ['SKU drift', (harness) => harness.setPageUrl(`https://aliexpress.ru/item/${ITEM_ID}/reviews?sku_id=12000049151727541`)],
+  ['handoff expiry', (harness) => harness.setNow(1000 + core.REVIEW_WORKFLOW_TTL_MS), 'navigation-skipped-expired', 'expired'],
+]) {
+  test(`late clipboard success after ${label} stays successful but cannot initiate stale Product return`, async () => {
+    const harness = workflowHarness({ cap: 10 });
+    let finishCopy;
+    let writes = 0;
+    const pending = harness.controller.copy(() => new Promise((resolve) => {
+      writes += 1;
+      finishCopy = resolve;
+    }));
+    invalidate(harness);
+    assert.deepEqual(harness.navigations, []);
+    finishCopy();
+    const result = await pending;
+    assert.equal(result.ok, true);
+    assert.equal(result.reason, expectedReason);
+    assert.equal(writes, 1);
+    assert.deepEqual(harness.navigations, []);
+    assert.deepEqual(harness.terminalPhases, [terminalPhase]);
+    assert.deepEqual(harness.copyEffects, [`terminalize:${terminalPhase}`, 'remove']);
+    assert.equal(harness.storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY), null);
+  });
+}
+
+for (const [label, clipboard] of [
+  ['synchronous throw', () => { throw new Error('clipboard denied'); }],
+  ['asynchronous rejection', () => Promise.reject(new Error('clipboard denied'))],
+]) {
+  test(`combined clipboard ${label} leaves Reviews and persistence unchanged without a navigation attempt`, async () => {
+    const harness = workflowHarness({ cap: 10 });
+    const storedBefore = harness.storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY);
+    harness.copyEffects.length = 0;
+    let writes = 0;
+    const result = await harness.controller.copy((text) => { writes += 1; return clipboard(text); });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, 'copy-failed');
+    assert.equal(result.error.message, 'clipboard denied');
+    assert.equal(writes, 1);
+    assert.deepEqual(harness.navigations, []);
+    assert.deepEqual(harness.copyEffects, []);
+    assert.equal(harness.storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY), storedBefore);
+    assert.equal(harness.controller.state.copyPending, false);
+    assert.equal(harness.controller.state.canCopy, true);
+  });
+}
+
+for (const [label, origin, expected] of [
+  ['RU with SKU', PRODUCT_URL, `https://aliexpress.ru/item/${ITEM_ID}.html?sku_id=12000049151727540`],
+  ['COM with SKU', `https://aliexpress.com/item/${ITEM_ID}.html?sku_id=12000049151727540`,
+    `https://aliexpress.com/item/${ITEM_ID}.html?sku_id=12000049151727540`],
+  ['www COM with SKU', `https://www.aliexpress.com/item/${ITEM_ID}.html?sku_id=12000049151727540`,
+    `https://www.aliexpress.com/item/${ITEM_ID}.html?sku_id=12000049151727540`],
+  ['no selected URL SKU', `https://aliexpress.ru/item/${ITEM_ID}.html`, `https://aliexpress.ru/item/${ITEM_ID}.html`],
+  ['tracking and hash removed', `${PRODUCT_URL}&aff_trace_key=public-test#specifications`,
+    `https://aliexpress.ru/item/${ITEM_ID}.html?sku_id=12000049151727540`],
+]) {
+  test(`Product starter through accepted Reviews handoff returns exact canonical origin: ${label}`, async () => {
+    const storage = memoryStorage();
+    const outbound = [];
+    const starter = core.createProductReviewWorkflowStarter({
+      storage,
+      getPageUrl: () => origin,
+      getProduct: product,
+      formatProduct: () => 'ALIEXPRESS PRODUCT\n\nStored product',
+      now: () => 1000,
+      createWorkflowId: () => 'workflow-test-return-0001',
+      navigate: (url) => outbound.push(url),
+      onError: (code) => assert.fail(code),
+    });
+    assert.equal(starter.start(), true);
+    assert.equal(outbound.length, 1);
+    const accepted = core.restoreReviewWorkflowHandoff(storage, outbound[0], 1000);
+    assert.equal(accepted.record.originProductUrl, expected);
+    assert.equal(accepted.requiresAutoStart, true);
+    const harness = workflowHarness({
+      cap: 10,
+      initialPageUrl: outbound[0],
+      handoff: accepted.record,
+      workflowStorage: storage,
+    });
+    let writes = 0;
+    assert.deepEqual(await harness.controller.copy(async () => { writes += 1; }), { ok: true });
+    assert.equal(writes, 1);
+    assert.deepEqual(harness.navigations, [expected]);
+    assert.equal(new URL(harness.navigations[0]).origin, new URL(origin).origin);
+    assert.equal(new URL(harness.navigations[0]).hash, '');
+    assert.deepEqual([...new URL(harness.navigations[0]).searchParams.keys()], expected.includes('?') ? ['sku_id'] : []);
+  });
+}
+
+test('unavailable and invalid combined snapshots never copy or return to Product', async () => {
+  const unavailable = workflowHarness();
+  assert.deepEqual(await unavailable.controller.copy(() => assert.fail('unavailable clipboard')), {
+    ok: false, reason: 'unavailable',
+  });
+  assert.deepEqual(unavailable.navigations, []);
+
+  const invalid = workflowHarness({ cap: 10 });
+  invalid.cache.contexts.get(invalid.cache.activeContextKey).context = null;
+  assert.deepEqual(await invalid.controller.copy(() => assert.fail('invalid snapshot clipboard')), {
+    ok: false, reason: 'invalid-snapshot',
+  });
+  assert.deepEqual(invalid.navigations, []);
+  assert.equal(invalid.terminalPhases.includes('completed'), false);
+});
+
+for (const [label, pageUrl, expectedReason] of [
+  ['different item', 'https://aliexpress.ru/item/1005008195850531/reviews?sku_id=12000049151727540', 'item-mismatch'],
+  ['different market', `https://aliexpress.com/item/${ITEM_ID}/reviews?sku_id=12000049151727540`, 'invalid-handoff'],
+  ['different selected SKU', `https://aliexpress.ru/item/${ITEM_ID}/reviews?sku_id=12000049151727541`, 'invalid-handoff'],
+  ['missing selected SKU', `https://aliexpress.ru/item/${ITEM_ID}/reviews`, 'invalid-handoff'],
+]) {
+  test(`combined copy fails closed when current Reviews route has ${label}`, async () => {
+    const harness = workflowHarness({ cap: 10 });
+    harness.setPageUrl(pageUrl);
+    assert.deepEqual(await harness.controller.copy(() => assert.fail('mismatched workflow clipboard')), {
+      ok: false, reason: expectedReason,
+    });
+    assert.deepEqual(harness.navigations, []);
+    assert.equal(harness.terminalPhases.includes('completed'), false);
+  });
+}
+
+test('an invalid accepted origin or expired handoff cannot supply a guessed return target', async () => {
+  for (const alter of [
+    (handoff) => { handoff.originProductUrl += '&utm_source=injected#later'; },
+    (handoff) => { handoff.originProductUrl = `https://aliexpress.ru/item/1005008195850531.html?sku_id=12000049151727540`; },
+    (handoff) => { handoff.originSelectedSkuId = '12000049151727541'; },
+    (_, harness) => { harness.setNow(1000 + core.REVIEW_WORKFLOW_TTL_MS); },
+  ]) {
+    const handoff = makeHandoff();
+    const harness = workflowHarness({ cap: 10, handoff });
+    alter(handoff, harness);
+    assert.deepEqual(await harness.controller.copy(() => assert.fail('invalid handoff clipboard')), {
+      ok: false, reason: 'invalid-handoff',
+    });
+    assert.deepEqual(harness.navigations, []);
+  }
+});
+
+for (const [label, navigate] of [
+  ['throws', () => { throw new Error('navigation denied'); }],
+  ['returns false', () => false],
+]) {
+  test(`navigation initiation ${label} after combined copy stays a clipboard success with one attempt and no replay`, async () => {
+    const harness = workflowHarness({ cap: 10, navigate });
+    let writes = 0;
+    const result = await harness.controller.copy(async () => { writes += 1; });
+    assert.equal(result.ok, true);
+    assert.equal(result.reason, 'navigation-failed');
+    assert.ok(result.error instanceof Error);
+    assert.equal(writes, 1);
+    assert.deepEqual(harness.navigations, [makeHandoff().originProductUrl]);
+    assert.equal(harness.terminalPhases.at(-1), 'completed');
+    assert.equal(harness.storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY), null);
+    assert.equal(harness.controller.state.copyPending, false);
+    const restored = core.restoreReviewWorkflowHandoff(harness.storage, REVIEWS_URL, 1001);
+    assert.equal(restored.record, null);
+    assert.equal(restored.requiresAutoStart, false);
+    assert.equal(restored.requiresUserStart, false);
+  });
+}
+
+test('successful return removes completed handoff before Product load and leaves no automatic Review replay', async () => {
+  let harness;
+  harness = workflowHarness({
+    cap: 10,
+    navigate(url) {
+      assert.equal(url, makeHandoff().originProductUrl);
+      assert.equal(harness.storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY), null);
+      assert.equal(core.restoreReviewWorkflowHandoff(harness.storage, url, 1001).record, null);
+    },
+  });
+  assert.deepEqual(await harness.controller.copy(async () => {}), { ok: true });
+  harness.controller.dispose();
+  harness.timers.runAll();
+  const restored = core.restoreReviewWorkflowHandoff(harness.storage, REVIEWS_URL, 1002);
+  assert.equal(restored.present, false);
+  assert.equal(restored.requiresAutoStart, false);
+  assert.equal(restored.requiresUserStart, false);
+  assert.deepEqual(harness.navigations, [makeHandoff().originProductUrl]);
+});
+
+test('failed storage removal still leaves a completed tombstone that cannot restart Reviews after return', async () => {
+  const storage = memoryStorage(JSON.stringify(makeHandoff()));
+  storage.removeItem = () => { throw new Error('cleanup blocked'); };
+  const harness = workflowHarness({ cap: 10, workflowStorage: storage });
+  assert.deepEqual(await harness.controller.copy(async () => {}), { ok: true });
+  assert.equal(JSON.parse(storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY)).phase, 'completed');
+  assert.deepEqual(harness.navigations, [makeHandoff().originProductUrl]);
+  const restored = core.restoreReviewWorkflowHandoff(storage, REVIEWS_URL, 1001);
+  assert.equal(restored.reason, 'terminal');
+  assert.equal(restored.record, null);
+  assert.equal(restored.requiresAutoStart, false);
+  assert.equal(restored.requiresUserStart, false);
+});
+
+for (const [action, format, successKey] of [
+  ['reviews', core.exportReviewsPage, 'reviews.copyJsonSuccess'],
+  ['reviews-chatgpt', core.formatReviewsForChatGPT, 'reviews.copyChatgptSuccess'],
+]) {
+  test(`ordinary ${action} UI copy remains independent and never returns to Product`, async () => {
+    const harness = workflowHarness({ cap: 10 });
+    const reviewPage = core.getActiveReviewPage(harness.cache);
+    const storedBefore = harness.storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY);
+    const copied = [];
+    const ui = reviewsClickHandler({
+      controller: { copy: () => assert.fail('standalone action must not use combined workflow') },
+      reviewPage,
+      copyText: async (text, options) => {
+        assert.equal(options, undefined, 'ordinary Reviews copy must not request completion-aware behavior');
+        copied.push(text);
+      },
+    });
+    await ui.click(action);
+    assert.deepEqual(copied, [format(reviewPage)]);
+    assert.deepEqual(ui.flashes, [{ text: core.t('en', successKey), isError: false }]);
+    assert.deepEqual(harness.navigations, []);
+    assert.equal(harness.storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY), storedBefore);
+  });
+}
+
+for (const locale of ['en', 'ru']) {
+  test(`combined UI ${locale} timeout is honest and an old completion cannot flash success or disrupt retry`, async () => {
+    const harness = workflowHarness({ cap: 10 });
+    const completions = [];
+    const ui = reviewsClickHandler({
+      controller: harness.controller,
+      reviewPage: core.getActiveReviewPage(harness.cache),
+      copyText: () => new Promise((resolve) => { completions.push(resolve); }),
+      locale,
+    });
+    const first = ui.click('review-workflow-copy');
+    harness.setNow(6000);
+    harness.timers.runDelay(core.REVIEW_WORKFLOW_CLIPBOARD_COMPLETION_TIMEOUT_MS);
+    await first;
+    assert.equal(completions.length, 1);
+    assert.equal(ui.flashes.length, 1);
+    assert.equal(ui.flashes[0].text, core.t(locale, 'workflow.copyTimeout'));
+    assert.notEqual(ui.flashes[0].text, 'workflow.copyTimeout');
+    assert.doesNotMatch(ui.flashes[0].text, /copy failed|не удалось скопировать|clipboard is empty|буфер обмена пуст/i);
+    const flashesBefore = ui.flashes.slice();
+    const second = ui.click('review-workflow-copy');
+    assert.equal(completions.length, 2);
+    completions[1]();
+    await second;
+    assert.deepEqual(harness.navigations, [makeHandoff().originProductUrl]);
+    const stateBefore = harness.controller.state;
+    const statesBefore = harness.states.slice();
+    const effectsBefore = harness.copyEffects.slice();
+    completions[0]();
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.deepEqual(ui.flashes, flashesBefore);
+    assert.deepEqual(harness.controller.state, stateBefore);
+    assert.deepEqual(harness.states, statesBefore);
+    assert.deepEqual(harness.copyEffects, effectsBefore);
+    assert.equal(completions.length, 2);
+  });
+
+  test(`combined UI ${locale} stale success reports cancellation without a clipboard or navigation error`, async () => {
+    const harness = workflowHarness({ cap: 10 });
+    let finishCopy;
+    const ui = reviewsClickHandler({
+      controller: harness.controller,
+      reviewPage: core.getActiveReviewPage(harness.cache),
+      copyText: () => new Promise((resolve) => { finishCopy = resolve; }),
+      locale,
+    });
+    const pending = ui.click('review-workflow-copy');
+    harness.setPageUrl(makeHandoff().originProductUrl);
+    harness.observe();
+    harness.setPageUrl(REVIEWS_URL);
+    harness.observe();
+    finishCopy();
+    await pending;
+    assert.deepEqual(ui.flashes, [{ text: core.t(locale, 'workflow.returnCancelled'), isError: false }]);
+    assert.notEqual(ui.flashes[0].text, 'workflow.returnCancelled');
+    assert.doesNotMatch(ui.flashes[0].text, /copy failed|не удалось скопировать/i);
+    assert.deepEqual(harness.navigations, []);
+    assert.equal(harness.storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY), null);
+    assert.deepEqual(harness.terminalPhases, ['completed']);
+  });
+
+  test(`combined UI shows localized ${locale} return failure without claiming clipboard failure`, async () => {
+    const harness = workflowHarness({ cap: 10, navigate: () => { throw new Error('navigation denied'); } });
+    const copied = [];
+    const ui = reviewsClickHandler({
+      controller: harness.controller,
+      reviewPage: core.getActiveReviewPage(harness.cache),
+      copyText: async (text) => { copied.push(text); },
+      locale,
+    });
+    await ui.click('review-workflow-copy');
+    assert.equal(copied.length, 1);
+    assert.deepEqual(harness.navigations, [makeHandoff().originProductUrl]);
+    assert.deepEqual(ui.flashes, [{ text: core.t(locale, 'workflow.returnFailed'), isError: true }]);
+    assert.notEqual(ui.flashes[0].text, 'workflow.returnFailed');
+    assert.doesNotMatch(ui.flashes[0].text, /copy failed|не удалось скопировать/i);
+  });
+}
+
+test('combined UI successful navigation has no cosmetic success delay or duplicate clipboard write', async () => {
+  const harness = workflowHarness({ cap: 10 });
+  let writes = 0;
+  const ui = reviewsClickHandler({
+    controller: harness.controller,
+    reviewPage: core.getActiveReviewPage(harness.cache),
+    copyText: async () => { writes += 1; },
+  });
+  await ui.click('review-workflow-copy');
+  assert.equal(writes, 1);
+  assert.deepEqual(harness.navigations, [makeHandoff().originProductUrl]);
+  assert.deepEqual(ui.flashes, []);
+});
+
+test('combined UI clipboard failure retains its existing error and does not attempt navigation', async () => {
+  const harness = workflowHarness({ cap: 10 });
+  const ui = reviewsClickHandler({
+    controller: harness.controller,
+    reviewPage: core.getActiveReviewPage(harness.cache),
+    copyText: async () => { throw new Error('clipboard denied'); },
+  });
+  await ui.click('review-workflow-copy');
+  assert.deepEqual(harness.navigations, []);
+  assert.deepEqual(ui.flashes, [{ text: core.t('en', 'copy.failed', { error: 'clipboard denied' }), isError: true }]);
+});
+
+test('Product return has no history fallback, second target, direct Review sender, or formatter navigation', () => {
+  assert.doesNotMatch(source, /\bhistory\s*(?:\?\.)?\s*(?:\.\s*(?:back|go|forward)\b|\[\s*['"](?:back|go|forward)['"]\s*\])/);
+  const workflowSource = String(core.createReviewAutoScrollWorkflow);
+  assert.equal((workflowSource.match(/options\.navigate\s*\(/g) || []).length, 1);
+  assert.match(workflowSource, /options\.navigate\(acceptedHandoff\.originProductUrl\)/);
+  assert.doesNotMatch(workflowSource, /\bfetch\s*\(|XMLHttpRequest|GM_xmlhttpRequest|\.send\s*\(|\.click\s*\(/);
+  assert.doesNotMatch(String(core.formatCombinedProductReviews), /location|navigate|history|clipboard/i);
+  const runtimeSource = source.slice(source.indexOf('function startReviewsPage'), source.indexOf('function startProductPage'));
+  assert.match(runtimeSource, /navigate:\s*\(url\)\s*=>\s*location\.assign\(url\)/);
+  assert.doesNotMatch(runtimeSource, /\bfetch\s*\(|new\s+XMLHttpRequest|GM_xmlhttpRequest|\.send\s*\(/);
+});
+
 test('workflow UI is contextual and safety source contains no direct Review request or synthetic interaction', () => {
   const reviewsStart = source.indexOf('function createReviewsPanel(runtime)');
   const reviewsEnd = source.indexOf('function startReviewsPage');
@@ -1808,6 +2568,12 @@ test('workflow localization has exact required EN/RU wording and preserves respo
   assert.equal(core.t('ru', 'workflow.start'), 'Начать сбор отзывов');
   assert.equal(core.t('en', 'workflow.copyCurrent'), 'Copy product + current reviews for ChatGPT');
   assert.equal(core.t('ru', 'workflow.copyCurrent'), 'Скопировать товар + текущие отзывы для ChatGPT');
+  assert.equal(core.t('en', 'workflow.returnFailed'), 'Product and reviews copied, but Ali Helper could not return to the Product page.');
+  assert.equal(core.t('ru', 'workflow.returnFailed'), 'Товар и отзывы скопированы, но Ali Helper не удалось вернуться на страницу товара.');
+  assert.equal(core.t('en', 'workflow.copyTimeout'), 'Could not confirm that copying finished. No automatic return was performed.');
+  assert.equal(core.t('ru', 'workflow.copyTimeout'), 'Не удалось подтвердить завершение копирования. Автоматический возврат не выполнен.');
+  assert.equal(core.t('en', 'workflow.returnCancelled'), 'Product and reviews copied. Automatic return was cancelled because the page changed.');
+  assert.equal(core.t('ru', 'workflow.returnCancelled'), 'Товар и отзывы скопированы. Автоматический возврат отменён, потому что страница изменилась.');
   assert.equal(core.t('en', 'workflow.collecting', { page: 2, maxPage: 5, count: 18 }), 'Collecting reviews · page 2/5 · 18 retained');
   assert.equal(core.t('ru', 'workflow.collecting', { page: 2, maxPage: 5, count: 18 }), 'Собираем отзывы · страница 2/5 · сохранено: 18');
   assert.equal(core.t('en', 'workflow.endObserved', { count: 18 }), 'End of Reviews observed · 18 retained.');

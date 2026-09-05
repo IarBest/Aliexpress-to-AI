@@ -793,6 +793,20 @@ Acceptance: основной AI export остаётся читаемым с яв
       находится над workflow и general Reviews status. Обычные status rows вроде
       `Waiting for productData…` и preload-status rows не занимают layout. Direct
       Review sender и menu не добавлены.
+- [x] Contextual combined Product + Reviews copy после подтверждённого clipboard
+      success автоматически возвращает в той же вкладке на точный исходный
+      Product по валидированному `originProductUrl`, сохраняя item, выбранный SKU
+      (если был) и исходный рынок/origin AliExpress. История браузера не
+      используется; обычные `Copy reviews JSON` и `Copy reviews for ChatGPT`
+      оставляют пользователя на Reviews.
+      Clipboard confirmation ограничено 5000 мс, чтобы pending combined copy
+      не оставался бессрочным: timeout означает, что завершение не подтверждено,
+      и автоматического возврата нет. Наблюдаемая смена route/item/SKU/origin
+      окончательно отменяет navigation eligibility для этой попытки copy, даже
+      если исходная страница затем восстановлена. Expiry имеет terminal
+      precedence над поздним clipboard confirmation и не позволяет восстановить
+      возврат. Завершённый handoff не может автоматически повторить
+      Product → Reviews после возвращения на Product.
 - [ ] **Conditional:** если будет одобрено ещё одно persistent action и action
       set вырастет, рассмотреть sections/menu или equivalent grouping в рамках
       соответствующего UI pass; отдельная реализация сейчас не требуется.

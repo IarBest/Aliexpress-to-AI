@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ali Helper
 // @namespace    https://github.com/local/ali-helper
-// @version      0.1.31
+// @version      0.1.32
 // @description  Read-only AliExpress URL cleaner and product/variant exporter
 // @description:ru Помощник AliExpress только для чтения: очистка URL и экспорт товара и вариантов
 // @match        https://aliexpress.ru/item/*
@@ -19,7 +19,7 @@
 (function factory(root) {
   'use strict';
 
-  const VERSION = '0.1.31';
+  const VERSION = '0.1.32';
   const SETTINGS_KEY = 'ali-helper:settings:v1';
   const REVIEW_WORKFLOW_STORAGE_KEY = 'ali-helper:review-workflow:v1';
   const REVIEW_WORKFLOW_VERSION = 1;
@@ -28,6 +28,7 @@
   const REVIEW_WORKFLOW_PRODUCT_TEXT_MAX_BYTES = 256 * 1024;
   const REVIEW_WORKFLOW_STEP_TIMEOUT_MS = 15 * 1000;
   const REVIEW_WORKFLOW_TOTAL_TIMEOUT_MS = 120 * 1000;
+  const REVIEW_WORKFLOW_CLIPBOARD_COMPLETION_TIMEOUT_MS = 5000;
   const REVIEW_WORKFLOW_MAX_SCROLLS = 9;
   const REVIEW_WORKFLOW_ID_MAX_DIGITS = 32;
   const REVIEW_WORKFLOW_TERMINAL_PHASES = Object.freeze([
@@ -217,6 +218,10 @@
       'workflow.copyPartial': 'Copy partial result for ChatGPT',
       'workflow.copyCurrent': 'Copy product + current reviews for ChatGPT',
       'workflow.copySuccess': 'Product and reviews copied for ChatGPT.',
+      'workflow.copyTimeout': 'Could not confirm that copying finished. No automatic return was performed.',
+      'workflow.returnCancelled': 'Product and reviews copied. Automatic return was cancelled because the page changed.',
+      'workflow.returnExpired': 'Product and reviews copied. Automatic return was cancelled because the review workflow expired.',
+      'workflow.returnFailed': 'Product and reviews copied, but Ali Helper could not return to the Product page.',
       'workflow.waiting': 'Waiting for the first Review context…',
       'workflow.endObserved': 'End of Reviews observed · {count} retained.',
       'workflow.capReached': 'Review limit reached · {count} retained. This may not include all Reviews.',
@@ -349,6 +354,10 @@
       'workflow.copyPartial': 'Скопировать неполный результат для ChatGPT',
       'workflow.copyCurrent': 'Скопировать товар + текущие отзывы для ChatGPT',
       'workflow.copySuccess': 'Товар и отзывы для ChatGPT скопированы.',
+      'workflow.copyTimeout': 'Не удалось подтвердить завершение копирования. Автоматический возврат не выполнен.',
+      'workflow.returnCancelled': 'Товар и отзывы скопированы. Автоматический возврат отменён, потому что страница изменилась.',
+      'workflow.returnExpired': 'Товар и отзывы скопированы. Автоматический возврат отменён, потому что срок сбора отзывов истёк.',
+      'workflow.returnFailed': 'Товар и отзывы скопированы, но Ali Helper не удалось вернуться на страницу товара.',
       'workflow.waiting': 'Ожидание первого набора отзывов…',
       'workflow.endObserved': 'Обнаружен конец отзывов · Сохранено: {count}.',
       'workflow.capReached': 'Достигнут лимит отзывов · Сохранено: {count}. Это могут быть не все отзывы.',
@@ -3530,6 +3539,7 @@
     const inFlightNativeRequests = new Map();
     let revision = 0;
     let copyPending = false;
+    let copyAttempt = null;
     let currentReviewPage = null;
     let runAuthorized = false;
 
@@ -3652,6 +3662,10 @@
     };
     const expire = () => {
       if (phase === 'disposed' || phase === 'expired') return;
+      if (copyAttempt) {
+        copyAttempt.navigationEligible = false;
+        copyAttempt.expired = true;
+      }
       revision += 1;
       clearRunTimers();
       clearTimer('expiryTimer');
@@ -3729,7 +3743,19 @@
         scheduleExpiryWake();
       }, Math.max(0, handoff.expiresAt - currentNow));
     };
+    const observeCopyRoute = () => {
+      if (!copyAttempt?.navigationEligible) return;
+      try {
+        if (phase === 'disposed' || phase === 'expired'
+          || !validateReviewWorkflowHandoff(copyAttempt.acceptedHandoff, options.getPageUrl(), readNow()).record) {
+          copyAttempt.navigationEligible = false;
+        }
+      } catch (_) {
+        copyAttempt.navigationEligible = false;
+      }
+    };
     const routeIsCurrent = () => {
+      observeCopyRoute();
       try { return getReviewsItemId(options.getPageUrl?.()) === handoff.itemId; }
       catch (_) { return false; }
     };
@@ -3894,6 +3920,7 @@
     };
 
     const observe = (cache, reviewPage, event = {}) => {
+      observeCopyRoute();
       if (phase === 'disposed' || phase === 'expired') return;
       if (phase === 'ready' && runAuthorized && !runContextKey) return;
       if ((phase === 'waiting' || phase === 'running') && enforceAbsoluteDeadlines()) return;
@@ -4020,6 +4047,28 @@
       return notify();
     };
 
+    // Bound confirmation for the combined action only; a late backend result has no effects.
+    const waitForCopyCompletion = (copyFunction, text) => new Promise((resolve) => {
+      let settled = false;
+      const finish = (result) => {
+        if (settled) return;
+        settled = true;
+        timers.clearTimeout(completionTimer);
+        resolve(result);
+      };
+      const completionTimer = timers.setTimeout(() => {
+        finish({ ok: false, reason: 'copy-timeout' });
+      }, REVIEW_WORKFLOW_CLIPBOARD_COMPLETION_TIMEOUT_MS);
+      try {
+        Promise.resolve(copyFunction(text)).then(
+          () => finish({ ok: true }),
+          (error) => finish({ ok: false, reason: 'copy-failed', error }),
+        );
+      } catch (error) {
+        finish({ ok: false, reason: 'copy-failed', error });
+      }
+    });
+
     const copy = async (copyFunction) => {
       if (copyPending || phase !== 'ready' || !reviewPageIsExportable(currentReviewPage)) {
         return { ok: false, reason: 'unavailable' };
@@ -4031,6 +4080,8 @@
       if (routeItemId !== handoff.itemId || !reviewPageIsExportable(activePage)) {
         return { ok: false, reason: 'item-mismatch' };
       }
+      const acceptedHandoff = validateReviewWorkflowHandoff(handoff, currentUrl, readNow()).record;
+      if (!acceptedHandoff) return { ok: false, reason: 'invalid-handoff' };
       const activeContextKey = createReviewContextKey(activePage.itemId, activePage.context);
       const snapshotResult = effectiveResult(activePage);
       if (runContextKey && activeContextKey !== runContextKey && !snapshotResult.contextChanged) {
@@ -4045,18 +4096,37 @@
         scrollActivations,
       });
       if (!text) return { ok: false, reason: 'invalid-snapshot' };
+      const attempt = { acceptedHandoff, navigationEligible: true, expired: false };
+      copyAttempt = attempt;
       copyPending = true;
       notify();
       try {
-        await copyFunction(text);
+        const completion = await waitForCopyCompletion(copyFunction, text);
+        if (!completion.ok) return completion;
+        const completedAt = readNow();
+        // Expiry owns this attempt even if its timer is delayed or the controller is later disposed.
+        if (attempt.expired || (completedAt !== null && completedAt >= acceptedHandoff.expiresAt)) {
+          expire();
+          return { ok: true, reason: 'navigation-skipped-expired' };
+        }
         invalidatePersistedHandoff('completed');
-        copyPending = false;
-        notify();
+        observeCopyRoute();
+        if (!attempt.navigationEligible) {
+          return { ok: true, reason: 'navigation-skipped-stale' };
+        }
+        // Reuse the accepted Product origin only after clipboard success and handoff cleanup.
+        if (options.navigate(acceptedHandoff.originProductUrl) === false) {
+          throw new Error('Product navigation was not initiated');
+        }
         return { ok: true };
       } catch (error) {
-        copyPending = false;
-        notify();
-        return { ok: false, reason: 'copy-failed', error };
+        return { ok: true, reason: 'navigation-failed', error };
+      } finally {
+        if (copyAttempt === attempt) {
+          copyAttempt = null;
+          copyPending = false;
+          notify();
+        }
       }
     };
 
@@ -4170,6 +4240,7 @@
       copy,
       dispose() {
         if (phase === 'disposed') return;
+        if (copyAttempt) copyAttempt.navigationEligible = false;
         revision += 1;
         clearRunTimers();
         clearTimer('expiryTimer');
@@ -6131,6 +6202,7 @@
     REVIEW_WORKFLOW_PRODUCT_TEXT_MAX_BYTES,
     REVIEW_WORKFLOW_STEP_TIMEOUT_MS,
     REVIEW_WORKFLOW_TOTAL_TIMEOUT_MS,
+    REVIEW_WORKFLOW_CLIPBOARD_COMPLETION_TIMEOUT_MS,
     REVIEW_WORKFLOW_MAX_SCROLLS,
     REVIEW_WORKFLOW_ID_MAX_DIGITS,
     REVIEW_WORKFLOW_TERMINAL_PHASES,
@@ -6380,8 +6452,11 @@
     try { GM_setValue(SETTINGS_KEY, settings); } catch (_) { /* storage is optional */ }
   }
 
-  function copyText(text) {
+  function copyText(text, { waitForCompletion = false } = {}) {
     if (typeof GM_setClipboard === 'function') {
+      if (waitForCompletion) {
+        return new Promise((resolve) => GM_setClipboard(text, 'text', resolve));
+      }
       GM_setClipboard(text, 'text');
       return Promise.resolve();
     }
@@ -7219,9 +7294,14 @@
       } else if (action === 'review-workflow-cancel') {
         runtime.reviewWorkflow?.cancel();
       } else if (action === 'review-workflow-copy') {
-        const result = await runtime.reviewWorkflow?.copy(copyText);
-        if (result?.ok) flash(createUiMessage('workflow.copySuccess'));
-        else if (result?.reason === 'copy-failed') {
+        const result = await runtime.reviewWorkflow?.copy((text) => copyText(text, { waitForCompletion: true }));
+        if (result?.ok) {
+          if (result.reason === 'navigation-failed') flash(createUiMessage('workflow.returnFailed'), true);
+          else if (result.reason === 'navigation-skipped-stale') flash(createUiMessage('workflow.returnCancelled'));
+          else if (result.reason === 'navigation-skipped-expired') flash(createUiMessage('workflow.returnExpired'));
+        } else if (result?.reason === 'copy-timeout') {
+          flash(createUiMessage('workflow.copyTimeout'), true);
+        } else if (result?.reason === 'copy-failed') {
           flash(createUiMessage('copy.failed', { error: result.error?.message || 'unknown error' }), true);
         } else if (result && result.reason !== 'unavailable') {
           flash(createUiMessage('copy.failed', { error: result.reason }), true);
@@ -7318,6 +7398,7 @@
           : null,
         getPageUrl: () => location.href,
         getCache: () => runtime.reviewCache,
+        navigate: (url) => location.assign(url),
         activateHandoff: (now) => activateReviewWorkflowHandoff(
           workflowStorage,
           restoredWorkflow.record,
