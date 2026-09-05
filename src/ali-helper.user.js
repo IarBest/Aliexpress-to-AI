@@ -22,10 +22,11 @@
   const VERSION = '0.1.32';
   const SETTINGS_KEY = 'ali-helper:settings:v1';
   const REVIEW_WORKFLOW_STORAGE_KEY = 'ali-helper:review-workflow:v1';
-  const REVIEW_WORKFLOW_VERSION = 1;
+  const REVIEW_WORKFLOW_VERSION = 2;
   const REVIEW_WORKFLOW_TTL_MS = 15 * 60 * 1000;
   const REVIEW_WORKFLOW_AUTO_START_WINDOW_MS = 60 * 1000;
   const REVIEW_WORKFLOW_PRODUCT_TEXT_MAX_BYTES = 256 * 1024;
+  const REVIEW_WORKFLOW_SKU_CATALOG_MAX_BYTES = 128 * 1024;
   const REVIEW_WORKFLOW_STEP_TIMEOUT_MS = 15 * 1000;
   const REVIEW_WORKFLOW_TOTAL_TIMEOUT_MS = 120 * 1000;
   const REVIEW_WORKFLOW_CLIPBOARD_COMPLETION_TIMEOUT_MS = 5000;
@@ -1439,6 +1440,91 @@
     return prototype === Object.prototype || prototype === null;
   }
 
+  function hasReviewSkuCatalogKeys(value, keys) {
+    return isStrictPlainObject(value)
+      && Reflect.ownKeys(value).sort().join('\n') === keys.join('\n');
+  }
+
+  function isReviewSkuSelectionId(value) {
+    return typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(value);
+  }
+
+  function isReviewSkuSelectionName(value) {
+    return typeof value === 'string' && value.length > 0 && value.length <= 256
+      && normalizeHumanText(value) === value && !/[\u0000-\u001f\u007f-\u009f]/.test(value);
+  }
+
+  function validateReviewSkuCatalog(value, originSelectedSkuId = null) {
+    try {
+      if (!hasReviewSkuCatalogKeys(value, ['skus'])) return null;
+      const inputSkusValue = value.skus;
+      if (!Array.isArray(inputSkusValue)) return null;
+      const inputSkus = Array.from(inputSkusValue);
+      if (!inputSkus.length) return null;
+      const skuIds = new Set();
+      const groupNames = new Map();
+      const valueNames = new Map();
+      const skus = [];
+      for (const row of inputSkus) {
+        if (!hasReviewSkuCatalogKeys(row, ['selections', 'skuId'])) return null;
+        const { skuId, selections: inputSelections } = row;
+        if (!isBoundedAliExpressId(skuId) || skuIds.has(skuId)
+          || !Array.isArray(inputSelections) || !inputSelections.length) return null;
+        skuIds.add(skuId);
+        const groups = new Set();
+        const selections = [];
+        for (const selection of inputSelections) {
+          if (!hasReviewSkuCatalogKeys(selection, ['groupId', 'groupName', 'name', 'valueId'])) return null;
+          const { groupId, groupName, valueId, name } = selection;
+          if (!isReviewSkuSelectionId(groupId) || !isReviewSkuSelectionId(valueId)
+            || !isReviewSkuSelectionName(groupName) || !isReviewSkuSelectionName(name)
+            || groups.has(groupId)) return null;
+          const valueKey = JSON.stringify([groupId, valueId]);
+          if ((groupNames.has(groupId) && groupNames.get(groupId) !== groupName)
+            || (valueNames.has(valueKey) && valueNames.get(valueKey) !== name)) return null;
+          groups.add(groupId);
+          groupNames.set(groupId, groupName);
+          valueNames.set(valueKey, name);
+          selections.push({ groupId, groupName, valueId, name });
+        }
+        skus.push({ skuId, selections });
+      }
+      if (originSelectedSkuId !== null && !skuIds.has(originSelectedSkuId)) return null;
+      const normalized = { skus };
+      if (utf8ByteLength(JSON.stringify(normalized)) > REVIEW_WORKFLOW_SKU_CATALOG_MAX_BYTES) return null;
+      return normalized;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function buildReviewSkuCatalog(product, originSelectedSkuId = null) {
+    try {
+      if (!Array.isArray(product?.skus) || !product.skus.length) return null;
+      const skus = [];
+      let bytes = utf8ByteLength('{"skus":[]}');
+      // Project actual normalized SKU rows only; never synthesize or truncate combinations.
+      for (const sku of product.skus) {
+        if (!Array.isArray(sku?.selections)) return null;
+        const row = {
+          skuId: sku.skuId,
+          selections: sku.selections.map((selection) => ({
+            groupId: selection.groupId,
+            groupName: typeof selection.groupName === 'string' ? normalizeHumanText(selection.groupName) : null,
+            valueId: selection.valueId,
+            name: typeof selection.name === 'string' ? normalizeHumanText(selection.name) : null,
+          })),
+        };
+        bytes += utf8ByteLength(JSON.stringify(row)) + (skus.length ? 1 : 0);
+        if (bytes > REVIEW_WORKFLOW_SKU_CATALOG_MAX_BYTES) return null;
+        skus.push(row);
+      }
+      return validateReviewSkuCatalog({ skus }, originSelectedSkuId);
+    } catch (_) {
+      return null;
+    }
+  }
+
   function canonicalProductWorkflowUrl(productUrl, itemId, selectedSkuId = null) {
     try {
       const source = productUrl instanceof URL ? new URL(productUrl.href) : new URL(productUrl);
@@ -1514,6 +1600,7 @@
         : null,
       expiresAt,
       productChatgptText: input?.productChatgptText,
+      reviewSkuCatalog: validateReviewSkuCatalog(input?.reviewSkuCatalog, input?.originSelectedSkuId ?? null),
     };
     return validateReviewWorkflowHandoff(record, input?.reviewsUrl, startedAt).record;
   }
@@ -1523,7 +1610,7 @@
     if (!isStrictPlainObject(value)) return result;
     const expectedKeys = [
       'autoStartUntil', 'expiresAt', 'itemId', 'originProductUrl', 'originSelectedSkuId', 'phase',
-      'productChatgptText', 'startedAt', 'version', 'workflowId',
+      'productChatgptText', 'reviewSkuCatalog', 'startedAt', 'version', 'workflowId',
     ];
     if (Object.keys(value).sort().join('\n') !== expectedKeys.join('\n')
       || value.version !== REVIEW_WORKFLOW_VERSION
@@ -1548,6 +1635,8 @@
       || value.autoStartUntil <= value.startedAt
       || value.startedAt > now
       || utf8ByteLength(value.productChatgptText) > REVIEW_WORKFLOW_PRODUCT_TEXT_MAX_BYTES) return result;
+    if (value.reviewSkuCatalog !== null
+      && !validateReviewSkuCatalog(value.reviewSkuCatalog, value.originSelectedSkuId)) return result;
     try {
       const reviews = reviewsUrl instanceof URL ? new URL(reviewsUrl.href) : new URL(reviewsUrl);
       const product = new URL(value.originProductUrl);
@@ -1579,6 +1668,13 @@
     }
     if (value.expiresAt <= now) return { record: null, reason: 'expired' };
     return { record: { ...value }, reason: null };
+  }
+
+  function getTrustedReviewSkuCatalog(handoff, reviewsUrl, now, itemId) {
+    const validation = validateReviewWorkflowHandoff(handoff, reviewsUrl, now);
+    return validation.reason === null && validation.record?.itemId === itemId
+      ? validation.record.reviewSkuCatalog
+      : null;
   }
 
   function terminalizeReviewWorkflowHandoff(storage, handoff, phase) {
@@ -1710,6 +1806,7 @@
             originSelectedSkuId: target.selectedSkuId,
             startedAt,
             productChatgptText,
+            reviewSkuCatalog: buildReviewSkuCatalog(product, target.selectedSkuId),
             reviewsUrl: target.reviewsUrl,
           });
           if (!handoff) throw Object.assign(new Error('invalid Product handoff'), { workflowCode: 'invalid' });
@@ -2811,6 +2908,7 @@
       itemId: reviewPage.itemId,
       source: reviewPage.source,
       context: reviewPage.context,
+      ...(reviewPage.selection ? { selection: reviewPage.selection } : {}),
       pagesLoaded: reviewPage.pagesLoaded,
       loadedCount: reviewPage.loadedCount,
       captureCap: reviewPage.captureCap,
@@ -2881,12 +2979,99 @@
     ];
   }
 
-  function formatReviewSelection(context) {
+  function resolveReviewSkuSelection(context, reviewSkuCatalog) {
+    const ids = canonicalizeReviewContext(context)?.skuFilter || [];
+    const result = {
+      status: ids.length ? 'unresolved' : 'all',
+      selectedSkuCount: ids.length,
+      resolvedSkuCount: 0,
+      unresolvedSkuIds: ids.slice(),
+      mode: 'count',
+      groups: [],
+      combinations: [],
+    };
+    if (!ids.length) return result;
+    const catalog = validateReviewSkuCatalog(reviewSkuCatalog);
+    if (!catalog) return result;
+    const selectedIds = new Set(ids);
+    const resolved = catalog.skus.filter((sku) => selectedIds.has(sku.skuId));
+    const resolvedIds = new Set(resolved.map((sku) => sku.skuId));
+    result.resolvedSkuCount = resolved.length;
+    result.unresolvedSkuIds = ids.filter((skuId) => !resolvedIds.has(skuId));
+    if (!resolved.length) return result;
+    result.status = result.unresolvedSkuIds.length ? 'partial' : 'resolved';
+    result.mode = 'combinations';
+    result.combinations = resolved;
+    // A partial subset must never masquerade as the complete filter's dimensions.
+    if (result.status === 'partial') return result;
+    const selectedValues = new Map();
+    for (const sku of resolved) {
+      for (const { groupId, valueId } of sku.selections) {
+        if (!selectedValues.has(groupId)) selectedValues.set(groupId, new Set());
+        selectedValues.get(groupId).add(valueId);
+      }
+    }
+    if (resolved.some((sku) => sku.selections.length !== selectedValues.size)) return result;
+    // Inspect only REAL catalog rows. Extra matching real SKUs disallow compression.
+    const matching = catalog.skus.filter((sku) => [...selectedValues].every(([groupId, values]) =>
+      sku.selections.some((selection) => selection.groupId === groupId && values.has(selection.valueId))));
+    if (matching.length !== selectedIds.size || matching.some((sku) => !selectedIds.has(sku.skuId))) return result;
+    const groups = new Map();
+    for (const sku of catalog.skus) {
+      for (const { groupId, groupName, valueId, name } of sku.selections) {
+        if (!selectedValues.has(groupId)) continue;
+        if (!groups.has(groupId)) groups.set(groupId, { groupId, groupName, values: [] });
+        if (!selectedValues.get(groupId).has(valueId)) continue;
+        const values = groups.get(groupId).values;
+        if (!values.some((value) => value.valueId === valueId)) values.push({ valueId, name });
+      }
+    }
+    result.mode = 'dimensions';
+    result.groups = [...groups.values()];
+    result.combinations = [];
+    return result;
+  }
+
+  function formatReviewSkuCombinations(combinations) {
+    const preview = [];
+    let length = 0;
+    for (const sku of combinations.slice(0, 8)) {
+      const text = sku.selections.map(({ groupName, name }) => `${groupName}=${name}`).join(' + ');
+      if (length + text.length > 2000) break;
+      preview.push(text);
+      length += text.length + 2;
+    }
+    if (!preview.length) return null;
+    const suffix = preview.length < combinations.length
+      ? ` (showing first ${preview.length} of ${combinations.length} resolved combinations)` : '';
+    return `${preview.join('; ')}${suffix}`.trim();
+  }
+
+  function formatReviewSkuSelection(context, variants) {
+    if (!context.skuFilter.length) return 'all';
+    const fallback = `${context.skuFilter.length} selected (labels unavailable)`;
+    if (!variants || variants.selectedSkuCount !== context.skuFilter.length
+      || !variants.resolvedSkuCount) return fallback;
+    const combinationFallback = `${variants.resolvedSkuCount} resolved SKU${variants.resolvedSkuCount === 1 ? '' : 's'} (combination labels too long to display)`;
+    if (variants.status === 'partial') {
+      const unresolved = variants.unresolvedSkuIds.length;
+      const labels = formatReviewSkuCombinations(variants.combinations);
+      const resolved = labels === null ? combinationFallback : `${variants.resolvedSkuCount} resolved SKUs: ${labels}`;
+      return `${resolved}; ${unresolved} unresolved SKU${unresolved === 1 ? '' : 's'}`;
+    }
+    if (variants.status !== 'resolved') return fallback;
+    const labels = variants.mode === 'dimensions'
+      ? variants.groups.map((group) => `${group.groupName}: ${group.values.map((value) => value.name).join(', ')}`).join('; ')
+      : formatReviewSkuCombinations(variants.combinations);
+    if (labels === null) return combinationFallback;
+    return `${labels} (${variants.resolvedSkuCount} SKU${variants.resolvedSkuCount === 1 ? '' : 's'})`;
+  }
+
+  function formatReviewSelection(context, variants = null) {
     const sortLabel = context.sort === 1 ? 'Top reviews'
       : (context.sort === 2 ? 'New reviews first' : `Sort ${context.sort}`);
     const filterLabels = context.filters.map((code) => ({ 1: 'With photos', 2: 'Additional' }[code] || `Filter ${code}`));
-    const variants = context.skuFilter.length ? `${context.skuFilter.length} selected` : 'all';
-    return `Review selection: ${sortLabel} · filters: ${filterLabels.length ? filterLabels.join(' + ') : 'all'} · variants: ${variants}`;
+    return `Review selection: ${sortLabel} · filters: ${filterLabels.length ? filterLabels.join(' + ') : 'all'} · variants: ${formatReviewSkuSelection(context, variants)}`;
   }
 
   function formatReviewsForChatGPT(reviewPage) {
@@ -2897,7 +3082,7 @@
       `Item ID: ${reviewPage.itemId}`,
       `Source: ${humanizeReviewsSource(reviewPage.source)}`,
       '',
-      formatReviewSelection(reviewPage.context),
+      formatReviewSelection(reviewPage.context, reviewPage.selection?.variants),
       '',
       `Pages: ${formatReviewsPages(reviewPage.pagesLoaded)}`,
       `Captured: ${reviewPage.loadedCount} reviews`,
@@ -3152,7 +3337,7 @@
     return { pagesLoaded, reviews: merged, diagnostic };
   }
 
-  function getActiveReviewPage(cache) {
+  function getActiveReviewPage(cache, reviewSkuCatalog = null) {
     if (!cache?.activeContextKey) return null;
     const entry = cache.contexts.get(cache.activeContextKey);
     const merged = mergeReviewContext(entry);
@@ -3163,6 +3348,7 @@
       itemId: cache.itemId,
       source: entry.hasSsr && entry.hasNative ? 'ssr+native' : (entry.hasNative ? 'native:product-reviews' : 'ssr:__AER_DATA__'),
       context: entry.context,
+      selection: { variants: resolveReviewSkuSelection(entry.context, reviewSkuCatalog) },
       pagesLoaded: merged.pagesLoaded,
       loadedCount,
       captureCap: entry.captureCap,
@@ -3552,6 +3738,10 @@
       }
     };
 
+    const getWorkflowReviewPage = (cache) => getActiveReviewPage(cache, getTrustedReviewSkuCatalog(
+      handoff, options.getPageUrl(), readNow(), cache?.itemId,
+    ));
+
     const clearTimer = (name) => {
       const handle = { stepTimer, totalTimer, expiryTimer, settleTimer }[name];
       if (handle !== null) timers.clearTimeout(handle);
@@ -3786,7 +3976,7 @@
       if (!merged) return stop('partial-diagnostic', 'invalid-retained-pages');
       if (stopForDiagnostic(merged.diagnostic)) return true;
       highestPage = highestContiguousReviewPage(entry);
-      currentReviewPage = getActiveReviewPage(cache);
+      currentReviewPage = getWorkflowReviewPage(cache);
       retainedCount = currentReviewPage?.loadedCount || 0;
       const fingerprints = new Set();
       for (let page = 1; page <= highestPage; page += 1) {
@@ -3978,7 +4168,7 @@
       lastBoundSequence = completedSequence;
       correlatedNativeOutcomes += 1;
       highestPage = highestContiguousReviewPage(entry);
-      currentReviewPage = getActiveReviewPage(cache);
+      currentReviewPage = getWorkflowReviewPage(cache);
       retainedCount = currentReviewPage?.loadedCount || 0;
       notify();
       if (stopForRetainedPageState(cache, entry)) return;
@@ -4076,7 +4266,7 @@
       const currentUrl = options.getPageUrl();
       const cache = options.getCache();
       const routeItemId = getReviewsItemId(currentUrl);
-      const activePage = getActiveReviewPage(cache);
+      const activePage = getWorkflowReviewPage(cache);
       if (routeItemId !== handoff.itemId || !reviewPageIsExportable(activePage)) {
         return { ok: false, reason: 'item-mismatch' };
       }
@@ -4184,7 +4374,7 @@
       let cache;
       try { cache = options.getCache(); }
       catch (_) { return failBeforeScroll('partial-diagnostic', 'cache-unavailable'); }
-      observe(cache, getActiveReviewPage(cache), { source });
+      observe(cache, getWorkflowReviewPage(cache), { source });
       return true;
     };
     const initialNow = readNow();
@@ -6200,6 +6390,7 @@
     REVIEW_WORKFLOW_TTL_MS,
     REVIEW_WORKFLOW_AUTO_START_WINDOW_MS,
     REVIEW_WORKFLOW_PRODUCT_TEXT_MAX_BYTES,
+    REVIEW_WORKFLOW_SKU_CATALOG_MAX_BYTES,
     REVIEW_WORKFLOW_STEP_TIMEOUT_MS,
     REVIEW_WORKFLOW_TOTAL_TIMEOUT_MS,
     REVIEW_WORKFLOW_CLIPBOARD_COMPLETION_TIMEOUT_MS,
@@ -6325,6 +6516,10 @@
     applyNativeReviewBatch,
     mergeReviewContext,
     getActiveReviewPage,
+    buildReviewSkuCatalog,
+    validateReviewSkuCatalog,
+    getTrustedReviewSkuCatalog,
+    resolveReviewSkuSelection,
     formatReviewSelection,
     formatReviewContext,
     formatReviewsPageStatus,
@@ -7308,14 +7503,14 @@
         }
       } else if (action === 'reviews' && runtime.reviewPage) {
         try {
-          await copyText(exportReviewsPage(runtime.reviewPage));
+          await copyText(exportReviewsPage(runtime.getActiveReviewPage()));
           flash(createUiMessage('reviews.copyJsonSuccess'));
         } catch (error) {
           flash(createUiMessage('copy.failed', { error: error.message }), true);
         }
       } else if (action === 'reviews-chatgpt' && runtime.reviewPage) {
         try {
-          await copyText(formatReviewsForChatGPT(runtime.reviewPage));
+          await copyText(formatReviewsForChatGPT(runtime.getActiveReviewPage()));
           flash(createUiMessage('reviews.copyChatgptSuccess'));
         } catch (error) {
           flash(createUiMessage('copy.failed', { error: error.message }), true);
@@ -7371,6 +7566,12 @@
       visibilityHandler: null,
       workflowDomReady: false,
       workflowNotice: restoredWorkflow.present && !restoredWorkflow.record,
+      getActiveReviewPage() {
+        const catalog = runtime.active ? getTrustedReviewSkuCatalog(
+          restoredWorkflow.record, location.href, Date.now(), runtime.itemId,
+        ) : null;
+        return getActiveReviewPage(runtime.reviewCache, catalog);
+      },
       dispose() {
         if (!runtime.active) return;
         runtime.active = false;
@@ -7421,7 +7622,7 @@
       const nextCache = applyNativeReviewBatch(runtime.reviewCache, batch, sequence);
       if (nextCache === runtime.reviewCache) return;
       runtime.reviewCache = nextCache;
-      runtime.reviewPage = getActiveReviewPage(nextCache);
+      runtime.reviewPage = runtime.getActiveReviewPage();
       if (runtime.reviewPage) runtime.ui?.setReviews(runtime.reviewPage);
       if (runtime.workflowDomReady) {
         runtime.reviewWorkflow?.observe(nextCache, runtime.reviewPage, { batch, sequence });
@@ -7455,7 +7656,7 @@
         if (!runtime.active) return;
         runtime.reviewCache = seedReviewCacheFromSsr(runtime.reviewCache, reviewPage);
         runtime.ssrSeeded = true;
-        runtime.reviewPage = getActiveReviewPage(runtime.reviewCache);
+        runtime.reviewPage = runtime.getActiveReviewPage();
         runtime.ui?.setReviews(runtime.reviewPage);
         if (runtime.workflowDomReady) {
           runtime.reviewWorkflow?.observe(runtime.reviewCache, runtime.reviewPage, { source: 'ssr' });

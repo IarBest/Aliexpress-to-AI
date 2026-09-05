@@ -12,6 +12,21 @@ const ITEM_ID = '1005009452926938';
 const PRODUCT_URL = `https://aliexpress.ru/item/${ITEM_ID}.html?sku_id=12000049151727540&utm_source=test&sort=2`;
 const REVIEWS_URL = `https://aliexpress.ru/item/${ITEM_ID}/reviews?sku_id=12000049151727540`;
 const CONTEXT = Object.freeze({ sort: 1, filters: [], skuFilter: [], pageSize: 10 });
+const NAVY_SKUS = Object.freeze([
+  '12000049151727537', '12000049151727538', '12000049151727539',
+  '12000049151727540', '12000049151727541',
+]);
+const WHITE_SKUS = Object.freeze([
+  '12000049151727487', '12000049151727488', '12000049151727489',
+  '12000049151727490', '12000049151727491',
+]);
+
+function realProduct() {
+  const fixture = JSON.parse(fs.readFileSync(
+    path.join(__dirname, 'fixtures', 'product-1005009452926938.json'), 'utf8',
+  ));
+  return core.normalizeProduct(fixture.data, PRODUCT_URL);
+}
 
 function product() {
   return {
@@ -91,7 +106,7 @@ function fakeTimers() {
   };
 }
 
-function makeHandoff(now = 1000, phase = 'pending-auto-start') {
+function makeHandoff(now = 1000, phase = 'pending-auto-start', reviewSkuCatalog = null) {
   const handoff = core.createReviewWorkflowHandoff({
     workflowId: 'workflow-test-0001',
     itemId: ITEM_ID,
@@ -99,6 +114,7 @@ function makeHandoff(now = 1000, phase = 'pending-auto-start') {
     originSelectedSkuId: '12000049151727540',
     startedAt: now,
     productChatgptText: 'ALIEXPRESS PRODUCT\n\nStored product',
+    reviewSkuCatalog,
     reviewsUrl: REVIEWS_URL,
   });
   return { ...handoff, phase };
@@ -110,6 +126,7 @@ function workflowHarness({
   explicitStart = true,
   pageOperationPending = false,
   initialPages = null,
+  initialContext = CONTEXT,
   getComputedStyle = () => ({ overflowY: 'visible' }),
   handoff = null,
   workflowStorage = null,
@@ -122,7 +139,7 @@ function workflowHarness({
   let pageUrl = initialPageUrl;
   let cache = core.createReviewCache(ITEM_ID, cap);
   let sequence = 1;
-  const context = { ...CONTEXT, pageSize };
+  const context = { ...initialContext, pageSize };
   const pageSpecs = initialPages || [{ pageNum: 1, pageReviews: reviews(1, pageSize) }];
   let nextReviewId = 1;
   let firstBatch = null;
@@ -268,7 +285,7 @@ function workflowHarness({
   };
 }
 
-function reviewsClickHandler({ controller, reviewPage, copyText, locale = 'en' }) {
+function reviewsClickHandler({ controller, reviewPage, getActiveReviewPage = () => reviewPage, copyText, locale = 'en' }) {
   const panelStart = source.indexOf('function createReviewsPanel(runtime)');
   const handlerStart = source.indexOf("shadow.addEventListener('click', async (event) => {", panelStart);
   const handlerEnd = source.indexOf('\n    (document.body || document.documentElement).appendChild(host);', handlerStart);
@@ -277,7 +294,7 @@ function reviewsClickHandler({ controller, reviewPage, copyText, locale = 'en' }
   const flashes = [];
   vm.runInNewContext(source.slice(handlerStart, handlerEnd), {
     shadow: { addEventListener(type, listener) { assert.equal(type, 'click'); handler = listener; } },
-    runtime: { reviewWorkflow: controller, reviewPage },
+    runtime: { reviewWorkflow: controller, reviewPage, getActiveReviewPage },
     copyText,
     exportReviewsPage: core.exportReviewsPage,
     formatReviewsForChatGPT: core.formatReviewsForChatGPT,
@@ -326,14 +343,14 @@ test('handoff schema is exact, has a 60-second auto-start window, stays 15-minut
   assert.equal(handoff.expiresAt - handoff.startedAt, 15 * 60 * 1000);
   assert.deepEqual(Object.keys(handoff), [
     'version', 'workflowId', 'phase', 'itemId', 'originProductUrl', 'originSelectedSkuId',
-    'startedAt', 'autoStartUntil', 'expiresAt', 'productChatgptText',
+    'startedAt', 'autoStartUntil', 'expiresAt', 'productChatgptText', 'reviewSkuCatalog',
   ]);
   assert.deepEqual(core.validateReviewWorkflowHandoff(handoff, REVIEWS_URL, now).record, handoff);
   const serialized = JSON.stringify(handoff);
-  assert.doesNotMatch(serialized, /reviews|captureCap|pageSize|sort|filter|cookie|token|header|request/i);
+  assert.doesNotMatch(serialized, /"reviews"\s*:|captureCap|pageSize|sort|filter|cookie|token|header|request/i);
 
   assert.equal(core.validateReviewWorkflowHandoff({ ...handoff, extra: true }, REVIEWS_URL, now).record, null);
-  assert.equal(core.validateReviewWorkflowHandoff({ ...handoff, version: 2 }, REVIEWS_URL, now).record, null);
+  assert.equal(core.validateReviewWorkflowHandoff({ ...handoff, version: 1 }, REVIEWS_URL, now).record, null);
   assert.equal(core.validateReviewWorkflowHandoff({ ...handoff, startedAt: now + 1 }, REVIEWS_URL, now).record, null);
   assert.equal(core.validateReviewWorkflowHandoff({ ...handoff, autoStartUntil: handoff.autoStartUntil + 1 }, REVIEWS_URL, now).record, null);
   assert.ok(core.validateReviewWorkflowHandoff({ ...handoff, expiresAt: handoff.expiresAt - 1 }, REVIEWS_URL, now).record);
@@ -360,6 +377,135 @@ test('handoff UTF-8 limit is measured in bytes and malformed, oversized, and exp
     assert.equal(result.present, true);
     assert.equal(result.record, null);
     assert.equal(storage.removed, 1);
+  }
+});
+
+test('version 2 handoff carries the complete real SKU catalog through storage restoration and activation using the existing key', () => {
+  const normalized = realProduct();
+  const catalog = core.buildReviewSkuCatalog(normalized, normalized.selectedSkuId);
+  assert.equal(catalog.skus.length, 45);
+  const pending = makeHandoff(9000, 'pending-auto-start', catalog);
+  assert.equal(core.REVIEW_WORKFLOW_VERSION, 2);
+  assert.equal(core.REVIEW_WORKFLOW_STORAGE_KEY, 'ali-helper:review-workflow:v1');
+  assert.equal(pending.version, 2);
+  assert.deepEqual(pending.reviewSkuCatalog, catalog);
+  const storage = memoryStorage(JSON.stringify(pending));
+  const restored = core.restoreReviewWorkflowHandoff(storage, REVIEWS_URL, pending.startedAt);
+  assert.equal(restored.requiresAutoStart, true);
+  assert.deepEqual(restored.record.reviewSkuCatalog, catalog);
+  const activated = core.activateReviewWorkflowHandoff(storage, restored.record, REVIEWS_URL, pending.startedAt);
+  assert.equal(activated.ok, true);
+  assert.equal(activated.record.phase, 'active');
+  assert.deepEqual(activated.record.reviewSkuCatalog, catalog);
+  assert.deepEqual(JSON.parse(storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY)), activated.record);
+  assert.deepEqual([...storage.values.keys()], ['ali-helper:review-workflow:v1']);
+});
+
+test('null catalog remains a valid version 2 handoff and neither origin selection nor activation depends on labels', () => {
+  const pending = makeHandoff();
+  assert.equal(pending.reviewSkuCatalog, null);
+  const storage = memoryStorage(JSON.stringify(pending));
+  const restored = core.restoreReviewWorkflowHandoff(storage, REVIEWS_URL, pending.startedAt);
+  assert.equal(restored.requiresAutoStart, true);
+  assert.equal(restored.record.originSelectedSkuId, '12000049151727540');
+  assert.equal(restored.record.reviewSkuCatalog, null);
+  assert.equal(core.activateReviewWorkflowHandoff(storage, restored.record, REVIEWS_URL, pending.startedAt).ok, true);
+});
+
+test('legacy version 1 handoff fails closed without auto-start or replay even when cleanup is blocked', () => {
+  const legacy = { ...makeHandoff(), version: 1 };
+  delete legacy.reviewSkuCatalog;
+  for (const cleanupBlocked of [false, true]) {
+    const storage = memoryStorage(JSON.stringify(legacy));
+    if (cleanupBlocked) storage.removeItem = () => { throw new Error('cleanup blocked'); };
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const restored = core.restoreReviewWorkflowHandoff(storage, REVIEWS_URL, legacy.startedAt);
+      assert.equal(restored.record, null);
+      assert.equal(restored.requiresAutoStart, false);
+      assert.equal(restored.requiresUserStart, false);
+      assert.equal(core.activateReviewWorkflowHandoff(storage, legacy, REVIEWS_URL, legacy.startedAt).ok, false);
+    }
+    if (cleanupBlocked) {
+      assert.equal(JSON.parse(storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY)).phase, 'aborted');
+    } else {
+      assert.equal(storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY), null);
+    }
+  }
+});
+
+test('catalog origin binding falls back to null during creation and rejects a mismatched persisted catalog', () => {
+  const normalized = realProduct();
+  const catalog = core.buildReviewSkuCatalog(normalized, normalized.selectedSkuId);
+  const missingOrigin = { skus: catalog.skus.filter((sku) => sku.skuId !== normalized.selectedSkuId) };
+  assert.equal(core.buildReviewSkuCatalog({ ...normalized, skus: [] }, normalized.selectedSkuId), null);
+  assert.equal(makeHandoff(1000, 'pending-auto-start', missingOrigin).reviewSkuCatalog, null);
+  const forged = { ...makeHandoff(), reviewSkuCatalog: missingOrigin };
+  assert.equal(core.validateReviewWorkflowHandoff(forged, REVIEWS_URL, 1000).record, null);
+  const storage = memoryStorage(JSON.stringify(forged));
+  const restored = core.restoreReviewWorkflowHandoff(storage, REVIEWS_URL, 1000);
+  assert.equal(restored.record, null);
+  assert.equal(restored.requiresAutoStart, false);
+  assert.equal(storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY), null);
+});
+
+test('catalog changes are covered by pending and active persistence readback equality', () => {
+  const catalog = core.buildReviewSkuCatalog(realProduct(), '12000049151727540');
+  const pending = makeHandoff(1000, 'pending-auto-start', catalog);
+  const replaced = memoryStorage(JSON.stringify({ ...pending, reviewSkuCatalog: null }));
+  assert.equal(core.activateReviewWorkflowHandoff(replaced, pending, REVIEWS_URL, 1000).reason, 'pending-readback-mismatch');
+  assert.equal(replaced.writes, 0);
+
+  const damagedWrite = memoryStorage(JSON.stringify(pending));
+  const originalSet = damagedWrite.setItem.bind(damagedWrite);
+  damagedWrite.setItem = (key, value) => originalSet(key, JSON.stringify({
+    ...JSON.parse(value), reviewSkuCatalog: null,
+  }));
+  assert.equal(core.activateReviewWorkflowHandoff(damagedWrite, pending, REVIEWS_URL, 1000).reason, 'active-persistence-failed');
+});
+
+test('catalog-bearing terminal handoffs retain exact data and cannot restart when deletion fails', () => {
+  const catalog = core.buildReviewSkuCatalog(realProduct(), '12000049151727540');
+  const pending = makeHandoff(1000, 'pending-auto-start', catalog);
+  for (const phase of core.REVIEW_WORKFLOW_TERMINAL_PHASES) {
+    const storage = memoryStorage(JSON.stringify(pending));
+    assert.equal(core.terminalizeReviewWorkflowHandoff(storage, pending, phase), true);
+    const terminal = JSON.parse(storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY));
+    assert.deepEqual(terminal, { ...pending, phase });
+    storage.removeItem = () => { throw new Error('cleanup blocked'); };
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const restored = core.restoreReviewWorkflowHandoff(storage, REVIEWS_URL, 1000);
+      assert.equal(restored.record, null, phase);
+      assert.equal(restored.requiresAutoStart, false, phase);
+      assert.equal(restored.requiresUserStart, false, phase);
+      assert.equal(restored.reason, 'terminal', phase);
+    }
+  }
+  const removable = memoryStorage(JSON.stringify(pending));
+  assert.equal(core.terminalizeReviewWorkflowHandoff(removable, pending, 'completed'), true);
+  assert.equal(core.removeReviewWorkflowHandoff(removable), true);
+  assert.equal(removable.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY), null);
+});
+
+test('catalog trust requires the complete same-item route, origin, selected SKU, TTL and phase validation', () => {
+  const catalog = core.buildReviewSkuCatalog(realProduct(), '12000049151727540');
+  const pending = makeHandoff(1000, 'pending-auto-start', catalog);
+  assert.deepEqual(core.getTrustedReviewSkuCatalog(pending, REVIEWS_URL, 1000, ITEM_ID), catalog);
+  assert.equal(core.getTrustedReviewSkuCatalog(pending, REVIEWS_URL, 1000, '1005008195850531'), null);
+  for (const [change, url, at] of [
+    [{ itemId: '1005008195850531' }, REVIEWS_URL, 1000],
+    [{}, 'https://aliexpress.ru/item/1005008195850531/reviews?sku_id=12000049151727540', 1000],
+    [{ originProductUrl: 'https://aliexpress.ru/item/1005008195850531.html?sku_id=12000049151727540' }, REVIEWS_URL, 1000],
+    [{ originSelectedSkuId: WHITE_SKUS[0] }, REVIEWS_URL, 1000],
+    [{}, REVIEWS_URL, pending.expiresAt],
+    [{ phase: 'completed' }, REVIEWS_URL, 1000],
+  ]) {
+    const storage = memoryStorage(JSON.stringify({ ...pending, ...change }));
+    assert.equal(core.getTrustedReviewSkuCatalog({ ...pending, ...change }, url, at, ITEM_ID), null);
+    const restored = core.restoreReviewWorkflowHandoff(storage, url, at);
+    assert.equal(restored.record, null);
+    assert.equal(restored.requiresAutoStart, false);
+    assert.equal(restored.requiresUserStart, false);
+    assert.equal(storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY), null);
   }
 });
 
@@ -716,6 +862,81 @@ test('Product starter acquires one guard, writes once, navigates once, and keeps
   assert.equal(persisted.autoStartUntil, persisted.startedAt + core.REVIEW_WORKFLOW_AUTO_START_WINDOW_MS);
   assert.equal(persisted.productChatgptText, 'EXACT PRODUCT EXPORT');
   assert.match(source, /action === 'chatgpt'[\s\S]*copyWithFeedback\(exportForChatGPT\(product\), 'copy\.productChatgptSuccess'\)/);
+});
+
+test('Product starter derives the minimal real 45-SKU catalog before navigation without parsing Product prose', () => {
+  const normalized = realProduct();
+  const storage = memoryStorage();
+  const effects = [];
+  const starter = core.createProductReviewWorkflowStarter({
+    getPageUrl: () => PRODUCT_URL,
+    getProduct: () => normalized,
+    formatProduct: () => 'Product prose intentionally contains no variant labels.',
+    now: () => 1000,
+    createWorkflowId: () => 'workflow-real-catalog',
+    storage,
+    navigate: (url) => {
+      const stored = JSON.parse(storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY));
+      assert.equal(stored.reviewSkuCatalog.skus.length, 45);
+      assert.deepEqual(stored.reviewSkuCatalog, core.buildReviewSkuCatalog(normalized, normalized.selectedSkuId));
+      assert.doesNotMatch(JSON.stringify(stored.reviewSkuCatalog), /rawName|rawSkuAttr|skuPropIds|price|stock|images|Burgundy|Clear/);
+      effects.push(url);
+    },
+    onError: (code) => assert.fail(code),
+  });
+  assert.equal(starter.start(), true);
+  assert.deepEqual(effects, [REVIEWS_URL]);
+  assert.equal(storage.writes, 1);
+});
+
+test('invalid and oversized optional catalogs do not block Product workflow persistence, navigation or activation', () => {
+  const normalized = realProduct();
+  const duplicate = { ...normalized, skus: [...normalized.skus, normalized.skus[0]] };
+  const conflict = structuredClone(normalized);
+  conflict.skus[1].selections[0].name = 'Conflicting human name';
+  // Storage-bound stress data is deliberately derived from normalized real rows; it is not a marketplace fixture.
+  const oversized = {
+    ...normalized,
+    skus: [
+      ...normalized.skus,
+      ...Array.from({ length: 1000 }, (_, index) => ({
+        ...normalized.skus[0], skuId: String(90000000000000000n + BigInt(index)),
+      })),
+    ],
+  };
+  const projectedOversized = {
+    skus: oversized.skus.map(({ skuId, selections }) => ({
+      skuId,
+      selections: selections.map(({ groupId, groupName, valueId, name }) => ({ groupId, groupName, valueId, name })),
+    })),
+  };
+  assert.equal(core.REVIEW_WORKFLOW_SKU_CATALOG_MAX_BYTES, 128 * 1024);
+  assert.ok(core.utf8ByteLength(JSON.stringify(projectedOversized)) > core.REVIEW_WORKFLOW_SKU_CATALOG_MAX_BYTES);
+  assert.equal(core.REVIEW_WORKFLOW_PRODUCT_TEXT_MAX_BYTES, 256 * 1024);
+  for (const candidate of [duplicate, conflict, oversized]) {
+    assert.equal(core.buildReviewSkuCatalog(candidate, candidate.selectedSkuId), null);
+    const storage = memoryStorage();
+    const navigations = [];
+    const starter = core.createProductReviewWorkflowStarter({
+      getPageUrl: () => PRODUCT_URL,
+      getProduct: () => candidate,
+      formatProduct: () => 'EXACT PRODUCT EXPORT',
+      now: () => 1000,
+      createWorkflowId: () => 'workflow-catalog-fallback',
+      storage,
+      navigate: (url) => navigations.push(url),
+      onError: (code) => assert.fail(code),
+    });
+    assert.equal(starter.start(), true);
+    assert.equal(starter.started, true);
+    assert.deepEqual(navigations, [REVIEWS_URL]);
+    const stored = JSON.parse(storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY));
+    assert.equal(stored.reviewSkuCatalog, null);
+    assert.equal(stored.productChatgptText, 'EXACT PRODUCT EXPORT');
+    const restored = core.restoreReviewWorkflowHandoff(storage, REVIEWS_URL, 1000);
+    assert.equal(restored.requiresAutoStart, true);
+    assert.equal(core.activateReviewWorkflowHandoff(storage, restored.record, REVIEWS_URL, 1000).ok, true);
+  }
 });
 
 test('Product starter releases its guard and never navigates after validation, quota, or navigation failure', () => {
@@ -1811,6 +2032,70 @@ test('combined copy uses only the current active canonical context and marks cha
   assert.doesNotMatch(output, /Reviews retained: 12/);
 });
 
+for (const [label, skuFilter, expectedVariants] of [
+  ['Navy', NAVY_SKUS, 'Color: Lining B Navy Blue; Size: XS, S, M, L, XL (5 SKUs)'],
+  ['White', WHITE_SKUS, 'Color: Lining B White; Size: XS, S, M, L, XL (5 SKUs)'],
+  ['all', [], 'all'],
+]) {
+  test(`combined controller enriches its internally fetched cache with ${label} labels matching standalone Reviews`, async () => {
+    const catalog = core.buildReviewSkuCatalog(realProduct(), '12000049151727540');
+    const handoff = makeHandoff(1000, 'pending-auto-start', catalog);
+    const harness = workflowHarness({
+      cap: 10,
+      handoff,
+      initialContext: { ...CONTEXT, skuFilter: [...skuFilter] },
+    });
+    assert.equal(harness.controller.state.canCopy, true);
+    const standalonePage = core.getActiveReviewPage(harness.cache, catalog);
+    const standalone = core.formatReviewsForChatGPT(standalonePage);
+    const expectedLine = `Review selection: Top reviews · filters: all · variants: ${expectedVariants}`;
+    assert.equal(standalone.split('\n').find((line) => line.startsWith('Review selection:')), expectedLine);
+    let combined;
+    assert.deepEqual(await harness.controller.copy(async (text) => { combined = text; }), { ok: true });
+    assert.match(combined, /Format: ali-helper-combined-text\/v2/);
+    assert.equal(combined.split('\n').find((line) => line.startsWith('Review selection:')), expectedLine);
+    assert.doesNotMatch(combined, /Burgundy|Clear|12000049151727540/);
+    assert.deepEqual(harness.navigations, [handoff.originProductUrl]);
+    assert.equal(harness.storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY), null);
+  });
+}
+
+test('combined internal cache selection switches Navy to White to all without retaining earlier variant labels', async () => {
+  const catalog = core.buildReviewSkuCatalog(realProduct(), '12000049151727540');
+  const harness = workflowHarness({
+    cap: 10,
+    handoff: makeHandoff(1000, 'pending-auto-start', catalog),
+    initialContext: { ...CONTEXT, skuFilter: [...NAVY_SKUS] },
+  });
+  const captured = [];
+  assert.deepEqual(await harness.controller.copy(async (text) => captured.push(text)), { ok: true });
+  harness.passiveAccept(1, reviews(101, 10), { ...CONTEXT, skuFilter: [...WHITE_SKUS] });
+  assert.deepEqual(await harness.controller.copy(async (text) => captured.push(text)), { ok: true });
+  harness.passiveAccept(1, reviews(201, 10), { ...CONTEXT, skuFilter: [] });
+  assert.deepEqual(await harness.controller.copy(async (text) => captured.push(text)), { ok: true });
+  assert.deepEqual(captured.map((text) => text.split('\n').find((line) => line.startsWith('Review selection:'))), [
+    'Review selection: Top reviews · filters: all · variants: Color: Lining B Navy Blue; Size: XS, S, M, L, XL (5 SKUs)',
+    'Review selection: Top reviews · filters: all · variants: Color: Lining B White; Size: XS, S, M, L, XL (5 SKUs)',
+    'Review selection: Top reviews · filters: all · variants: all',
+  ]);
+  assert.doesNotMatch(captured[1], /Lining B Navy Blue/);
+  assert.doesNotMatch(captured[2], /Lining B Navy Blue|Lining B White/);
+  const allPage = core.getActiveReviewPage(harness.cache, catalog);
+  assert.equal(allPage.selection.variants.status, 'all');
+  assert.deepEqual(allPage.context.skuFilter, []);
+});
+
+test('combined cache without catalog reports selected count and never treats origin URL SKU as Review selection', async () => {
+  const harness = workflowHarness({
+    cap: 10,
+    initialContext: { ...CONTEXT, skuFilter: [...WHITE_SKUS] },
+  });
+  let text;
+  assert.deepEqual(await harness.controller.copy(async (value) => { text = value; }), { ok: true });
+  assert.match(text, /variants: 5 selected \(labels unavailable\)/);
+  assert.doesNotMatch(text, /12000049151727540|Lining B Navy Blue|Lining B White|Size: L/);
+});
+
 for (const [label, setup, expectedCoverage, expectedPartial, expectedCurrent] of [
   ['complete', (harness) => harness.accept(2, []), 'terminal-empty-page', false, false],
   ['partial', (harness) => harness.controller.cancel(), 'partial-cancelled', true, false],
@@ -2403,6 +2688,48 @@ for (const [action, format, successKey] of [
     assert.deepEqual(ui.flashes, [{ text: core.t('en', successKey), isError: false }]);
     assert.deepEqual(harness.navigations, []);
     assert.equal(harness.storage.getItem(core.REVIEW_WORKFLOW_STORAGE_KEY), storedBefore);
+  });
+}
+
+for (const action of ['reviews', 'reviews-chatgpt']) {
+  test(`ordinary ${action} copy revalidates current catalog trust instead of exporting stale rendered labels`, async () => {
+    const catalog = core.buildReviewSkuCatalog(realProduct(), '12000049151727540');
+    const handoff = makeHandoff(1000, 'pending-auto-start', catalog);
+    const harness = workflowHarness({
+      cap: 10,
+      handoff,
+      initialContext: { ...CONTEXT, skuFilter: [...NAVY_SKUS] },
+    });
+    const renderedPage = core.getActiveReviewPage(harness.cache, catalog);
+    assert.equal(renderedPage.selection.variants.status, 'resolved');
+    let now = 1000;
+    let getterCalls = 0;
+    const copied = [];
+    const ui = reviewsClickHandler({
+      controller: harness.controller,
+      reviewPage: renderedPage,
+      getActiveReviewPage: () => {
+        getterCalls += 1;
+        return core.getActiveReviewPage(harness.cache, core.getTrustedReviewSkuCatalog(
+          handoff, REVIEWS_URL, now, ITEM_ID,
+        ));
+      },
+      copyText: async (text) => copied.push(text),
+    });
+    now = handoff.expiresAt;
+    await ui.click(action);
+    assert.equal(getterCalls, 1);
+    assert.equal(copied.length, 1);
+    if (action === 'reviews') {
+      const exported = JSON.parse(copied[0]);
+      assert.deepEqual(exported.context.skuFilter, [...NAVY_SKUS]);
+      assert.equal(exported.selection.variants.status, 'unresolved');
+    } else {
+      assert.match(copied[0], /variants: 5 selected \(labels unavailable\)/);
+      assert.doesNotMatch(copied[0], /Lining B Navy Blue|12000049151727540/);
+    }
+    assert.equal(renderedPage.selection.variants.status, 'resolved', 'the frozen render snapshot must not supply copy metadata');
+    assert.deepEqual(harness.navigations, []);
   });
 }
 
