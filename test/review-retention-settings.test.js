@@ -190,7 +190,7 @@ test('status and export report the active snapshot without changing the export k
   let exported = JSON.parse(core.exportReviewsPage(oldContext));
   assert.equal(exported.captureCap, 30);
   assert.deepEqual(Object.keys(exported), [
-    'itemId', 'source', 'context', 'pagesLoaded', 'loadedCount', 'captureCap', 'captureCapReached', 'reviews',
+    'itemId', 'source', 'context', 'selection', 'pagesLoaded', 'loadedCount', 'captureCap', 'captureCapReached', 'reviews',
   ]);
 
   cache = core.applyNativeReviewBatch(cache, batch(1, { filters: [1] }, 10, 'photos'));
@@ -199,7 +199,7 @@ test('status and export report the active snapshot without changing the export k
   exported = JSON.parse(core.exportReviewsPage(newContext));
   assert.equal(exported.captureCap, 50);
   assert.deepEqual(Object.keys(exported), [
-    'itemId', 'source', 'context', 'pagesLoaded', 'loadedCount', 'captureCap', 'captureCapReached', 'reviews',
+    'itemId', 'source', 'context', 'selection', 'pagesLoaded', 'loadedCount', 'captureCap', 'captureCapReached', 'reviews',
   ]);
   assert.match(core.formatReviewsPageStatus({
     source: 'ssr:__AER_DATA__', loadedCount: 5, captureCap: 30,

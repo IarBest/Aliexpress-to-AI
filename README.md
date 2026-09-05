@@ -62,6 +62,16 @@ Reviews ChatGPT text включает весь сохранённый масси
 displayed text используется как fallback. Форматтер не переводит, не исправляет,
 не пересказывает, не дедуплицирует и не переписывает содержимое отзывов.
 
+Строка `Review selection` использует понятные названия вариантов Product, если
+доверенный Product SKU-каталог разрешает нативный Review `skuFilter`. При точном
+представлении выбранного набора по измерениям это, например, `Color` + `Size`
+с количеством реальных SKU. Состав выборки определяет raw/native `skuFilter`,
+а не текущий SKU в URL Reviews. `All` / пустой raw-фильтр даёт `variants: all`.
+Если доверенного сопоставления нет, выводится количество выбранных SKU
+с `labels unavailable`, без догадок. Каталог содержит только реальные
+нормализованные комбинации Product, без генерации декартова произведения;
+для подписей Helper не отправляет Review requests и не делает сетевых lookup.
+
 Raw/full exports сохраняют нормализованные данные без AI-friendly сокращений:
 Product JSON сохраняет media URL, Reviews JSON — полный normalized context и
 оба текстовых поля. Combined export использует `ali-helper-combined-text/v2`:

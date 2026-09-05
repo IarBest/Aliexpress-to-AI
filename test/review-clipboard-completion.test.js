@@ -65,7 +65,7 @@ function fakeTimers(initialNow = 1000) {
   };
 }
 
-function contextualUi({ GM_setClipboard, navigator, navigate, initialNow } = {}) {
+function contextualUi({ GM_setClipboard, navigator, navigate, initialNow, reviewSkuCatalog = null } = {}) {
   const events = [];
   const statuses = [];
   const timers = fakeTimers(initialNow);
@@ -78,6 +78,7 @@ function contextualUi({ GM_setClipboard, navigator, navigate, initialNow } = {})
       originSelectedSkuId: SKU_ID,
       startedAt: 1000,
       productChatgptText: 'ALIEXPRESS PRODUCT\n\nStored product',
+      reviewSkuCatalog,
       reviewsUrl: REVIEWS_URL,
     }),
     phase: 'active',
@@ -89,7 +90,8 @@ function contextualUi({ GM_setClipboard, navigator, navigate, initialNow } = {})
     removeItem(key) { values.delete(key); },
   };
   const reviewPage = core.extractReviewsPageFromSsrData(fixture, ITEM_ID);
-  const cache = core.seedReviewCacheFromSsr(core.createReviewCache(ITEM_ID, 10), reviewPage);
+  let cache = core.seedReviewCacheFromSsr(core.createReviewCache(ITEM_ID, 10), reviewPage);
+  let nativeSequence = 0;
   const controller = core.createReviewAutoScrollWorkflow({
     handoff,
     timers,
@@ -111,12 +113,17 @@ function contextualUi({ GM_setClipboard, navigator, navigate, initialNow } = {})
   });
   controller.observe(cache, core.getActiveReviewPage(cache), { source: 'ssr' });
   assert.equal(controller.state.canCopy, true);
+  const runtime = {
+    reviewWorkflow: controller,
+    reviewPage: core.getActiveReviewPage(cache, handoff.reviewSkuCatalog),
+    getActiveReviewPage: () => core.getActiveReviewPage(cache, handoff.reviewSkuCatalog),
+  };
   let listener;
   vm.runInNewContext(`${copySource}\n${listenerSource}`, {
     GM_setClipboard,
     navigator,
     shadow: { addEventListener(type, callback) { assert.equal(type, 'click'); listener = callback; } },
-    runtime: { reviewWorkflow: controller, reviewPage: core.getActiveReviewPage(cache) },
+    runtime,
     createUiMessage: core.createUiMessage,
     exportReviewsPage: core.exportReviewsPage,
     formatReviewsForChatGPT: core.formatReviewsForChatGPT,
@@ -128,6 +135,16 @@ function contextualUi({ GM_setClipboard, navigator, navigate, initialNow } = {})
     statuses,
     storage,
     timers,
+    runtime,
+    setReviewContext(skuFilter) {
+      cache = core.applyNativeReviewBatch(cache, {
+        itemId: ITEM_ID,
+        source: 'native:product-reviews',
+        context: { sort: 1, filters: [], skuFilter, pageSize: 10 },
+        pageNum: 1,
+        reviews: reviewPage.reviews,
+      }, ++nativeSequence);
+    },
     observeUrl(url) {
       pageUrl = url;
       controller.observe(cache, core.getActiveReviewPage(cache), { source: 'ssr' });
@@ -535,6 +552,38 @@ test('ordinary Reviews JSON and ChatGPT actions retain the ordinary GM clipboard
       'ordinary Reviews actions never start a clipboard completion timeout');
   }
 });
+
+for (const action of ['reviews', 'reviews-chatgpt']) {
+  test(`ordinary ${action} copy resolves the fresh native Review context instead of stale runtime page labels`, async () => {
+    const productFixture = JSON.parse(fs.readFileSync(
+      path.join(__dirname, 'fixtures', 'product-1005009452926938.json'), 'utf8',
+    ));
+    const product = core.normalizeProduct(productFixture.data, PRODUCT_URL);
+    const reviewSkuCatalog = core.buildReviewSkuCatalog(product, SKU_ID);
+    const navyIds = ['12000049151727537', '12000049151727538', '12000049151727539', '12000049151727540', '12000049151727541'];
+    const whiteIds = ['12000049151727487', '12000049151727488', '12000049151727489', '12000049151727490', '12000049151727491'];
+    const writes = [];
+    const ui = contextualUi({ reviewSkuCatalog, GM_setClipboard: (...args) => writes.push(args) });
+    ui.setReviewContext(navyIds);
+    ui.runtime.reviewPage = ui.runtime.getActiveReviewPage();
+    ui.setReviewContext(whiteIds);
+    assert.deepEqual(ui.runtime.reviewPage.context.skuFilter, navyIds);
+    await ui.click(action);
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0].length, 2);
+    if (action === 'reviews') {
+      const copied = JSON.parse(writes[0][0]);
+      assert.deepEqual(copied.context.skuFilter, whiteIds);
+      assert.equal(copied.selection.variants.status, 'resolved');
+      assert.equal(copied.selection.variants.groups[0].values[0].name, 'Lining B White');
+    } else {
+      const line = writes[0][0].split('\n').find((value) => value.startsWith('Review selection:'));
+      assert.equal(line, 'Review selection: Top reviews · filters: all · variants: Color: Lining B White; Size: XS, S, M, L, XL (5 SKUs)');
+      assert.doesNotMatch(line, /Navy|120000/);
+    }
+    assert.deepEqual(ui.events, []);
+  });
+}
 
 test('ordinary Product exports use their production listener and immediate two-argument GM writes', async () => {
   const writes = [];

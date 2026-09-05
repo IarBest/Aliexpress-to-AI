@@ -3507,7 +3507,7 @@ test('active reviews export exposes context/cap metadata without raw network fie
   cache = core.applyNativeReviewBatch(cache, nativeReviewBatch(fixture.itemId, 2, ssrPage.reviews.slice(0, 1)));
   const text = core.exportReviewsPage(core.getActiveReviewPage(cache));
   const exported = JSON.parse(text);
-  assert.deepEqual(Object.keys(exported), ['itemId', 'source', 'context', 'pagesLoaded', 'loadedCount', 'captureCap', 'captureCapReached', 'reviews']);
+  assert.deepEqual(Object.keys(exported), ['itemId', 'source', 'context', 'selection', 'pagesLoaded', 'loadedCount', 'captureCap', 'captureCapReached', 'reviews']);
   assert.equal(exported.source, 'ssr+native');
   assert.doesNotMatch(text, /raw request|raw response|_bx-v|headers|analyticEvents|trackingInfo|isLiked|spm/);
 });
@@ -3643,7 +3643,7 @@ test('reviews ChatGPT formatter has deterministic full-string layout and multili
     'Item ID: 123',
     'Source: passive native',
     '',
-    'Review selection: New reviews first · filters: With photos · variants: 1 selected',
+    'Review selection: New reviews first · filters: With photos · variants: 1 selected (labels unavailable)',
     '',
     'Pages: 1',
     'Captured: 1 reviews',

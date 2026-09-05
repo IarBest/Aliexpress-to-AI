@@ -721,6 +721,25 @@ texts или images.
 - [x] Добавить SIZE GUIDE, CHARACTERISTICS, DELIVERY и ordered DESCRIPTION.
 - [x] Добавить REVIEWS summary и весь retained массив reviews; объём ограничен
       на capture/retention уровне пресетами `10/30/50/100` (default 30).
+- [x] Review ChatGPT selection metadata разрешает native raw Review `skuFilter`
+      через ограниченный доверенный Product SKU-каталог: только реальные
+      нормализованные комбинации, без генерации декартова произведения. Если
+      набор допускает точную факторизацию, выводятся понятные dimension labels;
+      при отсутствии доверенного сопоставления — fail-closed: `labels unavailable`
+      с количеством SKU. Raw `skuFilter` остаётся authority выбора, URL SKU — нет;
+      `All` / пустой raw-фильтр даёт `variants: all`. Легитимные native same-item
+      SKU route transitions сохраняют описательные labels после уже принятого
+      handoff. Initial restore/activation и combined pre-copy route gates
+      остаются строгими: native SKU route change до combined copy даёт
+      `invalid-handoff`, без clipboard calls и navigation attempts. Смена route
+      во время pending valid combined copy даёт `navigation-skipped-stale`, без
+      Product navigation; auto-return contract не изменён. Direct Helper Review
+      requests = 0; сетевой lookup для labels не нужен.
+      Live acceptance 2026-09-06, item `1005009452926938`: Navy →
+      `Color: Lining B Navy Blue; Size: XS, S, M, L, XL (5 SKUs)`; White →
+      `Color: Lining B White; Size: XS, S, M, L, XL (5 SKUs)`; All →
+      `variants: all`. Для валидных Navy/White не было `labels unavailable`.
+      Ровно три обычных Review ChatGPT copies; combined copy в этом smoke не было.
 - [x] Ограничивать SKU summary и retention reviews; не вводить вторую скрытую
       выборку уже сохранённых reviews в нормальном AI formatter.
 - [x] Для больших sections показывать summary/current data и предоставлять
