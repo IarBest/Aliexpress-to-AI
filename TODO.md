@@ -1048,7 +1048,10 @@ follow-up semantics, а также scoped third-party DOM exclusion.
 - [ ] **Deferred research:** Bulk shipping calculation только по явному действию
       и с hard cap, после доказательства безопасного active shipping
       sender/runtime boundary.
-- [ ] Исследование и декодирование review SKU filters.
+- [x] Исследование и декодирование review SKU filters завершено в `0.1.33`:
+      raw `skuFilter` capture, trusted Product SKU mapping и live Navy/White/All
+      validation. Новые неизвестные shapes остаются `fail-closed`; исследование
+      возобновляется только при появлении новых свидетельств.
 - [ ] Исследование дополнительных `sort` values для reviews.
 - [ ] Более богатое извлечение `Most mentioned in reviews`.
 - [ ] **Deferred / needs design evidence:** Optional self-contained
