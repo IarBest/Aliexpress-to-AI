@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ali Helper
 // @namespace    https://github.com/local/ali-helper
-// @version      0.1.33
+// @version      0.1.34
 // @description  Read-only AliExpress URL cleaner and product/variant exporter
 // @description:ru Помощник AliExpress только для чтения: очистка URL и экспорт товара и вариантов
 // @match        https://aliexpress.ru/item/*
@@ -19,7 +19,7 @@
 (function factory(root) {
   'use strict';
 
-  const VERSION = '0.1.33';
+  const VERSION = '0.1.34';
   const SETTINGS_KEY = 'ali-helper:settings:v1';
   const REVIEW_WORKFLOW_STORAGE_KEY = 'ali-helper:review-workflow:v1';
   const REVIEW_WORKFLOW_VERSION = 2;
