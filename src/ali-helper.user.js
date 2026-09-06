@@ -196,6 +196,8 @@
       'reviews.status.ready': 'Reviews ready · {count} first-page reviews · retention cap: {cap} · source: SSR',
       'reviews.status.captured': 'Reviews captured · {count} reviews{details} · passive native',
       'reviews.context.newest': 'New reviews first',
+      'reviews.context.highStars': 'High stars first',
+      'reviews.context.lowStars': 'Low stars first',
       'reviews.context.sort': 'Sort {sort}',
       'reviews.context.withPhotos': 'With photos',
       'reviews.context.additional': 'Additional',
@@ -332,6 +334,8 @@
       'reviews.status.ready': 'Отзывы готовы · На первой странице: {count} · лимит хранения: {cap} · источник: данные страницы',
       'reviews.status.captured': 'Отзывы обнаружены · Количество: {count}{details} · пассивное наблюдение',
       'reviews.context.newest': 'Сначала новые',
+      'reviews.context.highStars': 'Сначала с высокой оценкой',
+      'reviews.context.lowStars': 'Сначала с низкой оценкой',
       'reviews.context.sort': 'Сортировка: {sort}',
       'reviews.context.withPhotos': 'С фото',
       'reviews.context.additional': 'Дополнительные отзывы',
@@ -3098,7 +3102,10 @@
 
   function formatReviewSelection(context, variants = null) {
     const sortLabel = context.sort === 1 ? 'Top reviews'
-      : (context.sort === 2 ? 'New reviews first' : `Sort ${context.sort}`);
+      : context.sort === 2 ? 'New reviews first'
+      : context.sort === 3 ? 'High stars first'
+      : context.sort === 4 ? 'Low stars first'
+      : `Sort ${context.sort}`;
     const filterLabels = context.filters.map((code) => ({ 1: 'With photos', 2: 'Additional' }[code] || `Filter ${code}`));
     return `Review selection: ${sortLabel} · filters: ${filterLabels.length ? filterLabels.join(' + ') : 'all'} · variants: ${formatReviewSkuSelection(context, variants)}`;
   }
@@ -3391,6 +3398,8 @@
     const labels = [];
     if (context.sort !== 1) labels.push(context.sort === 2
       ? t(locale, 'reviews.context.newest')
+      : context.sort === 3 ? t(locale, 'reviews.context.highStars')
+      : context.sort === 4 ? t(locale, 'reviews.context.lowStars')
       : t(locale, 'reviews.context.sort', { sort: context.sort }));
     labels.push(...context.filters.map((code) => ({
       1: t(locale, 'reviews.context.withPhotos'),

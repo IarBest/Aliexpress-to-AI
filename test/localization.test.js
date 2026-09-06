@@ -348,6 +348,31 @@ test('Review statuses use passive Russian wording and the accepted additional-re
   assert.match(captured, /конфликт данных отзывов/);
 });
 
+// Synthetic presentation cases only; these are not native request captures.
+for (const [sort, enLabel, ruLabel] of [
+  [1, null, null],
+  [2, 'New reviews first', 'Сначала новые'],
+  [3, 'High stars first', 'Сначала с высокой оценкой'],
+  [4, 'Low stars first', 'Сначала с низкой оценкой'],
+  [7, 'Sort 7', 'Сортировка: 7'],
+  [17, 'Sort 17', 'Сортировка: 17'],
+]) {
+  test(`synthetic Review sort ${sort} has the expected EN/RU panel status`, () => {
+    const reviewPage = {
+      source: 'native:product-reviews',
+      loadedCount: 0,
+      pagesLoaded: [1],
+      captureCap: 30,
+      captureCapReached: false,
+      context: { sort, filters: [], skuFilter: [], pageSize: 10 },
+    };
+    assert.equal(core.formatReviewsPageStatus(reviewPage, 'en'),
+      `Reviews captured · 0 reviews · pages 1${enLabel ? ` · ${enLabel}` : ''} · retention cap: 30 · passive native`);
+    assert.equal(core.formatReviewsPageStatus(reviewPage, 'ru'),
+      `Отзывы обнаружены · Количество: 0 · страницы 1${ruLabel ? ` · ${ruLabel}` : ''} · лимит хранения: 30 · пассивное наблюдение`);
+  });
+}
+
 test('UI language changes leave every clipboard/export payload byte-identical', () => {
   const productFixture = loadFixture('product-1005008195850531.json');
   const product = core.normalizeProduct(

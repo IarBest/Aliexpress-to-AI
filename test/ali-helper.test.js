@@ -3864,6 +3864,52 @@ test('reviews ChatGPT formatter exposes non-contiguous pages and safe diagnostic
   assert.match(text, /Reviews included: 1 of 1 retained/);
 });
 
+// Synthetic normalized contexts test presentation only; no wire fixtures are implied.
+for (const [sort, label] of [
+  [1, 'Top reviews'],
+  [2, 'New reviews first'],
+  [3, 'High stars first'],
+  [4, 'Low stars first'],
+  [7, 'Sort 7'],
+  [17, 'Sort 17'],
+]) {
+  test(`synthetic Review sort ${sort} shares its English export label and preserves numeric JSON`, () => {
+    const reviewPage = {
+      itemId: '1005009452926938',
+      source: 'native:product-reviews',
+      context: { sort, filters: [], skuFilter: [], pageSize: 10 },
+      pagesLoaded: [1],
+      loadedCount: 0,
+      captureCap: 30,
+      captureCapReached: false,
+      reviews: [],
+    };
+    const before = clone(reviewPage);
+    const expectedSelection = `Review selection: ${label} · filters: all · variants: all`;
+    assert.equal(core.formatReviewSelection(reviewPage.context), expectedSelection);
+    const standalone = core.formatReviewsForChatGPT(reviewPage);
+    assert.equal(standalone.split('\n').find((line) => line.startsWith('Review selection:')), expectedSelection);
+
+    const combinedInput = {
+      itemId: reviewPage.itemId,
+      productChatgptText: 'ALIEXPRESS PRODUCT\nSynthetic presentation input',
+      reviewPage,
+      coverage: 'partial-cancelled',
+      stopReason: 'user-cancelled',
+      scrollActivations: 0,
+    };
+    const combined = core.formatCombinedProductReviews(combinedInput);
+    assert.equal(combined.split('===== REVIEWS =====\n')[1], `${standalone}\n`);
+    assert.equal(combined.split('\n').find((line) => line.startsWith('Review selection:')), expectedSelection);
+
+    const exported = JSON.parse(core.exportReviewsPage(reviewPage));
+    assert.deepEqual(exported, before);
+    assert.equal(typeof exported.context.sort, 'number');
+    assert.equal(exported.context.sort, sort);
+    assert.deepEqual(reviewPage, before);
+  });
+}
+
 test('normalized reviews JSON export remains full fidelity while ChatGPT export is privacy-minimized', () => {
   const fixture = loadFixture('reviews-ssr-1005009452926938.json');
   const ssrPage = core.extractReviewsPageFromSsrData(fixture, fixture.itemId);
