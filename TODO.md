@@ -294,7 +294,7 @@ React original HTML в доступном browser execution context не обн�
 Acceptance: порядок seller content восстанавливается, а image URLs остаются
 связаны с соответствующими разделами.
 
-## P2 — Shipping for selected SKU
+## P2 — Shipping: selected SKU и bounded per-SKU collection
 
 - [x] Зафиксировать минимизированный request/response fixture `calculate` для
       одного SKU без account-sensitive данных.
@@ -325,6 +325,53 @@ Acceptance: стоимость и ETA принадлежат конкретно�
 подмены shipping через `logisticAmount` нет.
 
 Passive selected-SKU shipping acceptance завершён.
+
+### Per-SKU delivery — 0.1.35
+
+Прежняя selected-SKU-only production architecture расширена явным ограниченным
+коллектором; пассивная привязка native shipping к SKU/context сохранена.
+
+- [x] Per-real-SKU projection цен в Product JSON / Variants / ChatGPT Product
+      export и projection delivery cache только для точного SKU/context.
+      Одинаковые цены доставки остаются отдельными SKU rows; selected-SKU
+      top-level summary сохраняется. Обычный экспорт цен не имеет лимита 8 SKU.
+- [x] Явный native-click collector без direct freight sender: только реальные
+      строки `skuInfo.priceList`, 2–8 SKU, 1–2 полностью связанных измерения,
+      разрешённый текущий SKU и установленный shipping environment.
+- [x] Проверенные native SKU controls, ограниченный обход и безопасное
+      восстановление исходного SKU; AliExpress выполняет native calculate,
+      Helper пассивно принимает SKU-bound delivery. Отсутствующий capture
+      остаётся `not-observed`, без догадок о free/unavailable.
+- [x] Sparse / 3+ dimensions / over-cap, неоднозначный или malformed SKU
+      DOM/telemetry и неподдерживаемый route/control mapping fail closed.
+
+**Static/test evidence (implementation candidate):** author full suite —
+721/721 PASS; independent reviewer full suite — 721/721 PASS; independent
+diff review — PASS, P1/P2/P3 = 0. Это предыдущие проверки кандидата,
+а не результаты финализации версии.
+
+**Previous live evidence:** item `1005005458737062`, classification
+`ACCEPT_WITH_EVIDENCE_LIMITATION`. Candidate-specific UI присутствовал; был
+один явный Start, наблюдался промежуточный progress. Collector terminal сообщил
+`Variant delivery collection completed · 4/4 observed · original variant restored`.
+Исходные zigbee A SKU, цена и доставка восстановлены; native WiFi B /
+SKU `12000033163749330` наблюдался при восстановлении. Ручных SKU clicks
+со стороны Work — 0; custom/replay freight requests со стороны Work — 0.
+Видимой ошибки коллектора не было, terminal UI чистый; invalidating
+Product/navigation actions блокировались во время run и восстановились после.
+
+Browser observation была неатомарной; промежуточные переходы происходили
+быстрее sampling браузера. Независимо наблюдались не все промежуточные маршруты,
+особенно SKU `12000033163749329`. Поэтому live evidence имеет ограничение
+наблюдения, хотя сам collector сообщил завершение 4/4. Это не доказательство
+независимого/атомарного наблюдения всех четырёх маршрутов. Live run выполнен
+в предыдущей browser task; live validation финализированной 0.1.35 в задаче
+финализации не проводилась.
+
+**Deferred research, не release blockers:** generic sparse-matrix traversal,
+3+ dimensions и активный сбор для более 8 SKU. Custom/direct
+`freight/calculate` sender остаётся research-gated и не является production
+behavior.
 
 ## P3 — Review summary and SSR reviews
 
@@ -1045,9 +1092,10 @@ follow-up semantics, а также scoped third-party DOM exclusion.
       actions и contextual workflow controls, а exports побайтово одинаковы в
       обоих языках. Переключение языка само не запускает workflow или network
       activity.
-- [ ] **Deferred research:** Bulk shipping calculation только по явному действию
-      и с hard cap, после доказательства безопасного active shipping
-      sender/runtime boundary.
+- [ ] **Deferred research:** Custom/direct freight sender и расширение native
+      collection на sparse / 3+ dimensions / более 8 SKU. Bounded native-click
+      collector без собственного sender завершён в 0.1.35 (см. P2); эти
+      расширения не блокируют релиз.
 - [x] Исследование и декодирование review SKU filters завершено в `0.1.33`:
       raw `skuFilter` capture, trusted Product SKU mapping и live Navy/White/All
       validation. Новые неизвестные shapes остаются `fail-closed`; исследование

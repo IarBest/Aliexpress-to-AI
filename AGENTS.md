@@ -141,13 +141,22 @@ Use one normalized product model for every exporter. Do not scrape DOM directly
 inside a ChatGPT formatter. Prefer small, pure functions and keep source-specific
 logic out of presentation code.
 
-## Future shipping constraints
+## Shipping constraints
 
-- Shipping comes from a separate `calculate` API whose payload is SKU-specific.
-- Store shipping logically at SKU level and cache page-session results.
+- Shipping comes from native `calculate` and is SKU/context specific.
+- Store shipping logically at SKU/context level and cache page-session results.
 - `logisticAmount` in `productData.priceList` is not a shipping charge.
-- Never automatically calculate shipping for hundreds of SKUs; default to the
-  selected SKU and require an explicit, capped bulk action if one is added.
+- Explicit bounded delivery collection exists in 0.1.35 and operates only on
+  existing real `skuInfo.priceList` SKU rows. Production supports 2–8 real SKU
+  in 1–2 fully-connected dimensions, with a resolved current real SKU and an
+  established shipping environment.
+- Use verified native SKU controls and passive native freight capture with
+  bounded traversal/restoration. The helper must not create direct freight
+  requests; AliExpress performs its normal shipping calculation.
+- Sparse matrices, 3+ dimensions, over-cap cases and ambiguous/malformed or
+  unsupported route/control mappings fail closed. Missing capture stays
+  `not-observed`; never infer free or unavailable delivery from absence.
+- Custom/direct freight senders remain research-gated, not production behavior.
 
 ## Description constraints
 

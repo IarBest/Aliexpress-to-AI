@@ -428,10 +428,10 @@ test('panel locale updates are in-place and retain the accepted shell/network bo
 test('metadata and footer match the runtime release version while localized text application stays safe', () => {
   assert.match(source, /^\/\/ @description:ru Помощник AliExpress только для чтения:/m);
   assert.doesNotMatch(source, /^\/\/ @name:ru/m);
-  assert.match(source, /^\/\/ @version\s+0\.1\.34$/m);
-  assert.equal(core.VERSION, '0.1.34');
-  assert.equal(core.t('en', 'footer.safety', { version: core.VERSION }), 'Read/copy/navigation/scroll · v0.1.34');
-  assert.equal(core.t('ru', 'footer.safety', { version: core.VERSION }), 'Чтение/копирование/переходы/прокрутка · v0.1.34');
+  assert.match(source, /^\/\/ @version\s+0\.1\.35$/m);
+  assert.equal(core.VERSION, '0.1.35');
+  assert.equal(core.t('en', 'footer.safety', { version: core.VERSION }), 'Read/copy/navigation/scroll · v0.1.35');
+  assert.equal(core.t('ru', 'footer.safety', { version: core.VERSION }), 'Чтение/копирование/переходы/прокрутка · v0.1.35');
   const localeApplyStart = source.indexOf('function applyPanelActionLocale');
   const localeApplyEnd = source.indexOf('function bindResponsivePanel', localeApplyStart);
   const localeApplySource = source.slice(localeApplyStart, localeApplyEnd);
