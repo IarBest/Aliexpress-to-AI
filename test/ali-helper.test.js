@@ -2524,7 +2524,11 @@ test('unresolved ChatGPT price summary shows the first five unique prices and ex
     output,
     /Price: Selected SKU unresolved; 7 unique SKU prices: \$12\.34 \| \$13\.20 \| \$15\.00 \| \$16\.10 \| \$17\.50 \(\+2 more\)\n/,
   );
-  assert.doesNotMatch(output, /\$18\.25|\$19\.75/);
+  const summary = output.split('\n').find((line) => line.startsWith('Price:'));
+  assert.doesNotMatch(summary, /\$18\.25|\$19\.75/);
+  const matrix = output.split('SKU COMBINATIONS:')[1];
+  assert.match(matrix, /\$18\.25/);
+  assert.match(matrix, /\$19\.75/);
 });
 
 test('full Description export is isolated from raw HTML and unrelated product data', () => {

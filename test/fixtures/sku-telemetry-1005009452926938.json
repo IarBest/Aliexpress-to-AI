@@ -1,0 +1,20 @@
+{
+  "source": "Read-only DOM attribute capture, 2026-09-08; no reload or SKU clicks",
+  "itemId": "1005009452926938",
+  "exp_type": "tab_detail_sku",
+  "exp_page_area": "sku_floor",
+  "exp_product": "productId=1005009452926938",
+  "exp_attribute": "{'itemList':[{'itemId':'1005009452926938','price':'$ 37.42','currency':'USD','product_qty_cnt':'1'}],'sku_attr':[{'id':'4','name':'Color','values':['337917','337916','337969','337981','337971','337970','337948','337907','337952']},{'id':'30','name':'Size','values':['344976','343564','343563','343562','343565']}]}",
+  "domGroups": [
+    {
+      "name": "Color",
+      "listTag": "UL",
+      "buttonCount": 9
+    },
+    {
+      "name": "Size",
+      "listTag": "UL",
+      "buttonCount": 5
+    }
+  ]
+}

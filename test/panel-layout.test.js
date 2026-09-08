@@ -413,7 +413,7 @@ test('panel builders contain no request-producing or purchase-control behavior',
   const reviewActions = [...source.slice(reviewsStart, reviewsEnd).matchAll(/action === '([^']+)'/g)]
     .map((match) => match[1]);
   assert.deepEqual(productActions, [
-    'language', 'toggle', 'clean-url', 'market', 'review-workflow', 'product', 'variants', 'chatgpt', 'description', 'shipping-debug',
+    'delivery-collect', 'delivery-cancel', 'language', 'toggle', 'clean-url', 'market', 'review-workflow', 'product', 'variants', 'chatgpt', 'description', 'shipping-debug',
   ]);
   assert.deepEqual(reviewActions, [
     'language', 'toggle', 'review-workflow-start', 'review-workflow-cancel', 'review-workflow-copy', 'reviews', 'reviews-chatgpt',
@@ -452,7 +452,7 @@ test('shared shell is neutral, status is live but lightweight, and footer brandi
   assert.doesNotMatch(source, /\.status \{[^}]*border-radius|\.status \{[^}]*background:/);
   assert.match(source, /\.product-status \{ min-height:0; margin:0 0 9px; padding:0 1px; border-bottom:0; \}/);
   assert.match(source, /\.product-status\[hidden\] \{ display:none; \}/);
-  assert.equal((source.match(/role="status" aria-live="polite" aria-atomic="true"/g) || []).length, 2);
+  assert.equal((source.match(/role="status" aria-live="polite" aria-atomic="true"/g) || []).length, 3);
   assert.equal((source.match(/href="https:\/\/bigbensoft\.com\/"/g) || []).length, 2);
   assert.equal((source.match(/target="_blank" rel="noopener noreferrer">bigbensoft\.com<\/a>/g) || []).length, 2);
   assert.equal(core.VERSION, '0.1.34');

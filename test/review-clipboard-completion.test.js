@@ -594,7 +594,7 @@ test('ordinary Product exports use their production listener and immediate two-a
   vm.runInNewContext(`${copySource}\n${productListenerSource}`, {
     GM_setClipboard: (...args) => writes.push(args),
     shadow: { addEventListener(type, callback) { assert.equal(type, 'click'); listener = callback; } },
-    runtime: { product, shippingCapture, refreshProductEnrichment: () => product },
+    runtime: { product, shippingCapture, refreshProductEnrichment: () => product, createExportSnapshot: () => product },
     location: { href: `${PRODUCT_URL}&utm_source=test#description` },
     normalizeItemUrl: core.normalizeItemUrl,
     exportProduct: () => 'Product JSON export',

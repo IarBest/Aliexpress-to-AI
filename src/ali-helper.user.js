@@ -110,6 +110,21 @@
   const SUPPORTED_UI_LANGUAGES = Object.freeze(['en', 'ru']);
   const UI_STRINGS = Object.freeze({
     en: Object.freeze({
+      'deliveryCollector.start': "Collect variant delivery",
+      'deliveryCollector.cancel': "Cancel delivery collection",
+      'deliveryCollector.help': "Item prices already come from product data. Collects native delivery for fully connected variants: 1–2 groups, 2–8 real SKUs. Restores the original variant.",
+      'deliveryCollector.preparing': "Checking variant delivery collection…",
+      'deliveryCollector.running': "Collecting variant delivery · {visited}/{total} checked · {observed} observed",
+      'deliveryCollector.restoring': "Restoring original variant…",
+      'deliveryCollector.completed': "Variant delivery collection completed · {observed}/{total} observed · original variant restored",
+      'deliveryCollector.cancelled': "Variant delivery collection cancelled · {observed}/{total} observed · original variant restored",
+      'deliveryCollector.failed': "Variant delivery collection stopped · {observed}/{total} observed.",
+      'deliveryCollector.unsupported': "Variant delivery collection cannot start.",
+      'deliveryCollector.wait': "Wait for current delivery to load.",
+      'deliveryCollector.matrix': "Requires a fully connected matrix with 1–2 groups and 2–8 real SKUs, verified native controls and selected variant.",
+      'deliveryCollector.changed': "Page, variant, controls or delivery context could not be verified. No further clicks.",
+      'deliveryCollector.restoreFailed': "Original variant could not be safely restored. Select it manually.",
+      'deliveryCollector.totalTimeout': "Collection time limit reached.",
       'product.group.export': 'Product export',
       'product.group.quick': 'Quick actions',
       'panel.expand': 'Expand Ali Helper panel.',
@@ -248,6 +263,21 @@
       'workflow.invalidHandoff': 'The temporary Product handoff was invalid or did not match this Reviews page and was removed.',
     }),
     ru: Object.freeze({
+      'deliveryCollector.start': "Собрать доставку вариантов",
+      'deliveryCollector.cancel': "Отменить сбор доставки",
+      'deliveryCollector.help': "Цены товара уже получены из данных товара. Собирает нативную доставку для полной матрицы: 1–2 группы, 2–8 реальных SKU. Возвращает исходный вариант.",
+      'deliveryCollector.preparing': "Проверка возможности сбора доставки…",
+      'deliveryCollector.running': "Сбор доставки вариантов · проверено {visited}/{total} · получено {observed}",
+      'deliveryCollector.restoring': "Возврат исходного варианта…",
+      'deliveryCollector.completed': "Сбор доставки завершён · получено {observed}/{total} · исходный вариант восстановлен",
+      'deliveryCollector.cancelled': "Сбор доставки отменён · получено {observed}/{total} · исходный вариант восстановлен",
+      'deliveryCollector.failed': "Сбор доставки остановлен · получено {observed}/{total}.",
+      'deliveryCollector.unsupported': "Не удалось начать сбор доставки вариантов.",
+      'deliveryCollector.wait': "Дождитесь загрузки текущей доставки.",
+      'deliveryCollector.matrix': "Нужна полная матрица с 1–2 группами и 2–8 реальными SKU, подтверждёнными нативными кнопками и выбранным вариантом.",
+      'deliveryCollector.changed': "Не удалось подтвердить страницу, вариант, кнопки или условия доставки. Дальнейших кликов не будет.",
+      'deliveryCollector.restoreFailed': "Не удалось безопасно вернуть исходный вариант. Выберите его вручную.",
+      'deliveryCollector.totalTimeout': "Достигнут лимит времени сбора.",
       'product.group.export': 'Экспорт товара',
       'product.group.quick': 'Быстрые действия',
       'panel.expand': 'Развернуть панель Ali Helper.',
@@ -2379,7 +2409,7 @@
     return JSON.stringify(left) === JSON.stringify(right);
   }
 
-  function getCachedDeliveryEntry(cache, productId, skuId, environment, price) {
+  function getCachedDeliveryEntry(cache, productId, skuId, environment, price, exactPrice = false) {
     if (!cache || !productId || !skuId || !environment) return null;
     const contextKeys = cache.contextKeysBySku.get(productSkuKey(productId, skuId)) || [];
     for (let index = contextKeys.length - 1; index >= 0; index -= 1) {
@@ -2388,7 +2418,7 @@
         && entry.productId === asString(productId)
         && entry.skuId === asString(skuId)
         && contextsEqual(entry.environment, environment)
-        && (entry.matchAnyPrice || contextsEqual(entry.price, price))) return entry;
+        && ((!exactPrice && entry.matchAnyPrice) || contextsEqual(entry.price, price))) return entry;
     }
     return null;
   }
@@ -2397,11 +2427,11 @@
     return getCachedDeliveryEntry(cache, productId, skuId, environment, price)?.delivery || null;
   }
 
-  function selectedSkuShippingPriceContext(product, environment) {
-    const logisticAmount = product?.selectedSku?.logisticAmount;
+  function skuShippingPriceContext(sku, environment) {
+    const logisticAmount = sku?.logisticAmount;
     const requestCurrency = asString(environment?.tradeCurrency);
     const logisticCurrency = asString(logisticAmount?.currency);
-    const currentCurrency = asString(product?.selectedSku?.price?.current?.currency);
+    const currentCurrency = asString(sku?.price?.current?.currency);
     const hasLogisticPrice = logisticAmount?.value !== null
       && logisticAmount?.value !== undefined
       && logisticAmount?.value !== '';
@@ -2414,13 +2444,37 @@
       && hasLogisticPrice;
     const selectedPrice = useLogisticPrice
       ? logisticAmount.value
-      : product?.selectedSku?.price?.current?.value;
+      : sku?.price?.current?.value;
     const currentPrice = asString(selectedPrice);
     return {
-      buyerPrice: asString(product?.selectedSku?.buyerPriceForLogistic),
+      buyerPrice: asString(sku?.buyerPriceForLogistic),
       minPrice: currentPrice,
       maxPrice: currentPrice,
     };
+  }
+
+  function selectedSkuShippingPriceContext(product, environment) {
+    return skuShippingPriceContext(product?.selectedSku, environment);
+  }
+
+  function observeSkuDelivery(product, sku, cache, environment) {
+    const entry = getCachedDeliveryEntry(cache, product?.itemId, sku?.skuId, environment,
+      skuShippingPriceContext(sku, environment), true);
+    return {
+      delivery: entry?.delivery || null,
+      deliveryObservation: entry?.delivery
+        ? createSectionDiagnostic('present', ['native:shipping-calculate'])
+        : entry?.diagnostic
+          ? createSectionDiagnostic('invalid', ['native:shipping-calculate'], entry.diagnostic)
+          : createSectionDiagnostic('not-observed'),
+    };
+  }
+
+  // Export-only projection: the page model does not own or duplicate the session cache.
+  function createProductExportSnapshot(product, cache, environment) {
+    if (!product) return product;
+    const skus = product.skus.map((sku) => ({ ...sku, ...observeSkuDelivery(product, sku, cache, environment) }));
+    return { ...product, skus, selectedSku: skus.find((sku) => sku.skuId === product.selectedSku?.skuId) || null };
   }
 
   function applyCachedDelivery(product, cache, environment) {
@@ -2440,6 +2494,368 @@
         : createSectionDiagnostic('not-observed');
     const updated = product.delivery === delivery ? product : { ...product, delivery };
     return withSectionDiagnostic(updated, 'delivery', diagnostic);
+  }
+
+  const VARIANT_DELIVERY_LIMITS = Object.freeze({
+    maxSkus: 8, maxDimensions: 2, maxClicks: 18,
+    shippingWaitMs: 10000, routeWaitMs: 5000, totalMs: 120000, restoreMs: 20000, pollMs: 100,
+  });
+  const NATIVE_SKU_SELECTORS = Object.freeze({
+    floor: 'div[data-spm="sku_floor"]',
+    telemetry: '[exp_type="tab_detail_sku"][exp_page_area="sku_floor"]',
+    group: '[class*="SkuPropertyItem__skuProp__"]',
+    label: '[class*="SkuPropertyItem__propNameWrap__"]',
+    list: '[class*="SkuPropertyItem__optionList__"]',
+    button: 'button[type="button"][data-testid="skuProp"]',
+  });
+
+  // The captured attribute is JSON-like, with single-quoted strings. Parse a
+  // bounded data grammar, never JavaScript; duplicate object keys also fail closed.
+  function parseSkuTelemetry(raw) {
+    if (typeof raw !== 'string' || !raw.length || raw.length > 32768) return null;
+    let offset = 0;
+    let tokens = 0;
+    const whitespace = () => { while (/\s/.test(raw[offset] || '') && offset < raw.length) offset += 1; };
+    function read(depth = 0) {
+      whitespace();
+      if (depth > 8 || ++tokens > 2048) throw new Error('limit');
+      const ch = raw[offset++];
+      if (ch === '"' || ch === "'") {
+        let value = '';
+        while (offset < raw.length) {
+          const c = raw[offset++];
+          if (c === ch) return value;
+          // The observed single-quote grammar has no escapes. Reject extensions.
+          if (c === '\\' || c.charCodeAt(0) < 32) throw new Error('string');
+          value += c;
+        }
+        throw new Error('string');
+      }
+      if (ch === '[' || ch === '{') {
+        const object = ch === '{';
+        const result = object ? Object.create(null) : [];
+        const end = object ? '}' : ']';
+        whitespace();
+        if (raw[offset] === end) { offset += 1; return result; }
+        for (;;) {
+          if (object) {
+            const key = read(depth + 1);
+            if (typeof key !== 'string' || Object.hasOwn(result, key)) throw new Error('key');
+            whitespace();
+            if (raw[offset++] !== ':') throw new Error('colon');
+            result[key] = read(depth + 1);
+          } else result.push(read(depth + 1));
+          whitespace();
+          const separator = raw[offset++];
+          if (separator === end) return result;
+          if (separator !== ',') throw new Error('separator');
+        }
+      }
+      throw new Error('unsupported literal');
+    }
+    try {
+      const parsed = read();
+      whitespace();
+      if (offset !== raw.length || !parsed || !Array.isArray(parsed.sku_attr)) return null;
+      const groups = parsed.sku_attr;
+      if (!groups.length || groups.length > 16) return null;
+      const ids = new Set();
+      const names = new Set();
+      for (const group of groups) {
+        if (!group || !isBoundedAliExpressId(group.id) || ids.has(group.id)
+          || typeof group.name !== 'string' || !group.name.trim() || group.name !== group.name.trim()
+          || group.name.includes(':') || names.has(group.name)
+          || !Array.isArray(group.values) || !group.values.length || group.values.length > 256
+          || group.values.some((id) => !isBoundedAliExpressId(id))
+          || new Set(group.values).size !== group.values.length) return null;
+        ids.add(group.id);
+        names.add(group.name);
+      }
+      return groups.map(({ id, name, values }) => ({ id, name, values: [...values] }));
+    } catch { return null; }
+  }
+
+  function inspectNativeSkuMapping(doc, product, pageUrl) {
+    const rejected = { ok: false, reason: 'mapping' };
+    try {
+      if (!product?.itemId || !isItemPage(pageUrl) || isReviewsPage(pageUrl)
+        || getItemId(pageUrl) !== product.itemId) return rejected;
+      const floors = [...doc.querySelectorAll(NATIVE_SKU_SELECTORS.floor)];
+      if (floors.length !== 1) return rejected;
+      const floor = floors[0];
+      const sources = [...doc.querySelectorAll(NATIVE_SKU_SELECTORS.telemetry)]
+        .filter((node) => node.getAttribute('exp_product') === 'productId=' + product.itemId);
+      if (sources.length !== 1) return rejected;
+      const source = sources[0];
+      if (!floor.contains(source) && !source.contains(floor)) return rejected;
+      const telemetry = parseSkuTelemetry(source.getAttribute('exp_attribute'));
+      const normalized = product.variantGroups;
+      if (!telemetry || !Array.isArray(normalized) || telemetry.length !== normalized.length
+        || new Set(normalized.map((g) => g.id)).size !== normalized.length
+        || new Set(normalized.map((g) => g.name)).size !== normalized.length) return rejected;
+      const domGroups = [...floor.querySelectorAll(NATIVE_SKU_SELECTORS.group)];
+      if (domGroups.length !== telemetry.length) return rejected;
+      const used = new Set();
+      const groups = [];
+      for (const group of telemetry) {
+        const model = normalized.find((g) => g.id === group.id);
+        if (!model || ![model.name, model.rawName].includes(group.name)
+          || !Array.isArray(model.values) || model.values.length !== group.values.length
+          || new Set(model.values.map((v) => v.id)).size !== model.values.length
+          || model.values.some((v) => !group.values.includes(v.id))) return rejected;
+        const candidates = domGroups.filter((node) => {
+          const labels = [...node.querySelectorAll(NATIVE_SKU_SELECTORS.label)];
+          return labels.length === 1 && labels[0].textContent.split(':')[0].trim() === group.name;
+        });
+        if (candidates.length !== 1 || used.has(candidates[0])) return rejected;
+        const node = candidates[0];
+        if (!source.contains(node)) return rejected;
+        used.add(node);
+        const lists = [...node.querySelectorAll(NATIVE_SKU_SELECTORS.list)];
+        if (lists.length !== 1 || lists[0].tagName !== 'UL') return rejected;
+        const buttons = [...lists[0].querySelectorAll(NATIVE_SKU_SELECTORS.button)];
+        if (buttons.length !== group.values.length
+          || node.querySelectorAll('button').length !== buttons.length
+          || buttons.some((b) => b.closest(NATIVE_SKU_SELECTORS.group) !== node)) return rejected;
+        groups.push({ ...group, buttons });
+      }
+      if (floor.querySelectorAll(NATIVE_SKU_SELECTORS.button).length
+        !== groups.reduce((n, group) => n + group.buttons.length, 0)) return rejected;
+      return { ok: true, groups, signature: JSON.stringify(groups.map(({ id, name, values }) => ({ id, name, values }))) };
+    } catch { return rejected; }
+  }
+
+  function analyzeRealSkuMatrix(product) {
+    const fail = (reason) => ({ ok: false, reason });
+    const groups = product?.variantGroups;
+    const skus = product?.skus;
+    if (!Array.isArray(groups) || !groups.length || new Set(groups.map((g) => g.id)).size !== groups.length
+      || groups.some((g) => !isBoundedAliExpressId(g.id)) || !Array.isArray(skus) || !skus.length) return fail('matrix');
+    const ids = new Set();
+    const vectors = new Set();
+    const valueSets = groups.map(() => new Set());
+    const rows = [];
+    for (const sku of skus) {
+      if (!isBoundedAliExpressId(sku.skuId) || ids.has(sku.skuId)
+        || !Array.isArray(sku.selections) || sku.selections.length !== groups.length
+        || new Set(sku.selections.map((s) => s.groupId)).size !== groups.length) return fail('matrix');
+      const vector = groups.map((group, index) => {
+        const selection = sku.selections.find((s) => s.groupId === group.id);
+        if (!selection || !isBoundedAliExpressId(selection.valueId)
+          || !group.values.some((v) => v.id === selection.valueId)) return null;
+        valueSets[index].add(selection.valueId);
+        return selection.valueId;
+      });
+      const key = JSON.stringify(vector);
+      if (vector.includes(null) || vectors.has(key)) return fail('matrix');
+      vectors.add(key);
+      ids.add(sku.skuId);
+      rows.push({ skuId: sku.skuId, vector });
+    }
+    const cardinality = valueSets.reduce((n, set) => n * set.size, 1);
+    return { ok: true, rows, groupIds: groups.map((g) => g.id),
+      fullyConnected: Number.isSafeInteger(cardinality) && cardinality === rows.length,
+      cardinalities: valueSets.map((set) => set.size),
+      signature: JSON.stringify({ groups: groups.map((g) => g.id), rows }) };
+  }
+
+  function planVariantDelivery(product, mapping, maxClicks = VARIANT_DELIVERY_LIMITS.maxClicks) {
+    const matrix = analyzeRealSkuMatrix(product);
+    const fail = (reason) => ({ ok: false, reason, matrix });
+    if (!matrix.ok) return fail(matrix.reason);
+    if (matrix.groupIds.length > VARIANT_DELIVERY_LIMITS.maxDimensions) return fail('dimensions');
+    if (!matrix.fullyConnected) return fail('sparse');
+    if (matrix.rows.length < 2 || matrix.rows.length > VARIANT_DELIVERY_LIMITS.maxSkus) return fail('sku-cap');
+    if (!product._meta?.selectedSkuResolved || !product.selectedSku
+      || product.selectedSku.skuId !== product.selectedSkuId) return fail('selected');
+    if (!mapping?.ok || matrix.rows.some((row) => row.vector.some((valueId, index) => (
+      !mapping.groups.find((g) => g.id === matrix.groupIds[index])?.values.includes(valueId)
+    )))) return fail('mapping');
+    const start = matrix.rows.findIndex((row) => row.skuId === product.selectedSkuId);
+    if (start < 0) return fail('selected');
+    const graph = matrix.rows.map((row, index) => matrix.rows.flatMap((other, target) => (
+      index !== target && row.vector.filter((v, i) => v !== other.vector[i]).length === 1 ? [target] : []
+    )));
+    function visit(path) {
+      if (path.length === matrix.rows.length) return path;
+      for (const next of graph[path[path.length - 1]]) {
+        if (!path.includes(next)) {
+          const found = visit([...path, next]);
+          if (found) return found;
+        }
+      }
+      return null;
+    }
+    const path = visit([start]);
+    if (!path) return fail('route');
+    const restorePaths = Object.create(null);
+    for (const index of path) {
+      const queue = [[index]];
+      const seen = new Set([index]);
+      while (queue.length) {
+        const candidate = queue.shift();
+        const last = candidate[candidate.length - 1];
+        if (last === start) {
+          restorePaths[matrix.rows[index].skuId] = candidate.slice(1).map((i) => matrix.rows[i].skuId);
+          break;
+        }
+        for (const next of graph[last]) if (!seen.has(next)) {
+          seen.add(next);
+          queue.push([...candidate, next]);
+        }
+      }
+    }
+    const ceiling = Math.min(maxClicks, VARIANT_DELIVERY_LIMITS.maxClicks);
+    const worstClicks = Math.max(...path.map((index, position) => position + restorePaths[matrix.rows[index].skuId].length));
+    if (!Number.isSafeInteger(ceiling) || ceiling < 0 || worstClicks > ceiling) return fail('click-cap');
+    return { ok: true, matrix, graph, visit: path.map((i) => matrix.rows[i].skuId),
+      restorePaths, worstClicks, maxClicks: ceiling, mappingSignature: mapping.signature };
+  }
+
+  // Explicitly started, timer-driven controller. Its only effect on AliExpress is
+  // one ordinary native button click per real graph edge; observations are injected.
+  function createVariantDeliveryCollector(options) {
+    const limits = VARIANT_DELIVERY_LIMITS;
+    const now = options.now || (() => Date.now());
+    const setTimer = options.setTimer || ((fn, ms) => setTimeout(fn, ms));
+    const clearTimer = options.clearTimer || ((id) => clearTimeout(id));
+    let state = { phase: 'idle', observed: 0, visited: 0, total: 0, clicks: 0, reason: null, restored: false };
+    let plan, environment, prices, itemId, currentId, pending, timer, startedAt, restoreAt, waitAt, restoreQueue;
+    let cancelled = false;
+    let disposed = false;
+    const observations = new Map();
+    const active = () => ['preparing', 'running', 'restoring'].includes(state.phase);
+    const emit = (patch = {}) => {
+      state = { ...state, ...patch };
+      options.onState?.({ ...state });
+    };
+    const finish = (phase, reason = null) => {
+      if (timer !== undefined) clearTimer(timer);
+      timer = undefined;
+      emit({ phase, reason });
+    };
+    function inspect() {
+      const context = options.getContext();
+      if (!context.visible) throw new Error('hidden');
+      if (!isItemPage(context.pageUrl) || isReviewsPage(context.pageUrl)
+        || getItemId(context.pageUrl) !== itemId || context.product?.itemId !== itemId) throw new Error('item');
+      if (!contextsEqual(context.environment, environment)) throw new Error('environment');
+      const matrix = analyzeRealSkuMatrix(context.product);
+      if (!matrix.ok || matrix.signature !== plan.matrix.signature
+        || !context.mapping?.ok || context.mapping.signature !== plan.mappingSignature) throw new Error('mapping');
+      if (!contextsEqual(context.product.skus.map((sku) => [sku.skuId, skuShippingPriceContext(sku, environment)]), prices)) {
+        throw new Error('price-context');
+      }
+      const routeIds = new URL(context.pageUrl).searchParams.getAll('sku_id');
+      if (routeIds.length !== 1 || !context.product._meta?.selectedSkuResolved
+        || context.product.selectedSku?.skuId !== context.product.selectedSkuId) throw new Error('selected');
+      const selectedRow = matrix.rows.find((row) => row.skuId === context.product.selectedSkuId);
+      const selectedSelections = context.product.selectedSku.selections;
+      if (!selectedRow || !Array.isArray(selectedSelections) || selectedSelections.length !== matrix.groupIds.length
+        || matrix.groupIds.some((id, i) => selectedSelections.filter((selection) => (
+          selection.groupId === id && selection.valueId === selectedRow.vector[i]
+        )).length !== 1)) throw new Error('selected');
+      const allowed = pending ? [currentId, pending.target] : [currentId];
+      if (!allowed.includes(routeIds[0]) || !allowed.includes(context.product.selectedSkuId)) throw new Error('route');
+      return { ...context, routeId: routeIds[0] };
+    }
+    function transition(context, target) {
+      const from = plan.matrix.rows.find((row) => row.skuId === currentId);
+      const to = plan.matrix.rows.find((row) => row.skuId === target);
+      const changed = from.vector.flatMap((value, index) => value !== to?.vector[index] ? [index] : []);
+      if (changed.length !== 1 || state.clicks >= plan.maxClicks) throw new Error('click-cap');
+      const index = changed[0];
+      const group = context.mapping.groups.find((g) => g.id === plan.matrix.groupIds[index]);
+      const button = group?.buttons[group.values.indexOf(to.vector[index])];
+      if (!button || button.tagName !== 'BUTTON' || button.getAttribute('type') !== 'button'
+        || button.getAttribute('data-testid') !== 'skuProp' || button.disabled
+        || button.getAttribute('aria-disabled') === 'true' || !button.isConnected
+        || !button.getClientRects().length || typeof button.click !== 'function') throw new Error('control');
+      pending = { target, at: now() };
+      emit({ clicks: state.clicks + 1 });
+      button.click();
+    }
+    function restore() {
+      restoreQueue = [...plan.restorePaths[currentId]];
+      restoreAt = now();
+      emit({ phase: 'restoring' });
+    }
+    function step() {
+      timer = undefined;
+      if (!active() || disposed) return;
+      try {
+        const context = inspect();
+        if (state.phase === 'restoring' && now() - restoreAt >= limits.restoreMs) throw new Error('timeout');
+        if (pending) {
+          if (context.routeId === pending.target && context.product.selectedSkuId === pending.target) {
+            currentId = pending.target;
+            pending = null;
+            waitAt = now();
+          } else if (now() - pending.at >= limits.routeWaitMs) throw new Error('route-timeout');
+          else { schedule(); return; }
+        }
+        if (context.routeId !== currentId || context.product.selectedSkuId !== currentId) throw new Error('route');
+        if (state.phase === 'running' && (cancelled || now() - startedAt >= limits.totalMs)) {
+          if (!cancelled) emit({ reason: 'total-timeout' });
+          restore();
+        }
+        if (state.phase === 'restoring') {
+          if (restoreQueue.length) transition(context, restoreQueue.shift());
+          else {
+            emit({ restored: currentId === plan.visit[0] });
+            finish(cancelled ? 'cancelled' : state.reason ? 'failed' : 'completed', state.reason);
+            return;
+          }
+        } else {
+          const sku = context.product.skus.find((row) => row.skuId === currentId);
+          const observation = options.getObservation(context.product, sku, environment);
+          const terminal = ['present', 'invalid'].includes(observation?.deliveryObservation?.state);
+          if (terminal || now() - waitAt >= limits.shippingWaitMs) {
+            observations.set(currentId, terminal ? observation.deliveryObservation.state : 'not-observed');
+            emit({ visited: observations.size, observed: [...observations.values()].filter((s) => s === 'present').length });
+            const next = plan.visit[observations.size];
+            if (next) transition(context, next);
+            else restore();
+          }
+        }
+        schedule();
+      } catch (error) {
+        // Structural/external changes are not safe restoration opportunities.
+        finish('failed', state.phase === 'restoring' ? 'restore-' + error.message : error.message);
+      }
+    }
+    function schedule() { timer = setTimer(step, limits.pollMs); }
+    return {
+      get active() { return active(); },
+      get state() { return { ...state }; },
+      start() {
+        if (active() || disposed) return false;
+        observations.clear();
+        cancelled = false;
+        pending = null;
+        emit({ phase: 'preparing', observed: 0, visited: 0, total: 0, clicks: 0, reason: null, restored: false });
+        try {
+          const context = options.getContext();
+          environment = context.environment;
+          if (!environment?.destination?.countryCode || !environment.tradeCurrency || !environment.count
+            || !context.environmentEstablished) { finish('unsupported', 'wait-delivery'); return false; }
+          environment = JSON.parse(JSON.stringify(environment));
+          plan = planVariantDelivery(context.product, context.mapping, options.maxClicks);
+          if (!plan.ok) { finish('unsupported', plan.reason); return false; }
+          itemId = context.product.itemId;
+          currentId = plan.visit[0];
+          prices = context.product.skus.map((sku) => [sku.skuId, skuShippingPriceContext(sku, environment)]);
+          inspect();
+          startedAt = now();
+          waitAt = startedAt;
+          emit({ phase: 'running', total: plan.visit.length });
+          schedule();
+          return true;
+        } catch { finish('unsupported', 'context'); return false; }
+      },
+      cancel() { if (active()) cancelled = true; },
+      dispose() { disposed = true; if (active()) finish('failed', 'disposed'); },
+    };
   }
 
   function humanVariantName(value) {
@@ -6325,6 +6741,29 @@
     ].join('\n');
   }
 
+  function formatSkuDelivery(sku) {
+    const state = sku.deliveryObservation?.state || 'not-observed';
+    if (state !== 'present') return state === 'invalid'
+      ? 'invalid (' + (sku.deliveryObservation.diagnostic || 'schema-mismatch') + ')'
+      : 'not observed';
+    if (!sku.delivery?.methods?.length) return 'observed; no methods in captured response';
+    return sku.delivery.methods.map((method) => [
+      method.groupName || '—',
+      [...new Set([method.serviceName, method.service].filter(Boolean))].join(' / ') || '—',
+      formatMoney(method.cost), 'ETA: ' + formatDeliveryEta(method),
+    ].join(' · ')).join(' / ');
+  }
+
+  function formatRealSkuMatrix(product) {
+    return [
+      'Variant | SKU | item price | regular price | stock | delivery / ETA',
+      ...product.skus.map((sku) => [
+        formatSelections(sku), sku.skuId, formatMoney(sku.price?.current),
+        formatMoney(sku.price?.regular), sku.stock ?? '—', formatSkuDelivery(sku),
+      ].join(' | ')),
+    ].join('\n');
+  }
+
   function exportVariants(product) {
     const combinations = product.skus.map((sku) => [
       `SKU ${sku.skuId}`,
@@ -6332,6 +6771,7 @@
       `Price: ${formatMoney(sku.price.current)}`,
       `Regular: ${formatMoney(sku.price.regular)}`,
       `Stock: ${sku.stock ?? '—'}`,
+      `Delivery: ${formatSkuDelivery(sku)}`,
     ].join(' | '));
     return [
       'ALIEXPRESS VARIANTS',
@@ -6404,7 +6844,8 @@
       formatVariantGroups(product) || '—',
       '',
       'SKU COMBINATIONS:',
-      `${product.skus.length} real combinations from priceList (full list is available via Copy variants).`,
+      `${product.skus.length} real combinations from priceList.`,
+      formatRealSkuMatrix(product),
       '',
       'SIZE GUIDE:',
       formatSizeGuide(product.sizeGuide),
@@ -6422,6 +6863,19 @@
 
   const AliHelperCore = {
     VERSION,
+    VARIANT_DELIVERY_LIMITS,
+    NATIVE_SKU_SELECTORS,
+    parseSkuTelemetry,
+    inspectNativeSkuMapping,
+    analyzeRealSkuMatrix,
+    planVariantDelivery,
+    createVariantDeliveryCollector,
+    skuShippingPriceContext,
+    observeSkuDelivery,
+    createProductExportSnapshot,
+    formatSkuDelivery,
+    formatRealSkuMatrix,
+    formatVariantDeliveryProgress,
     SETTINGS_KEY,
     REVIEW_WORKFLOW_STORAGE_KEY,
     REVIEW_WORKFLOW_VERSION,
@@ -7191,6 +7645,19 @@
     }, runtime.uiLanguage);
   }
 
+  function formatVariantDeliveryProgress(state, locale) {
+    if (!state || state.phase === 'idle') return '';
+    const lines = [t(locale, 'deliveryCollector.' + state.phase, state)];
+    if (state.phase === 'unsupported') lines.push(t(locale,
+      state.reason === 'wait-delivery' ? 'deliveryCollector.wait' : 'deliveryCollector.matrix'));
+    if (state.phase === 'failed') {
+      lines.push(t(locale, state.reason === 'total-timeout'
+        ? 'deliveryCollector.totalTimeout' : 'deliveryCollector.changed'));
+      if (!state.restored) lines.push(t(locale, 'deliveryCollector.restoreFailed'));
+    }
+    return lines.filter(Boolean).join(' ');
+  }
+
   function createPanel(runtime) {
     const { host, shadow } = createPanelHost();
     shadow.innerHTML = `
@@ -7202,6 +7669,10 @@
         .wide { grid-column:1/-1; }
         .product-status { min-height:0; margin:0 0 9px; padding:0 1px; border-bottom:0; }
         .product-status[hidden] { display:none; }
+        .delivery-collector { display:grid; gap:7px; margin-top:12px; }
+        .delivery-collector button { width:100%; }
+        .delivery-collector [hidden] { display:none; }
+        .delivery-progress { margin:0; color:#536173; overflow-wrap:anywhere; }
         details { margin-top:10px; }
         summary { width:fit-content; max-width:100%; color:#536173; cursor:pointer; font-weight:600; overflow-wrap:anywhere; }
         details[open] summary { color:#273244; }
@@ -7223,6 +7694,11 @@
           <div class="action-groups">
             ${renderProductActionGroups(false)}
           </div>
+          <section class="delivery-collector">
+            <button type="button" data-action="delivery-collect" disabled></button>
+            <button type="button" data-action="delivery-cancel" hidden></button>
+            <p class="delivery-progress" data-delivery-progress role="status" aria-live="polite" aria-atomic="true" hidden></p>
+          </section>
           <details class="section-disclosure" data-section-disclosure hidden>
             <summary><span data-section-summary></span><span class="completeness-badge" data-completeness-badge hidden></span></summary>
             <div class="section-disclosure-content" data-section-disclosure-content></div>
@@ -7254,6 +7730,30 @@
     let responsivePanel = null;
     let tooltipController = null;
     let statusController = null;
+    const collectButton = shadow.querySelector('[data-action="delivery-collect"]');
+    const cancelDeliveryButton = shadow.querySelector('[data-action="delivery-cancel"]');
+    const deliveryProgress = shadow.querySelector('[data-delivery-progress]');
+    const marketButton = shadow.querySelector('[data-action="market"]');
+
+    function renderCollector() {
+      const busy = Boolean(runtime.deliveryCollector?.active);
+      const progress = runtime.deliveryCollector?.state;
+      collectButton.textContent = t(locale, 'deliveryCollector.start');
+      collectButton.dataset.tooltip = t(locale, 'deliveryCollector.help');
+      collectButton.disabled = busy || !currentProduct || Boolean(runtime.reviewWorkflowStarter?.started);
+      cancelDeliveryButton.textContent = t(locale, 'deliveryCollector.cancel');
+      cancelDeliveryButton.hidden = !busy;
+      cancelDeliveryButton.disabled = progress?.phase === 'restoring';
+      deliveryProgress.textContent = formatVariantDeliveryProgress(progress, locale);
+      deliveryProgress.hidden = !deliveryProgress.textContent;
+      productButtons.forEach((button) => {
+        button.disabled = busy || !currentProduct
+          || (button === reviewWorkflowButton && runtime.reviewWorkflowStarter?.started);
+      });
+      marketButton.disabled = busy;
+      autoRedirect.disabled = busy;
+      shippingDebug.disabled = busy || !runtime.shippingCapture;
+    }
 
     function applyLocale(nextLocale) {
       if (!isUiLanguage(nextLocale)) return;
@@ -7264,6 +7764,7 @@
       responsivePanel?.setLocale(locale);
       if (currentProduct) renderProductSectionDisclosure(sectionDisclosure, currentProduct, locale);
       statusController?.refresh();
+      renderCollector();
       tooltipController?.refresh();
       panelBody.scrollTop = scrollTop;
     }
@@ -7298,7 +7799,13 @@
     shadow.addEventListener('click', (event) => {
       const action = event.target?.closest?.('[data-action]')?.dataset?.action;
       if (!action) return;
-      if (action === 'language') {
+      if (runtime.deliveryCollector?.active && !['language', 'toggle', 'delivery-cancel'].includes(action)) return;
+      if (action === 'delivery-collect') {
+        runtime.deliveryCollector?.start();
+        renderCollector();
+      } else if (action === 'delivery-cancel') {
+        runtime.deliveryCollector?.cancel();
+      } else if (action === 'language') {
         const nextLocale = locale === 'en' ? 'ru' : 'en';
         const result = applyUiLanguageSelection(runtime, nextLocale);
         if (result.accepted) applyLocale(result.uiLanguage);
@@ -7313,16 +7820,16 @@
         const didStart = runtime.reviewWorkflowStarter?.start();
         if (!didStart && !runtime.reviewWorkflowStarter?.started) reviewWorkflowButton.disabled = false;
       } else if (action === 'product' && runtime.product) {
-        const product = runtime.refreshProductEnrichment?.();
+        const product = runtime.createExportSnapshot?.();
         if (product) copyWithFeedback(exportProduct(product), 'copy.productJsonSuccess');
       } else if (action === 'variants' && runtime.product) {
-        const product = runtime.refreshProductEnrichment?.();
+        const product = runtime.createExportSnapshot?.();
         if (product) copyWithFeedback(exportVariants(product), 'copy.variantsSuccess');
       } else if (action === 'chatgpt' && runtime.product) {
-        const product = runtime.refreshProductEnrichment?.();
+        const product = runtime.createExportSnapshot?.();
         if (product) copyWithFeedback(exportForChatGPT(product), 'copy.productChatgptSuccess');
       } else if (action === 'description' && runtime.product) {
-        const product = runtime.refreshProductEnrichment?.();
+        const product = runtime.createExportSnapshot?.();
         if (product) copyWithFeedback(exportDescription(product), 'copy.descriptionSuccess');
       } else if (action === 'shipping-debug' && runtime.shippingCapture) {
         const product = runtime.refreshProductEnrichment?.();
@@ -7335,6 +7842,7 @@
       }
     });
     autoRedirect.addEventListener('change', () => {
+      if (runtime.deliveryCollector?.active) return;
       runtime.settings.autoRedirectComToRu = autoRedirect.checked;
       saveSettings(runtime.settings);
       statusController.showTransient(createUiMessage('settings.saved'));
@@ -7350,9 +7858,11 @@
         if (currentProduct) renderProductSectionDisclosure(sectionDisclosure, currentProduct, locale);
         else sectionDisclosure.hidden = true;
         statusController.clear();
+        renderCollector();
       },
+      setCollectorState: renderCollector,
       setShippingCapture(capture) {
-        shippingDebug.disabled = !capture;
+        shippingDebug.disabled = Boolean(runtime.deliveryCollector?.active) || !capture;
       },
       setStatus: flash,
       setLocale: applyLocale,
@@ -7719,6 +8229,8 @@
       product: null,
       shippingCapture: null,
       shippingEnvironment: null,
+      acceptedShippingEnvironment: null,
+      deliveryCollector: null,
       deliveryCache: createDeliveryCache(),
       itemId: getItemId(location.href),
       initialItemId: getItemId(location.href),
@@ -7774,6 +8286,7 @@
         runtime.domReadyHandler = null;
         runtime.ui?.dispose?.();
         runtime.pollingLifecycle?.dispose();
+        runtime.deliveryCollector?.dispose();
         runtime.reviewWorkflowStarter?.dispose();
       },
     };
@@ -7781,9 +8294,12 @@
       setItem: (...args) => window.sessionStorage.setItem(...args),
       removeItem: (...args) => window.sessionStorage.removeItem(...args),
     };
+    runtime.createExportSnapshot = () => runtime.deliveryCollector?.active ? null
+      : createProductExportSnapshot(runtime.refreshProductEnrichment?.() || runtime.product,
+        runtime.deliveryCache, runtime.shippingEnvironment);
     runtime.reviewWorkflowStarter = createProductReviewWorkflowStarter({
       getPageUrl: () => location.href,
-      getProduct: () => runtime.refreshProductEnrichment?.() || runtime.product,
+      getProduct: () => runtime.createExportSnapshot(),
       formatProduct: exportForChatGPT,
       now: () => Date.now(),
       createWorkflowId: () => createReviewWorkflowId(),
@@ -7800,6 +8316,20 @@
       },
     });
     let synchronizeRuntimeLocation = () => runtime.product;
+    runtime.deliveryCollector = createVariantDeliveryCollector({
+      getContext: () => {
+        const product = synchronizeRuntimeLocation();
+        return {
+          product, pageUrl: location.href, environment: runtime.shippingEnvironment,
+          environmentEstablished: Boolean(runtime.acceptedShippingEnvironment
+            && contextsEqual(runtime.acceptedShippingEnvironment, runtime.shippingEnvironment)),
+          visible: runtime.active && document.visibilityState === 'visible' && !runtime.reviewWorkflowStarter.started,
+          mapping: inspectNativeSkuMapping(document, product, location.href),
+        };
+      },
+      getObservation: (product, sku, environment) => observeSkuDelivery(product, sku, runtime.deliveryCache, environment),
+      onState: () => runtime.ui?.setCollectorState(),
+    });
     const acceptProductData = (data, meta) => {
       if (!runtime.active) return;
       synchronizeRuntimeLocation();
@@ -7835,6 +8365,7 @@
         runtime.shippingCapture = capture;
         runtime.ui?.setShippingCapture(capture);
         runtime.shippingEnvironment = createShippingEnvironment(capture.request, delivery);
+        if (!inspection.diagnostic) runtime.acceptedShippingEnvironment = runtime.shippingEnvironment;
       }
       if (runtime.product && matchesSelectedSku) {
         runtime.product = applyCachedDelivery(runtime.product, runtime.deliveryCache, runtime.shippingEnvironment);
@@ -7902,6 +8433,7 @@
         runtime.storeDom = null;
         runtime.storeDomDiagnostic = null;
         runtime.itemId = nextItemId;
+        runtime.acceptedShippingEnvironment = null;
         runtime.product = null;
         runtime.shippingCapture = null;
         runtime.ui?.setShippingCapture(null);
